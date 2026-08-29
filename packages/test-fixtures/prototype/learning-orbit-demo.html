@@ -1,0 +1,3480 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Learning Orbit｜共學星球：生態系統探究</title>
+  <style>
+    :root {
+      --green-700: #1F7A3B;
+      --green-500: #58CC02;
+      --blue-700: #0B6E99;
+      --amber-500: #F4B942;
+      --coral-500: #E95D64;
+      --mint-050: #F7FBF4;
+      --ink-900: #173A2A;
+      --ink-700: #315A48;
+      --ink-500: #658075;
+      --line: #D7E8DA;
+      --paper: #FFFFFF;
+      --soft-blue: #EAF5FA;
+      --soft-amber: #FFF6DD;
+      --soft-coral: #FFF0F1;
+      --shadow: 0 14px 34px rgba(23, 58, 42, 0.09);
+      --shadow-soft: 0 5px 16px rgba(23, 58, 42, 0.07);
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
+      --space-4: 32px;
+      --space-5: 40px;
+      --target-min: 44px;
+      --graph-hit-target: 44px;
+      --ease: 220ms cubic-bezier(.2, .7, .2, 1);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif;
+      color: var(--ink-900);
+      background: var(--mint-050);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 0;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 92% 7%, rgba(88, 204, 2, 0.12), transparent 24rem),
+        radial-gradient(circle at 2% 48%, rgba(11, 110, 153, 0.08), transparent 30rem),
+        var(--mint-050);
+      color: var(--ink-900);
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    button,
+    .button-label,
+    input[type="file"]::file-selector-button {
+      min-height: var(--target-min);
+    }
+
+    button {
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.46;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--amber-500);
+      outline-offset: 3px;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: var(--space-1);
+      left: var(--space-1);
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      background: var(--ink-900);
+      color: var(--paper);
+      transform: translateY(-160%);
+      transition: transform var(--ease);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .icon {
+      width: 20px;
+      height: 20px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.9;
+    }
+
+    .app-header {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-2);
+      align-items: center;
+      padding: var(--space-2) clamp(16px, 3vw, 40px);
+      border-bottom: 1px solid rgba(31, 122, 59, 0.14);
+      background: rgba(247, 251, 244, 0.92);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand-lockup {
+      display: flex;
+      min-width: 0;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 15px;
+      background: var(--green-700);
+      color: var(--paper);
+      box-shadow: 0 7px 0 #155B2B;
+    }
+
+    .brand-mark .icon {
+      width: 28px;
+      height: 28px;
+      stroke-width: 2.2;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .brand-copy p,
+    .brand-copy h1 {
+      margin: 0;
+    }
+
+    .brand-copy h1 {
+      overflow: hidden;
+      font-size: clamp(1.2rem, 2vw, 1.65rem);
+      line-height: 1.15;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-copy p {
+      margin-top: 3px;
+      color: var(--ink-700);
+      font-size: 0.91rem;
+    }
+
+    .session-strip {
+      display: flex;
+      gap: var(--space-1);
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .demo-disclosure,
+    .session-pill {
+      display: inline-flex;
+      min-height: 36px;
+      gap: 7px;
+      align-items: center;
+      padding: 6px 11px;
+      border-radius: 999px;
+      font-size: 0.87rem;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .demo-disclosure {
+      border: 1px solid #E2AB29;
+      background: var(--soft-amber);
+      color: #73500A;
+    }
+
+    .demo-disclosure .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber-500);
+      box-shadow: 0 0 0 4px rgba(244, 185, 66, 0.22);
+    }
+
+    .session-pill {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink-700);
+    }
+
+    .session-pill .icon {
+      width: 17px;
+      height: 17px;
+      color: var(--green-700);
+    }
+
+    .workspace {
+      display: grid;
+      width: min(100%, 1600px);
+      margin: 0 auto;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: repeat(2, 660px);
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .panel {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid rgba(31, 122, 59, 0.16);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      display: flex;
+      min-width: 0;
+      gap: 12px;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: var(--space-2) var(--space-3);
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(247, 251, 244, 0.9), rgba(255, 255, 255, 0.9));
+    }
+
+    .panel-kicker {
+      margin: 0 0 3px;
+      color: var(--green-700);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 1.08rem;
+      line-height: 1.3;
+    }
+
+    .panel-subtitle {
+      margin: 4px 0 0;
+      color: var(--ink-500);
+      font-size: 0.85rem;
+    }
+
+    .segmented {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #EEF6EE;
+    }
+
+    .segmented button {
+      min-height: var(--target-min);
+      padding: 7px 11px;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--ink-700);
+      font-size: 0.83rem;
+      font-weight: 750;
+      transition: background var(--ease), color var(--ease), box-shadow var(--ease);
+    }
+
+    .segmented button[aria-pressed="true"] {
+      background: var(--paper);
+      color: var(--green-700);
+      box-shadow: var(--shadow-soft);
+    }
+
+    /* Chat */
+    #chat-panel {
+      grid-row: 1 / 3;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    #sna-panel {
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-color: #B8D4BF transparent;
+      scrollbar-width: thin;
+    }
+
+    #sna-panel > .panel-header {
+      position: sticky;
+      z-index: 3;
+      top: 0;
+    }
+
+    .participants {
+      display: flex;
+      min-width: 0;
+      gap: 6px;
+      align-items: center;
+      padding: 10px var(--space-3);
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+      scrollbar-width: thin;
+    }
+
+    .participant {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 7px;
+      align-items: center;
+      padding: 4px 9px 4px 5px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      background: #F0F7F1;
+      color: var(--ink-700);
+      transition: border-color var(--ease), background var(--ease);
+    }
+
+    .participant:hover {
+      border-color: var(--green-500);
+      background: var(--paper);
+    }
+
+    .participant .mini-avatar {
+      display: grid;
+      width: 29px;
+      height: 29px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--avatar, var(--blue-700));
+      color: var(--paper);
+      font-size: 0.75rem;
+      font-weight: 850;
+    }
+
+    .participant.agent .mini-avatar {
+      border-radius: 9px;
+      background: var(--ink-900);
+    }
+
+    .message-list {
+      min-height: 0;
+      margin: 0;
+      padding: var(--space-3);
+      overflow-y: auto;
+      list-style: none;
+      scroll-behavior: smooth;
+      scrollbar-color: #B8D4BF transparent;
+      scrollbar-width: thin;
+    }
+
+    .message {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: var(--space-2);
+      scroll-margin: 20px;
+    }
+
+    .message.is-current-user {
+      grid-template-columns: minmax(0, 1fr) 42px;
+    }
+
+    .message.is-current-user .message-avatar {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .message.is-current-user .message-column {
+      grid-column: 1;
+      grid-row: 1;
+      justify-self: end;
+    }
+
+    .message-avatar {
+      display: grid;
+      width: 40px;
+      height: 40px;
+      place-items: center;
+      border: 2px solid var(--paper);
+      border-radius: 50%;
+      background: var(--avatar, var(--blue-700));
+      box-shadow: 0 0 0 1px var(--line);
+      color: var(--paper);
+      font-size: 0.78rem;
+      font-weight: 850;
+    }
+
+    .message.agent .message-avatar {
+      border-radius: 12px;
+      background: var(--ink-900);
+    }
+
+    .message-column {
+      width: min(100%, 590px);
+      min-width: 0;
+    }
+
+    .message-meta {
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      margin: 0 4px 5px;
+      color: var(--ink-500);
+      font-size: 0.78rem;
+    }
+
+    .message-author {
+      color: var(--ink-900);
+      font-weight: 800;
+    }
+
+    .message-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.69rem;
+    }
+
+    .message-bubble {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 5px var(--radius-md) var(--radius-md) var(--radius-md);
+      background: var(--paper);
+      box-shadow: var(--shadow-soft);
+      overflow-wrap: anywhere;
+    }
+
+    .is-current-user .message-bubble {
+      border-color: rgba(31, 122, 59, 0.28);
+      border-radius: var(--radius-md) 5px var(--radius-md) var(--radius-md);
+      background: #EAF6EC;
+    }
+
+    .message.agent .message-bubble {
+      border-color: rgba(11, 110, 153, 0.25);
+      background: var(--soft-blue);
+    }
+
+    .message-bubble p {
+      margin: 0;
+    }
+
+    .message-bubble p + p {
+      margin-top: var(--space-1);
+    }
+
+    .reply-reference {
+      display: flex;
+      width: 100%;
+      min-height: var(--target-min);
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 9px;
+      padding: 7px 10px;
+      border-left: 3px solid var(--blue-700);
+      border-radius: 7px;
+      background: rgba(11, 110, 153, 0.08);
+      color: var(--ink-700);
+      text-align: left;
+      font-size: 0.8rem;
+    }
+
+    .mention-token {
+      color: var(--blue-700);
+      font-weight: 800;
+    }
+
+    .message-actions {
+      display: flex;
+      gap: 3px;
+      justify-content: flex-end;
+      margin-top: 3px;
+      opacity: 0.38;
+      transition: opacity var(--ease);
+    }
+
+    .message:hover .message-actions,
+    .message:focus-within .message-actions {
+      opacity: 1;
+    }
+
+    .message-actions button {
+      display: inline-flex;
+      min-width: var(--target-min);
+      gap: 5px;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 9px;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--ink-700);
+      font-size: 0.78rem;
+    }
+
+    .message-actions button:hover {
+      background: #EDF5EE;
+    }
+
+    .message-actions .icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    .inline-observation {
+      margin: 10px 0 0;
+      overflow: hidden;
+      border: 1px solid #C9DDCC;
+      border-radius: 13px;
+      background: var(--paper);
+    }
+
+    .inline-observation svg,
+    .inline-observation img {
+      display: block;
+      width: 100%;
+      max-height: 260px;
+      object-fit: cover;
+      background: #EAF6EC;
+    }
+
+    .inline-observation figcaption {
+      padding: 9px 11px;
+      color: var(--ink-700);
+      font-size: 0.82rem;
+    }
+
+    .voice-card {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      margin-top: 8px;
+      padding: 9px;
+      border: 1px solid rgba(11, 110, 153, 0.22);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .voice-play {
+      display: grid;
+      width: 44px;
+      min-width: 44px;
+      padding: 0;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue-700);
+      color: var(--paper);
+    }
+
+    .voice-wave {
+      min-width: 0;
+    }
+
+    .voice-wave svg {
+      display: block;
+      width: 100%;
+      height: 28px;
+    }
+
+    .voice-progress {
+      height: 3px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #CBE0E9;
+    }
+
+    .voice-progress span {
+      display: block;
+      width: var(--progress, 0%);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--blue-700);
+      transition: width 180ms linear;
+    }
+
+    .voice-duration {
+      color: var(--ink-500);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem;
+    }
+
+    .transcript {
+      margin-top: 9px !important;
+      padding-top: 9px;
+      border-top: 1px solid rgba(11, 110, 153, 0.15);
+      color: var(--ink-700);
+      font-size: 0.88rem;
+    }
+
+    .transcript strong {
+      color: var(--blue-700);
+    }
+
+    .system-message {
+      margin: 10px 0 var(--space-2) 52px;
+      padding: 10px 12px;
+      border: 1px dashed #D4A52E;
+      border-radius: 12px;
+      background: var(--soft-amber);
+      color: #6A4B0D;
+      font-size: 0.84rem;
+    }
+
+    .composer-shell {
+      border-top: 1px solid var(--line);
+      background: #FBFDF9;
+    }
+
+    .smart-actions {
+      display: flex;
+      gap: var(--space-1);
+      padding: 11px var(--space-3) 3px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+
+    .smart-chip {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 7px;
+      align-items: center;
+      padding: 7px 11px;
+      border: 1px solid #BFD8C4;
+      border-radius: 999px;
+      background: var(--paper);
+      color: var(--green-700);
+      font-size: 0.82rem;
+      font-weight: 750;
+      transition: transform var(--ease), border-color var(--ease), background var(--ease);
+    }
+
+    .smart-chip:hover {
+      border-color: var(--green-500);
+      background: #EFFAE9;
+      transform: translateY(-1px);
+    }
+
+    .smart-chip .icon {
+      width: 16px;
+      height: 16px;
+    }
+
+    .reply-target {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin: 8px var(--space-3) 0;
+      padding: 7px 8px 7px 12px;
+      border-left: 3px solid var(--blue-700);
+      border-radius: 8px;
+      background: var(--soft-blue);
+      color: var(--ink-700);
+      font-size: 0.84rem;
+    }
+
+    .reply-target button {
+      display: grid;
+      width: var(--target-min);
+      min-width: var(--target-min);
+      padding: 0;
+      place-items: center;
+      border-radius: 9px;
+      background: transparent;
+    }
+
+    .composer {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: end;
+      padding: 10px var(--space-3) 12px;
+    }
+
+    .composer-tools {
+      display: flex;
+      gap: 5px;
+    }
+
+    .tool-button,
+    .send-button,
+    .small-button {
+      display: inline-flex;
+      min-width: var(--target-min);
+      gap: 7px;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 12px;
+      border-radius: 12px;
+      transition: transform var(--ease), background var(--ease), color var(--ease);
+    }
+
+    .tool-button {
+      padding: 0;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink-700);
+    }
+
+    .tool-button:hover {
+      background: #EDF6EE;
+      color: var(--green-700);
+    }
+
+    .tool-button.is-recording {
+      border-color: var(--coral-500);
+      background: var(--soft-coral);
+      color: #A72E37;
+    }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 72px;
+      max-height: 180px;
+      resize: vertical;
+      padding: 11px 13px;
+      border: 1px solid #BFD5C3;
+      border-radius: 14px;
+      outline: none;
+      background: var(--paper);
+      color: var(--ink-900);
+      transition: border-color var(--ease), box-shadow var(--ease);
+    }
+
+    .composer textarea:focus {
+      border-color: var(--green-700);
+      box-shadow: 0 0 0 3px rgba(31, 122, 59, 0.13);
+    }
+
+    .send-button {
+      align-self: stretch;
+      padding-inline: 17px;
+      background: var(--green-700);
+      color: var(--paper);
+      font-weight: 800;
+      box-shadow: 0 5px 0 #155B2B;
+    }
+
+    .send-button:hover {
+      background: #176B31;
+      transform: translateY(-1px);
+    }
+
+    .composer-help {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 14px;
+      align-items: center;
+      padding: 0 var(--space-3) 11px;
+      color: var(--ink-500);
+      font-size: 0.76rem;
+    }
+
+    .composer-status {
+      color: var(--blue-700);
+      font-weight: 700;
+    }
+
+    .media-tray {
+      margin: 0 var(--space-3) 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper);
+    }
+
+    .media-tray-grid {
+      display: grid;
+      grid-template-columns: minmax(110px, 180px) minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .media-tray img {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      border-radius: 10px;
+      object-fit: cover;
+      background: #EDF5EE;
+    }
+
+    .media-fields {
+      display: grid;
+      min-width: 0;
+      gap: 7px;
+    }
+
+    .media-fields label {
+      color: var(--ink-700);
+      font-size: 0.8rem;
+      font-weight: 750;
+    }
+
+    .media-fields input {
+      width: 100%;
+      min-height: var(--target-min);
+      padding: 8px 10px;
+      border: 1px solid #BFD5C3;
+      border-radius: 9px;
+      background: var(--paper);
+      color: var(--ink-900);
+    }
+
+    .tray-actions,
+    .recording-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+      justify-content: flex-end;
+    }
+
+    .small-button {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink-700);
+      font-size: 0.83rem;
+      font-weight: 750;
+    }
+
+    .small-button.primary {
+      border-color: var(--green-700);
+      background: var(--green-700);
+      color: var(--paper);
+    }
+
+    .small-button.danger {
+      border-color: #F0BABE;
+      color: #A72E37;
+    }
+
+    .recording-preview {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .recording-preview audio {
+      width: 100%;
+      min-width: 0;
+    }
+
+    /* Shared analytics */
+    .focus-question {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      margin: 14px 16px 10px;
+      padding: 11px 12px;
+      border: 1px solid #C9DFCD;
+      border-radius: 14px;
+      background: #F0F8EF;
+    }
+
+    .focus-question .question-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 11px;
+      background: var(--green-700);
+      color: var(--paper);
+      font-weight: 900;
+    }
+
+    .focus-question p {
+      margin: 0;
+      font-size: 0.9rem;
+      font-weight: 750;
+    }
+
+    .analytics-toolbar {
+      display: flex;
+      min-width: 0;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px 10px;
+    }
+
+    .toolbar-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .icon-button {
+      display: grid;
+      width: var(--target-min);
+      min-width: var(--target-min);
+      padding: 0;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      color: var(--green-700);
+      transition: border-color var(--ease), background var(--ease), transform var(--ease);
+    }
+
+    .icon-button:hover:not(:disabled) {
+      border-color: var(--green-500);
+      background: #EFFAE9;
+      transform: translateY(-1px);
+    }
+
+    .timeline-progress {
+      min-width: 74px;
+      color: var(--ink-500);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem;
+      text-align: right;
+    }
+
+    .chart-stage {
+      position: relative;
+      min-width: 0;
+      margin: 0 16px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background:
+        radial-gradient(circle, rgba(31, 122, 59, 0.12) 1px, transparent 1px),
+        linear-gradient(180deg, #FCFEFB, #F7FBF4);
+      background-size: 16px 16px, auto;
+    }
+
+    .chart-stage svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 315px;
+    }
+
+    .view-list {
+      min-height: 280px;
+      max-height: 310px;
+      padding: 10px;
+      overflow-y: auto;
+    }
+
+    .relation-list,
+    .interaction-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .relation-list button,
+    .interaction-list button {
+      display: grid;
+      width: 100%;
+      min-height: var(--target-min);
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--paper);
+      text-align: left;
+    }
+
+    .relation-list button:hover,
+    .interaction-list button:hover {
+      border-color: var(--green-500);
+      background: #F3FAF0;
+    }
+
+    .relation-copy,
+    .interaction-copy {
+      min-width: 0;
+    }
+
+    .relation-copy strong,
+    .interaction-copy strong {
+      display: block;
+      color: var(--ink-900);
+      font-size: 0.85rem;
+    }
+
+    .relation-copy span,
+    .interaction-copy span {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink-500);
+      font-size: 0.74rem;
+    }
+
+    .state-pill {
+      display: inline-flex;
+      min-height: 26px;
+      align-items: center;
+      padding: 3px 8px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .state-pill.confirmed { color: var(--green-700); background: #EAF6EC; }
+    .state-pill.provisional { color: #77530C; background: var(--soft-amber); }
+    .state-pill.disputed { color: #A72E37; background: var(--soft-coral); }
+    .state-pill.inactive { color: #66756D; background: #F0F3F1; }
+
+    .inspector {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(74px, .7fr));
+      gap: 8px;
+      margin: 10px 16px 14px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #FBFDFB;
+    }
+
+    .inspector-cell {
+      min-width: 0;
+      padding: 5px 7px;
+    }
+
+    .inspector-label {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--ink-500);
+      font-size: 0.67rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .inspector-value {
+      display: block;
+      overflow: hidden;
+      color: var(--ink-900);
+      font-size: 0.79rem;
+      font-weight: 750;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .batch-status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+      white-space: nowrap;
+    }
+
+    /* Concept graph */
+    .concept-edge {
+      cursor: pointer;
+      transition: opacity var(--ease);
+    }
+
+    .graph-hit-path {
+      fill: none;
+      stroke: transparent;
+      stroke-width: var(--graph-hit-target);
+      vector-effect: non-scaling-stroke;
+      pointer-events: stroke;
+      cursor: pointer;
+    }
+
+    .graph-node-hit-shape {
+      fill: transparent;
+      stroke: transparent;
+      stroke-width: var(--graph-hit-target);
+      vector-effect: non-scaling-stroke;
+      pointer-events: all;
+      cursor: pointer;
+    }
+
+    .graph-hit-path.is-view-hidden {
+      pointer-events: none;
+    }
+
+    .concept-edge .edge-line {
+      fill: none;
+      stroke-width: 3;
+      transition: stroke var(--ease), stroke-dasharray var(--ease), opacity var(--ease);
+    }
+
+    .concept-edge .edge-label-bg {
+      fill: var(--paper);
+      stroke: currentColor;
+      stroke-width: 1;
+    }
+
+    .concept-edge .edge-label {
+      fill: var(--ink-900);
+      font-size: 11px;
+      font-weight: 800;
+      text-anchor: middle;
+    }
+
+    .concept-edge .edge-state-label {
+      fill: currentColor;
+      font-size: 8px;
+      font-weight: 850;
+      letter-spacing: .03em;
+      text-anchor: middle;
+    }
+
+    .concept-edge.edge--confirmed { color: var(--green-700); }
+    .concept-edge.edge--confirmed .edge-line { stroke: var(--green-700); }
+    .concept-edge.edge--provisional { color: #9B6C0D; }
+    .concept-edge.edge--provisional .edge-line { stroke: #B9800E; stroke-dasharray: 9 5; }
+    .concept-edge.edge--disputed { color: #B53640; }
+    .concept-edge.edge--disputed .edge-line { stroke: var(--coral-500); stroke-dasharray: 12 4 2 4; }
+    .concept-edge.edge--inactive { color: #76857D; }
+    .concept-edge.edge--inactive .edge-line { stroke: #87958E; stroke-dasharray: 3 6; }
+    .concept-edge.timeline-hidden { opacity: 0.16; }
+    .concept-edge:hover .edge-line,
+    .concept-edge:focus .edge-line { stroke-width: 5; }
+
+    .concept-node {
+      cursor: default;
+    }
+
+    .concept-node rect {
+      fill: var(--paper);
+      stroke: #AFCDB6;
+      stroke-width: 2;
+      filter: drop-shadow(0 4px 5px rgba(23, 58, 42, 0.1));
+    }
+
+    .concept-node .node-accent {
+      fill: var(--node-color, var(--green-700));
+      stroke: none;
+    }
+
+    .concept-node text {
+      fill: var(--ink-900);
+      font-size: 12px;
+      font-weight: 850;
+      text-anchor: middle;
+    }
+
+    .concept-node .node-en {
+      fill: var(--ink-500);
+      font-size: 8px;
+      font-weight: 700;
+    }
+
+    /* SNA */
+    .sna-view-tabs {
+      display: flex;
+      min-width: 0;
+      gap: 6px;
+      padding: 12px 16px 10px;
+      overflow-x: auto;
+    }
+
+    .sna-view-tabs button {
+      display: inline-flex;
+      flex: 0 0 auto;
+      gap: 7px;
+      align-items: center;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--paper);
+      color: var(--ink-700);
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .sna-view-tabs button[aria-pressed="true"] {
+      border-color: var(--blue-700);
+      background: var(--soft-blue);
+      color: var(--blue-700);
+    }
+
+    .sna-view-tabs .view-glyph {
+      display: inline-grid;
+      width: 18px;
+      height: 18px;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font-size: 0.62rem;
+    }
+
+    .sna-view-note {
+      margin: -2px 16px 8px;
+      color: var(--ink-500);
+      font-size: 0.76rem;
+    }
+
+    .sna-edge {
+      fill: none;
+      stroke: #6E9AA9;
+      stroke-width: 2.7;
+      cursor: pointer;
+      transition: opacity var(--ease), stroke-width var(--ease), stroke var(--ease);
+    }
+
+    .sna-edge.is-agent-edge {
+      stroke: var(--blue-700);
+    }
+
+    .sna-edge.is-reciprocal {
+      stroke: var(--green-700);
+    }
+
+    .sna-edge.is-lineage {
+      stroke-dasharray: 8 5;
+    }
+
+    .sna-edge.is-runtime-edge {
+      stroke: var(--coral-500);
+      stroke-width: 3.4;
+      stroke-dasharray: 5 4;
+    }
+
+    .sna-edge.is-view-hidden {
+      opacity: 0.05;
+      pointer-events: none;
+    }
+
+    .sna-edge:hover,
+    .sna-edge:focus {
+      stroke-width: 5;
+    }
+
+    .sna-node {
+      cursor: pointer;
+      transition: opacity var(--ease);
+    }
+
+    .sna-node circle,
+    .sna-node polygon {
+      fill: var(--paper);
+      stroke: var(--node-color, var(--green-700));
+      stroke-width: 3;
+      filter: drop-shadow(0 4px 5px rgba(23, 58, 42, 0.12));
+    }
+
+    .sna-node.agent polygon {
+      fill: var(--soft-blue);
+      stroke: var(--blue-700);
+    }
+
+    .sna-node text {
+      fill: var(--ink-900);
+      font-size: 11px;
+      font-weight: 850;
+      text-anchor: middle;
+      pointer-events: none;
+    }
+
+    .sna-node .node-kind {
+      fill: var(--ink-500);
+      font-size: 7px;
+      letter-spacing: .04em;
+    }
+
+    .sna-node.is-view-hidden {
+      opacity: 0.08;
+      pointer-events: none;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      margin: 10px 16px;
+    }
+
+    .metric-card {
+      min-width: 0;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #FBFDFB;
+    }
+
+    .metric-card span {
+      display: block;
+      color: var(--ink-500);
+      font-size: 0.66rem;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .metric-card strong {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink-900);
+      font-size: 1rem;
+      line-height: 1.2;
+    }
+
+    .metric-bar {
+      height: 4px;
+      margin-top: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #DFEBE1;
+    }
+
+    .metric-bar i {
+      display: block;
+      width: var(--metric-width, 0%);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--green-700);
+      transition: width var(--ease);
+    }
+
+    .limitation {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 9px;
+      margin: 0 16px 14px;
+      padding: 9px 10px;
+      border: 1px solid #E6D094;
+      border-radius: 12px;
+      background: var(--soft-amber);
+      color: #684A0E;
+      font-size: 0.74rem;
+    }
+
+    .limitation .icon {
+      width: 19px;
+      height: 19px;
+      margin: 2px auto 0;
+    }
+
+    .limitation strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    @media (max-width: 1119px) {
+      .app-header {
+        align-items: start;
+      }
+
+      .session-strip {
+        flex-wrap: wrap;
+      }
+
+      .workspace {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: auto 720px;
+      }
+
+      #chat-panel {
+        grid-column: 1 / -1;
+        grid-row: auto;
+        min-height: 860px;
+      }
+
+      #concept-panel,
+      #sna-panel {
+        min-height: 720px;
+      }
+
+      .panel-header {
+        padding-inline: 16px;
+      }
+
+      .inspector {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .inspector-cell:first-child {
+        grid-column: 1 / -1;
+      }
+
+      .metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 767px) {
+      .app-header {
+        grid-template-columns: minmax(0, 1fr);
+        padding: 12px 14px;
+      }
+
+      .session-strip {
+        justify-content: flex-start;
+      }
+
+      .session-pill.topic {
+        display: none;
+      }
+
+      .workspace {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto;
+        gap: 12px;
+        padding: 10px;
+      }
+
+      #chat-panel,
+      #concept-panel,
+      #sna-panel {
+        grid-column: 1;
+        min-height: 0;
+      }
+
+      #chat-panel {
+        grid-row: auto;
+      }
+
+      .panel {
+        border-radius: 18px;
+      }
+
+      .panel-header {
+        flex-wrap: wrap;
+      }
+
+      .message-list {
+        max-height: 720px;
+        padding: 16px 12px;
+      }
+
+      .message {
+        grid-template-columns: 36px minmax(0, 1fr);
+        gap: 8px;
+      }
+
+      .message.is-current-user {
+        grid-template-columns: minmax(0, 1fr) 36px;
+      }
+
+      .message-avatar {
+        width: 34px;
+        height: 34px;
+      }
+
+      .system-message {
+        margin-left: 44px;
+      }
+
+      .composer {
+        grid-template-columns: auto minmax(0, 1fr);
+        padding-inline: 12px;
+      }
+
+      .composer-tools {
+        flex-direction: column;
+      }
+
+      .send-button {
+        grid-column: 1 / -1;
+        min-height: 48px;
+      }
+
+      .smart-actions,
+      .participants,
+      .composer-help {
+        padding-inline: 12px;
+      }
+
+      .smart-actions,
+      .participants {
+        flex-wrap: wrap;
+        overflow-x: visible;
+      }
+
+      .reply-target,
+      .media-tray {
+        margin-inline: 12px;
+      }
+
+      .media-tray-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .media-tray img {
+        max-height: 190px;
+      }
+
+      .recording-preview {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .focus-question,
+      .chart-stage,
+      .inspector,
+      .metric-grid,
+      .limitation {
+        margin-inline: 12px;
+      }
+
+      .analytics-toolbar,
+      .sna-view-tabs {
+        padding-inline: 12px;
+      }
+
+      .sna-view-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow-x: visible;
+      }
+
+      .sna-view-tabs button {
+        width: 100%;
+        min-width: 0;
+        justify-content: center;
+        padding-inline: 4px;
+        white-space: normal;
+      }
+
+      .chart-stage svg {
+        min-height: 260px;
+      }
+
+      .inspector {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .inspector-cell:first-child {
+        grid-column: 1 / -1;
+      }
+
+      .voice-card {
+        grid-template-columns: 44px minmax(0, 1fr);
+      }
+
+      .voice-duration {
+        grid-column: 2;
+      }
+    }
+
+    @media (max-width: 390px) {
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+      }
+
+      .brand-copy h1 {
+        white-space: normal;
+      }
+
+      .demo-disclosure,
+      .session-pill {
+        white-space: normal;
+      }
+
+      .segmented {
+        width: 100%;
+      }
+
+      .segmented button {
+        flex: 1 1 0;
+        padding-inline: 7px;
+      }
+
+      .metric-card span {
+        white-space: normal;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到共學工作區</a>
+
+  <header class="app-header">
+    <div class="brand-lockup">
+      <div class="brand-mark" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.2"></circle>
+          <path d="M3.2 12c2.5-5.9 15.1-5.9 17.6 0-2.5 5.9-15.1 5.9-17.6 0Z"></path>
+          <path d="M12 3.2c5.9 2.5 5.9 15.1 0 17.6-5.9-2.5-5.9-15.1 0-17.6Z"></path>
+        </svg>
+      </div>
+      <div class="brand-copy">
+        <h1>Learning Orbit｜共學星球</h1>
+        <p>協作探究室 · Collaborative inquiry studio</p>
+      </div>
+    </div>
+    <div class="session-strip" aria-label="課堂演示資訊">
+      <span class="demo-disclosure"><span class="dot" aria-hidden="true"></span>本地演示／模擬即時</span>
+      <span class="session-pill topic">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V5.8c0-.7.6-1.3 1.3-1.3H19v14H5.3c-.7 0-1.3.4-1.3 1Z"></path><path d="M4 19.5c0-.6.5-1 1.1-1H19"></path><path d="M8 8h7M8 11.5h5"></path></svg>
+        生態系統探究
+      </span>
+      <span class="session-pill">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>
+        45 分鐘 · 中學生
+      </span>
+    </div>
+  </header>
+
+  <main id="workspace" class="workspace" tabindex="-1">
+    <section id="chat-panel" class="panel" aria-labelledby="chat-title" data-region="chat">
+      <header class="panel-header">
+        <div>
+          <p class="panel-kicker">Inquiry chat</p>
+          <h2 id="chat-title" class="panel-title">共學對話</h2>
+          <p class="panel-subtitle">4 名學生與 Nova Agent · 第 19 / 45 分鐘</p>
+        </div>
+        <span class="state-pill confirmed">本地房間 A</span>
+      </header>
+
+      <nav class="participants" aria-label="插入 mention">
+        <button class="participant" type="button" data-mention="雅晴" style="--avatar:#0B6E99"><span class="mini-avatar">雅</span><span>雅晴</span></button>
+        <button class="participant" type="button" data-mention="子朗" style="--avatar:#B36C0C"><span class="mini-avatar">子</span><span>子朗</span></button>
+        <button class="participant" type="button" data-mention="美琳" style="--avatar:#B53640"><span class="mini-avatar">美</span><span>美琳</span></button>
+        <button class="participant" type="button" data-mention="浩然" style="--avatar:#586B63"><span class="mini-avatar">浩</span><span>浩然</span></button>
+        <button class="participant agent" type="button" data-mention="Nova Agent"><span class="mini-avatar">N</span><span>Nova Agent</span></button>
+      </nav>
+
+      <ol id="message-list" class="message-list" aria-label="生態系統探究對話訊息"></ol>
+
+      <div class="composer-shell">
+        <div class="smart-actions" aria-label="可重現的概念更新捷徑">
+          <button class="smart-chip" type="button" data-concept-action="producer-consumer">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18c7 0 12-5 12-12 0 7 1 10 3 12"></path><path d="M6 14c3 0 6-2 8-5"></path></svg>
+            補證：生產者到消費者
+          </button>
+          <button class="smart-chip" type="button" data-concept-action="decomposer-soil">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17c4-5 12-5 16 0"></path><path d="M8 13V8M12 12V6M16 13V9"></path></svg>
+            補充：分解者到土壤
+          </button>
+          <button class="smart-chip" type="button" data-concept-action="energy-dispute">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3.5 19h17L12 3Z"></path><path d="M12 9v4.5M12 16.5h.01"></path></svg>
+            提出爭議：能量會循環
+          </button>
+        </div>
+
+        <div id="reply-target" class="reply-target" hidden>
+          <span id="reply-target-copy">回覆訊息</span>
+          <button id="reply-cancel" type="button" aria-label="取消回覆">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
+        </div>
+
+        <div id="image-tray" class="media-tray" hidden>
+          <div class="media-tray-grid">
+            <img id="image-preview" alt="待加入對話的本地圖片預覽">
+            <div class="media-fields">
+              <label for="image-alt">替代文字（必填）</label>
+              <input id="image-alt" type="text" autocomplete="off" placeholder="例如：校園池塘食物網草圖">
+              <label for="image-caption">圖片說明</label>
+              <input id="image-caption" type="text" autocomplete="off" placeholder="補充觀察時間或證據來源">
+            </div>
+          </div>
+          <div class="tray-actions">
+            <button id="image-cancel" class="small-button" type="button">取消</button>
+            <button id="image-send" class="small-button primary" type="button">加入對話</button>
+          </div>
+        </div>
+
+        <div id="recording-tray" class="media-tray" hidden>
+          <div id="recording-idle">
+            <strong>本地錄音</strong>
+            <p style="margin:4px 0 0;color:var(--ink-500);font-size:.82rem">錄音只保留在此頁記憶體；沒有自動轉寫或上傳。</p>
+          </div>
+          <div id="recording-preview" class="recording-preview" hidden>
+            <audio id="recorded-audio" controls aria-label="本地錄音播放"></audio>
+            <span id="recording-duration" class="voice-duration">00:00</span>
+          </div>
+          <div class="recording-actions">
+            <button id="voice-stop" class="small-button" type="button" disabled>停止</button>
+            <button id="voice-delete" class="small-button danger" type="button" disabled>刪除</button>
+            <button id="voice-send" class="small-button primary" type="button" disabled>加入對話</button>
+          </div>
+        </div>
+
+        <form id="message-form" class="composer">
+          <div class="composer-tools">
+            <button id="image-picker-button" class="tool-button" type="button" aria-label="選擇本地圖片" title="選擇本地圖片">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m5.5 17 4.2-4 3.1 3 2.4-2.2 3.3 3.2"></path></svg>
+            </button>
+            <input id="image-input" type="file" accept="image/*" hidden>
+            <button id="voice-record" class="tool-button" type="button" aria-label="開始本地錄音" title="開始本地錄音">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="3" width="7" height="12" rx="3.5"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"></path></svg>
+            </button>
+          </div>
+          <label for="message-composer" class="batch-status">輸入訊息</label>
+          <textarea id="message-composer" rows="2" placeholder="分享觀察、引用同伴，或寫下你的推理…" aria-describedby="composer-guidance"></textarea>
+          <button class="send-button" type="submit">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 17 8-17 8 3-8-3-8Z"></path><path d="M7 12h14"></path></svg>
+            發送
+          </button>
+        </form>
+        <div id="composer-guidance" class="composer-help">
+          <span>Enter 發送 · Shift+Enter 換行</span>
+          <span>圖片採 FileReader 本地預覽</span>
+          <span>預定義 JSON 重放；沒有後端或 Python 接線</span>
+          <span id="composer-status" class="composer-status" role="status" aria-live="polite">準備就緒</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="concept-panel" class="panel" aria-labelledby="concept-title" data-region="concept-map" data-responsive-view="mobile-list-default">
+      <header class="panel-header">
+        <div>
+          <p class="panel-kicker">Concept map</p>
+          <h2 id="concept-title" class="panel-title">概念圖 · 論證軌跡</h2>
+          <p class="panel-subtitle">位置固定；狀態由事件 patch 重放</p>
+        </div>
+        <div class="segmented" aria-label="概念圖顯示方式">
+          <button id="concept-graph" type="button" aria-pressed="true">圖形</button>
+          <button id="concept-list" type="button" aria-pressed="false">清單</button>
+        </div>
+      </header>
+
+      <div class="focus-question">
+        <span class="question-mark" aria-hidden="true">?</span>
+        <p><span style="color:var(--green-700)">Focus question</span><br>能量如何在生態系統中流動，而物質又如何循環？</p>
+      </div>
+
+      <div class="analytics-toolbar">
+        <div class="toolbar-group" aria-label="概念圖時間軸控制">
+          <button id="timeline-play" class="icon-button" type="button" aria-label="播放事件時間軸">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"></path></svg>
+          </button>
+          <button id="timeline-pause" class="icon-button" type="button" aria-label="暫停事件時間軸" disabled>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"></path></svg>
+          </button>
+          <button id="timeline-reset" class="icon-button" type="button" aria-label="重設為初始演示">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8V4m0 0h4M5 4a9 9 0 1 1-2 9"></path></svg>
+          </button>
+        </div>
+        <span id="timeline-progress" class="timeline-progress">事件 7 / 7</span>
+      </div>
+
+      <div id="concept-graph-view" class="chart-stage">
+        <svg id="concept-svg" viewBox="0 0 700 340" role="img" aria-labelledby="concept-svg-title concept-svg-desc">
+          <title id="concept-svg-title">生態系統能量流與物質循環概念圖</title>
+          <desc id="concept-svg-desc">七個概念節點及八條帶謂詞、證據和狀態的關係；可用 Tab 聚焦每條關係。</desc>
+          <defs>
+            <marker id="concept-arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#1F7A3B"></path></marker>
+            <marker id="concept-arrow-amber" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#B9800E"></path></marker>
+            <marker id="concept-arrow-coral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#E95D64"></path></marker>
+            <marker id="concept-arrow-muted" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#87958E"></path></marker>
+          </defs>
+
+          <g id="edge-sun-plant" class="concept-edge edge--confirmed" tabindex="0" role="button" data-edge-id="sun-plant" data-predicate="提供能量給" data-from="太陽" data-to="生產者" data-aria-label="太陽提供能量給生產者" data-message-id="m001, m007" data-first-seen="09:02" data-last-seen="09:16" data-evidence-count="2" data-confidence="0.94" data-state="confirmed" data-reveal-step="1" aria-label="太陽提供能量給生產者，已確認">
+            <path class="edge-line" d="M112 70 C155 70 176 70 217 70" marker-end="url(#concept-arrow-green)"></path>
+            <g transform="translate(165 50)"><rect class="edge-label-bg" x="-47" y="-13" width="94" height="28" rx="8"></rect><text class="edge-label" y="-1">提供能量給</text><text class="edge-state-label" y="10">實線 · 已確認</text></g>
+          </g>
+          <g id="edge-plant-herb" class="concept-edge edge--confirmed" tabindex="0" role="button" data-edge-id="plant-herb" data-predicate="提供能量給" data-from="生產者" data-to="初級消費者" data-aria-label="生產者提供能量給初級消費者" data-message-id="m002, m007" data-first-seen="09:05" data-last-seen="09:16" data-evidence-count="2" data-confidence="0.88" data-state="confirmed" data-reveal-step="2" aria-label="生產者提供能量給初級消費者，已確認">
+            <path class="edge-line" d="M282 70 C326 70 346 70 387 70" marker-end="url(#concept-arrow-green)"></path>
+            <g transform="translate(335 50)"><rect class="edge-label-bg" x="-47" y="-13" width="94" height="28" rx="8"></rect><text class="edge-label" y="-1">提供能量給</text><text class="edge-state-label" y="10">實線 · 已確認</text></g>
+          </g>
+          <g id="edge-herb-predator" class="concept-edge edge--provisional" tabindex="0" role="button" data-edge-id="herb-predator" data-predicate="被捕食並轉移能量給" data-from="初級消費者" data-to="次級消費者" data-aria-label="初級消費者被次級消費者捕食，能量因而轉移" data-message-id="m006" data-first-seen="09:14" data-last-seen="09:14" data-evidence-count="1" data-confidence="0.61" data-state="provisional" data-reveal-step="5" aria-label="初級消費者被次級消費者捕食，能量因而轉移，暫定">
+            <path class="edge-line" d="M452 70 C496 70 516 70 557 70" marker-end="url(#concept-arrow-amber)"></path>
+            <g transform="translate(505 47)"><rect class="edge-label-bg" x="-61" y="-13" width="122" height="28" rx="8"></rect><text class="edge-label" y="-1">被捕食並轉移能量</text><text class="edge-state-label" y="10">虛線 · 暫定</text></g>
+          </g>
+          <g id="edge-herb-decomposer" class="concept-edge edge--confirmed" tabindex="0" role="button" data-edge-id="herb-decomposer" data-predicate="遺體被分解者分解" data-from="初級消費者" data-to="分解者" data-aria-label="初級消費者遺體由分解者分解" data-message-id="m003, m006" data-first-seen="09:08" data-last-seen="09:14" data-evidence-count="2" data-confidence="0.83" data-state="confirmed" data-reveal-step="3" aria-label="初級消費者遺體由分解者分解，已確認">
+            <path class="edge-line" d="M420 103 C420 144 450 168 450 209" marker-end="url(#concept-arrow-green)"></path>
+            <g transform="translate(476 158)"><rect class="edge-label-bg" x="-55" y="-13" width="110" height="28" rx="8"></rect><text class="edge-label" y="-1">遺體被分解</text><text class="edge-state-label" y="10">實線 · 已確認</text></g>
+          </g>
+          <g id="edge-decomposer-soil" class="concept-edge edge--confirmed" tabindex="0" role="button" data-edge-id="decomposer-soil" data-predicate="釋放養分到" data-from="分解者" data-to="土壤養分" data-aria-label="分解者釋放養分到土壤" data-message-id="m003, m007" data-first-seen="09:08" data-last-seen="09:16" data-evidence-count="2" data-confidence="0.9" data-state="confirmed" data-reveal-step="4" aria-label="分解者釋放養分到土壤，已確認">
+            <path class="edge-line" d="M417 245 C369 245 340 245 293 245" marker-end="url(#concept-arrow-green)"></path>
+            <g transform="translate(355 225)"><rect class="edge-label-bg" x="-47" y="-13" width="94" height="28" rx="8"></rect><text class="edge-label" y="-1">釋放養分到</text><text class="edge-state-label" y="10">實線 · 已確認</text></g>
+          </g>
+          <g id="edge-soil-plant" class="concept-edge edge--confirmed" tabindex="0" role="button" data-edge-id="soil-plant" data-predicate="提供礦物質給" data-from="土壤養分" data-to="生產者" data-aria-label="土壤提供礦物質給生產者" data-message-id="m004, m007" data-first-seen="09:10" data-last-seen="09:16" data-evidence-count="2" data-confidence="0.86" data-state="confirmed" data-reveal-step="4" aria-label="土壤提供礦物質給生產者，已確認">
+            <path class="edge-line" d="M250 211 C250 170 250 143 250 104" marker-end="url(#concept-arrow-green)"></path>
+            <g transform="translate(190 158)"><rect class="edge-label-bg" x="-51" y="-13" width="102" height="28" rx="8"></rect><text class="edge-label" y="-1">提供礦物質給</text><text class="edge-state-label" y="10">實線 · 已確認</text></g>
+          </g>
+          <g id="edge-energy-cycle" class="concept-edge edge--disputed" tabindex="0" role="button" data-edge-id="energy-cycle" data-predicate="把能量循環回" data-from="生產者" data-to="太陽" data-aria-label="生產者把能量循環回太陽" data-message-id="m005" data-first-seen="09:12" data-last-seen="09:12" data-evidence-count="1" data-confidence="0.22" data-state="disputed" data-reveal-step="6" aria-label="生產者把能量循環回太陽，此關係有爭議">
+            <path class="edge-line" d="M225 92 C180 128 121 127 83 102" marker-end="url(#concept-arrow-coral)"></path>
+            <g transform="translate(145 126)"><rect class="edge-label-bg" x="-55" y="-13" width="110" height="28" rx="8"></rect><text class="edge-label" y="-1">把能量循環回</text><text class="edge-state-label" y="10">點劃線 · 有爭議</text></g>
+          </g>
+          <g id="edge-predator-air" class="concept-edge edge--inactive" tabindex="0" role="button" data-edge-id="predator-air" data-predicate="直接形成氧氣" data-from="次級消費者" data-to="大氣" data-aria-label="次級消費者直接形成大氣氧氣" data-message-id="尚無來源" data-first-seen="—" data-last-seen="—" data-evidence-count="0" data-confidence="0.08" data-state="inactive" data-reveal-step="7" aria-label="次級消費者直接形成大氣氧氣，未啟用">
+            <path class="edge-line" d="M590 104 C576 213 167 298 112 261" marker-end="url(#concept-arrow-muted)"></path>
+            <g transform="translate(344 294)"><rect class="edge-label-bg" x="-51" y="-13" width="102" height="28" rx="8"></rect><text class="edge-label" y="-1">直接形成氧氣</text><text class="edge-state-label" y="10">點線 · 未啟用</text></g>
+          </g>
+
+          <g class="concept-node" transform="translate(75 70)" style="--node-color:#F4B942"><rect x="-37" y="-26" width="74" height="52" rx="14"></rect><rect class="node-accent" x="-37" y="-26" width="7" height="52" rx="4"></rect><text y="-1">太陽</text><text class="node-en" y="13">Sun</text></g>
+          <g class="concept-node" transform="translate(250 70)" style="--node-color:#58CC02"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">生產者</text><text class="node-en" y="13">Producer</text></g>
+          <g class="concept-node" transform="translate(420 70)" style="--node-color:#0B6E99"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">草食者</text><text class="node-en" y="13">Consumer I</text></g>
+          <g class="concept-node" transform="translate(590 70)" style="--node-color:#E95D64"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">捕食者</text><text class="node-en" y="13">Consumer II</text></g>
+          <g class="concept-node" transform="translate(450 245)" style="--node-color:#B36C0C"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">分解者</text><text class="node-en" y="13">Decomposer</text></g>
+          <g class="concept-node" transform="translate(260 245)" style="--node-color:#745435"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">土壤</text><text class="node-en" y="13">Nutrients</text></g>
+          <g class="concept-node" transform="translate(80 245)" style="--node-color:#718B9B"><rect x="-33" y="-26" width="66" height="52" rx="14"></rect><rect class="node-accent" x="-33" y="-26" width="7" height="52" rx="4"></rect><text y="-1">大氣</text><text class="node-en" y="13">Atmosphere</text></g>
+        </svg>
+      </div>
+
+      <div id="concept-list-view" class="chart-stage view-list" hidden>
+        <ol id="relation-list" class="relation-list" aria-label="概念關係清單"></ol>
+      </div>
+
+      <div id="concept-inspector" class="inspector" aria-live="polite">
+        <div class="inspector-cell"><span class="inspector-label">選取關係</span><span id="concept-detail-relation" class="inspector-value">太陽 —提供能量給→ 生產者</span></div>
+        <div class="inspector-cell"><span class="inspector-label">來源 / Source</span><span id="concept-detail-source" class="inspector-value">m001, m007</span></div>
+        <div class="inspector-cell"><span class="inspector-label">首次 · 最近</span><span id="concept-detail-time" class="inspector-value">09:02 · 09:16</span></div>
+        <div class="inspector-cell"><span class="inspector-label">證據 · 信心 · 狀態</span><span id="concept-detail-evidence" class="inspector-value">2 · 94% · 已確認</span></div>
+      </div>
+      <div id="batch-status" class="batch-status" role="status" aria-live="polite" aria-atomic="true"></div>
+    </section>
+
+    <section id="sna-panel" class="panel" aria-labelledby="sna-title" data-region="sna" data-responsive-view="mobile-list-default">
+      <header class="panel-header">
+        <div>
+          <p class="panel-kicker">Social network analysis</p>
+          <h2 id="sna-title" class="panel-title">互動網絡 · SNA</h2>
+          <p class="panel-subtitle">有向互動；群體層級，無個人排名</p>
+        </div>
+        <div class="segmented" aria-label="互動網絡顯示方式">
+          <button id="sna-graph" type="button" aria-pressed="true">圖形</button>
+          <button id="sna-list" type="button" aria-pressed="false">清單</button>
+        </div>
+      </header>
+
+      <div class="sna-view-tabs" aria-label="SNA 分析視圖">
+        <button type="button" data-sna-view="observed" aria-pressed="true"><span class="view-glyph" aria-hidden="true">O</span>全體互動</button>
+        <button type="button" data-sna-view="human_only" aria-pressed="false"><span class="view-glyph" aria-hidden="true">H</span>只看同學</button>
+        <button type="button" data-sna-view="lineage_adjusted" aria-pressed="false"><span class="view-glyph" aria-hidden="true">L</span>來源歸因</button>
+      </div>
+      <p id="sna-view-note" class="sna-view-note">全體互動：顯示學生與 Agent 的可見訊息回應。</p>
+      <div id="sna-status" class="batch-status" role="status" aria-live="polite" aria-atomic="true"></div>
+
+      <div id="sna-graph-view" class="chart-stage">
+        <svg id="sna-svg" viewBox="0 0 520 310" role="img" aria-labelledby="sna-svg-title sna-svg-desc" data-layout-method="screen-ctm-ports" data-layout-scale="pending">
+          <title id="sna-svg-title">五位參與者的有向互動網絡</title>
+          <desc id="sna-svg-desc">四位學生以圓形呈現，Nova Agent 以六角形呈現；每條互動有獨立端口。</desc>
+          <defs>
+            <marker id="sna-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#6E9AA9"></path></marker>
+            <marker id="sna-arrow-agent" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#0B6E99"></path></marker>
+            <marker id="sna-arrow-recip" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0 0 8 4 0 8Z" fill="#1F7A3B"></path></marker>
+          </defs>
+
+          <g id="sna-edge-layer">
+            <path id="sna-e1" class="sna-edge is-reciprocal" tabindex="0" role="button" data-edge-id="sna-e1" data-from="yaqing" data-to="zilang" data-kind="reply" data-views="observed human_only lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m002" data-evidence-count="1" data-aria-label="雅晴回覆子朗" marker-end="url(#sna-arrow-recip)" aria-label="雅晴回覆子朗"></path>
+            <path id="sna-e2" class="sna-edge is-reciprocal" tabindex="0" role="button" data-edge-id="sna-e2" data-from="zilang" data-to="yaqing" data-kind="reply" data-views="observed human_only lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m006" data-evidence-count="1" data-aria-label="子朗回覆雅晴" marker-end="url(#sna-arrow-recip)" aria-label="子朗回覆雅晴"></path>
+            <path id="sna-e3" class="sna-edge" tabindex="0" role="button" data-edge-id="sna-e3" data-from="meilin" data-to="haoran" data-kind="mention" data-views="observed human_only lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m006" data-evidence-count="1" data-aria-label="美琳提及浩然" marker-end="url(#sna-arrow)" aria-label="美琳提及浩然"></path>
+            <path id="sna-e4" class="sna-edge" tabindex="0" role="button" data-edge-id="sna-e4" data-from="haoran" data-to="zilang" data-kind="reply" data-views="observed human_only lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m004" data-evidence-count="1" data-aria-label="浩然回覆子朗" marker-end="url(#sna-arrow)" aria-label="浩然回覆子朗"></path>
+            <path id="sna-e5" class="sna-edge is-agent-edge" tabindex="0" role="button" data-edge-id="sna-e5" data-from="nova" data-to="yaqing" data-kind="prompt" data-views="observed lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m005" data-evidence-count="1" data-aria-label="Nova Agent 追問雅晴" marker-end="url(#sna-arrow-agent)" aria-label="Nova Agent 追問雅晴"></path>
+            <path id="sna-e6" class="sna-edge is-agent-edge" tabindex="0" role="button" data-edge-id="sna-e6" data-from="nova" data-to="zilang" data-kind="prompt" data-views="observed lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m005" data-evidence-count="1" data-aria-label="Nova Agent 追問子朗" marker-end="url(#sna-arrow-agent)" aria-label="Nova Agent 追問子朗"></path>
+            <path id="sna-e7" class="sna-edge is-agent-edge" tabindex="0" role="button" data-edge-id="sna-e7" data-from="meilin" data-to="nova" data-kind="reply" data-views="observed lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m006" data-evidence-count="1" data-aria-label="美琳回覆 Nova Agent" marker-end="url(#sna-arrow-agent)" aria-label="美琳回覆 Nova Agent"></path>
+            <path id="sna-e8" class="sna-edge is-agent-edge" tabindex="0" role="button" data-edge-id="sna-e8" data-from="nova" data-to="haoran" data-kind="summary" data-views="observed lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m007" data-evidence-count="1" data-aria-label="Nova Agent 整理浩然的想法" marker-end="url(#sna-arrow-agent)" aria-label="Nova Agent 整理浩然的想法"></path>
+            <path id="sna-e9" class="sna-edge" tabindex="0" role="button" data-edge-id="sna-e9" data-from="yaqing" data-to="meilin" data-kind="mention" data-views="observed human_only lineage_adjusted" data-from-port="pending" data-to-port="pending" data-screen-length="pending" data-source-events="m002" data-evidence-count="1" data-aria-label="雅晴提及美琳" marker-end="url(#sna-arrow)" aria-label="雅晴提及美琳"></path>
+          </g>
+
+          <g class="sna-node human" id="sna-node-yaqing" tabindex="0" role="button" data-node-id="yaqing" data-name="雅晴" data-type="human" data-x="118" data-y="76" data-hit-size="62" style="--node-color:#0B6E99" aria-label="雅晴，學生節點"><circle cx="118" cy="76" r="31"></circle><text x="118" y="74">雅晴</text><text class="node-kind" x="118" y="88">HUMAN</text></g>
+          <g class="sna-node human" id="sna-node-zilang" tabindex="0" role="button" data-node-id="zilang" data-name="子朗" data-type="human" data-x="402" data-y="76" data-hit-size="62" style="--node-color:#B36C0C" aria-label="子朗，學生節點"><circle cx="402" cy="76" r="31"></circle><text x="402" y="74">子朗</text><text class="node-kind" x="402" y="88">HUMAN</text></g>
+          <g class="sna-node human" id="sna-node-meilin" tabindex="0" role="button" data-node-id="meilin" data-name="美琳" data-type="human" data-x="112" data-y="238" data-hit-size="62" style="--node-color:#B53640" aria-label="美琳，學生節點"><circle cx="112" cy="238" r="31"></circle><text x="112" y="236">美琳</text><text class="node-kind" x="112" y="250">HUMAN</text></g>
+          <g class="sna-node human" id="sna-node-haoran" tabindex="0" role="button" data-node-id="haoran" data-name="浩然" data-type="human" data-x="408" data-y="238" data-hit-size="62" style="--node-color:#586B63" aria-label="浩然，學生節點"><circle cx="408" cy="238" r="31"></circle><text x="408" y="236">浩然</text><text class="node-kind" x="408" y="250">HUMAN</text></g>
+          <g class="sna-node agent" id="sna-node-nova" tabindex="0" role="button" data-node-id="nova" data-name="Nova Agent" data-type="agent" data-x="260" data-y="157" data-hit-size="76" aria-label="Nova Agent，Agent 節點"><polygon points="260,119 293,138 293,176 260,195 227,176 227,138"></polygon><text x="260" y="154">Nova</text><text class="node-kind" x="260" y="168">AGENT</text></g>
+        </svg>
+      </div>
+
+      <div id="sna-list-view" class="chart-stage view-list" hidden>
+        <ol id="interaction-list" class="interaction-list" aria-label="有向互動清單"></ol>
+      </div>
+
+      <div class="metric-grid" aria-label="群體層級指標">
+        <div class="metric-card"><span>參與平衡</span><strong id="metric-balance">78%</strong><div class="metric-bar"><i id="bar-balance" style="--metric-width:78%"></i></div></div>
+        <div class="metric-card"><span>互惠程度</span><strong id="metric-reciprocity">43%</strong><div class="metric-bar"><i id="bar-reciprocity" style="--metric-width:43%"></i></div></div>
+        <div class="metric-card"><span>Agent 佔比</span><strong id="metric-agent">26%</strong><div class="metric-bar"><i id="bar-agent" style="--metric-width:26%"></i></div></div>
+        <div class="metric-card"><span>語義覆蓋</span><strong id="metric-semantic">72%</strong><div class="metric-bar"><i id="bar-semantic" style="--metric-width:72%"></i></div></div>
+      </div>
+
+      <div id="sna-inspector" class="inspector" aria-live="polite">
+        <div class="inspector-cell"><span class="inspector-label">選取互動</span><span id="sna-detail-relation" class="inspector-value">雅晴 —回覆→ 子朗</span></div>
+        <div class="inspector-cell"><span class="inspector-label">來源事件</span><span id="sna-detail-source" class="inspector-value">m002</span></div>
+        <div class="inspector-cell"><span class="inspector-label">獨立端口</span><span id="sna-detail-ports" class="inspector-value">計算中</span></div>
+        <div class="inspector-cell"><span class="inspector-label">屏幕長度</span><span id="sna-detail-length" class="inspector-value">計算中</span></div>
+      </div>
+
+      <aside class="limitation" aria-label="SNA 限制聲明">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6M12 7.5h.01"></path></svg>
+        <div><strong>限制聲明</strong>指標只描述此本地演示中的可見訊息結構，不代表個人能力、學習成績或價值，也不用於個人排名。Agent 互動在「來源歸因」視圖中另行標記。</div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+
+    /**
+     * @typedef {Object} ChatEvent
+     * @property {string} eventId Immutable event identifier.
+     * @property {string} sessionId Session identifier.
+     * @property {number} revision Monotonic event revision.
+     * @property {"add"|"revise"|"retract"} operation Ledger operation.
+     * @property {string} eventTime ISO-8601 classroom event time.
+     * @property {string} ingestTime ISO-8601 local-demo ingest time.
+     * @property {string} actorId Stable participant identifier.
+     * @property {"human"|"agent"} actorKind Actor provenance class.
+     * @property {string|null} agentRole Agent role or null for humans.
+     * @property {"text"|"image"|"audio"} modality Observed modality.
+     * @property {string} text User-authored or seeded text.
+     * @property {number} sourceConfidence Bounded source confidence.
+     * @property {string|null} replyTo Source ChatEvent eventId.
+     * @property {string[]} mentions Mentioned actor identifiers.
+     * @property {string|null} supersedes Superseded eventId.
+     * @property {string|null} retracts Retracted eventId.
+     */
+
+    /**
+     * @typedef {Object} ConceptMapPatch
+     * @property {number} version Patch version.
+     * @property {string} completeThrough Event-time completeness cursor.
+     * @property {Object[]} nodesAdded Added evidence nodes.
+     * @property {Object[]} nodesUpdated Updated evidence nodes.
+     * @property {string[]} nodesHidden Archived node identifiers.
+     * @property {Object[]} edgesAdded Added evidence propositions.
+     * @property {Object[]} edgesUpdated Updated evidence propositions.
+     * @property {string[]} edgesHidden Archived edge identifiers.
+     * @property {Object[]} positionUpdates Stable layout anchor updates.
+     * @property {number} changeScore Normalized visual change score.
+     * @property {string[]} reasonCodes Machine-readable update reasons.
+     * @property {string[]} evidenceRefs Source ChatEvent eventIds.
+     */
+
+    /**
+     * @typedef {Object} SnaSnapshot
+     * @property {number} version Snapshot version.
+     * @property {string} completeThrough Event-time completeness cursor.
+     * @property {"observed"|"human_only"|"lineage_adjusted"} view Structural view.
+     * @property {Object[]} nodes Participant or ROOM nodes.
+     * @property {{source:string,target:string,layer:string,positive:number,challenge:number,uncertain:number,weight:number,evidenceIds:string[]}[]} edges Typed observed edges.
+     * @property {{participationBalance:number,reciprocity:number,agentShare:number,semanticCoverage:number}} metrics Group metrics only.
+     * @property {string[]} warnings Interpretation and completeness warnings.
+     */
+
+    const participantStyles = {
+      "雅晴": { initials: "雅", color: "#0B6E99" },
+      "子朗": { initials: "子", color: "#B36C0C" },
+      "美琳": { initials: "美", color: "#B53640" },
+      "浩然": { initials: "浩", color: "#586B63" },
+      "Nova Agent": { initials: "N", color: "#173A2A" }
+    };
+
+    const ACTOR_IDS = {
+      "雅晴": "yaqing",
+      "子朗": "zilang",
+      "美琳": "meilin",
+      "浩然": "haoran",
+      "Nova Agent": "nova"
+    };
+    const SESSION_ID = "ecosystem-inquiry-demo";
+
+    function isoEventTime(clock) {
+      return `2026-08-28T${clock}:00+08:00`;
+    }
+
+    /** @returns {ChatEvent} */
+    function makeChatEvent(event) {
+      const eventId = event.eventId || event.id;
+      const actorKind = event.actorKind || event.actorType || "human";
+      const timestamp = event.timestamp || "09:00";
+      const presentationType = event.type || (event.modality === "audio" ? "voice" : event.modality) || "text";
+      const modality = event.modality || (presentationType === "voice" ? "audio" : presentationType === "summary" ? "text" : presentationType);
+      const mentions = event.mentions || Object.entries(ACTOR_IDS)
+        .filter(([name]) => event.text?.includes(`@${name}`))
+        .map(([, actorId]) => actorId);
+      return {
+        ...event,
+        eventId,
+        sessionId: event.sessionId || SESSION_ID,
+        revision: event.revision || 1,
+        operation: event.operation || "add",
+        eventTime: event.eventTime || isoEventTime(timestamp),
+        ingestTime: event.ingestTime || event.eventTime || isoEventTime(timestamp),
+        actorId: event.actorId || ACTOR_IDS[event.author] || "unknown-human",
+        actorKind,
+        agentRole: event.agentRole ?? (actorKind === "agent" ? "socratic_facilitator" : null),
+        modality,
+        text: event.text || "",
+        sourceConfidence: event.sourceConfidence ?? 1,
+        replyTo: event.replyTo || null,
+        mentions,
+        supersedes: event.supersedes || null,
+        retracts: event.retracts || null,
+        id: eventId,
+        actorType: actorKind,
+        type: presentationType,
+        timestamp
+      };
+    }
+
+    /** @returns {ConceptMapPatch} */
+    function makeConceptMapPatch(patch, version) {
+      const evidenceRefs = patch.evidenceRefs || patch.messageIds || [patch.messageId].filter(Boolean);
+      const edgeUpdate = {
+        edgeId: patch.edgeId,
+        state: patch.state,
+        confidence: patch.confidence,
+        evidenceRefs: [...evidenceRefs]
+      };
+      return {
+        version: patch.version || version,
+        completeThrough: patch.completeThrough || patch.lastSeen || patch.seen || "09:00",
+        nodesAdded: patch.nodesAdded || [],
+        nodesUpdated: patch.nodesUpdated || [],
+        nodesHidden: patch.nodesHidden || [],
+        edgesAdded: patch.edgesAdded || [],
+        edgesUpdated: patch.edgesUpdated || [edgeUpdate],
+        edgesHidden: patch.edgesHidden || [],
+        positionUpdates: patch.positionUpdates || [],
+        changeScore: patch.changeScore ?? 0.12,
+        reasonCodes: patch.reasonCodes || ["evidence_update"],
+        evidenceRefs: [...evidenceRefs],
+        ...patch
+      };
+    }
+
+    /** @returns {SnaSnapshot} */
+    function makeSnaSnapshot(snapshot) {
+      const sourceEvent = snapshot.sourceEvent || snapshot.edges?.[0]?.evidenceIds?.[0] || "seed";
+      const participationBalance = snapshot.metrics.participationBalance ?? snapshot.metrics.balance ?? 0;
+      return {
+        ...snapshot,
+        version: snapshot.version || 1,
+        completeThrough: snapshot.completeThrough || "09:00",
+        view: snapshot.view || "observed",
+        nodes: (snapshot.nodes || []).map((node) => ({ ...node })),
+        edges: (snapshot.edges || []).map((edge) => ({ ...edge, evidenceIds: [...edge.evidenceIds] })),
+        metrics: {
+          participationBalance,
+          reciprocity: snapshot.metrics.reciprocity,
+          agentShare: snapshot.metrics.agentShare,
+          semanticCoverage: snapshot.metrics.semanticCoverage
+        },
+        warnings: [...(snapshot.warnings || [])],
+        sourceEvent,
+        id: snapshot.id || `sna-${sourceEvent}`
+      };
+    }
+
+    /** @type {ChatEvent[]} */
+    const defaultEvents = [
+      makeChatEvent({ id: "m001", author: "雅晴", actorType: "human", type: "text", text: "我先把太陽連到生產者：植物透過光合作用取得能量，但能量不是植物製造出來的。", patchId: "p001", snapshotId: "s001", timestamp: "09:02" }),
+      makeChatEvent({ id: "m002", author: "子朗", actorType: "human", type: "text", text: "@雅晴 我同意能量從太陽進來。毛蟲吃葉片時，能量再從生產者轉移到初級消費者。", replyTo: "m001", patchId: "p002", snapshotId: "s002", timestamp: "09:05" }),
+      makeChatEvent({ id: "m003", author: "美琳", actorType: "human", type: "image", text: "這是我們小組的生態瓶草圖：枯葉和昆蟲遺體最後都連向分解者。", patchId: "p003", snapshotId: "s003", timestamp: "09:08", inlineSketch: true, alt: "生態瓶草圖，包含陽光、植物、毛蟲、枯葉、真菌和土壤，以線條表示觀察到的關係", caption: "小組觀察草圖（合成教學素材，不是真實研究資料）" }),
+      makeChatEvent({ id: "m004", author: "浩然", actorType: "human", type: "voice", text: "分解者把遺體中的物質轉成可回到土壤的養分，所以循環的是物質，不是同一份能量。", patchId: "p004", snapshotId: "s004", timestamp: "09:10", duration: 12, transcript: "演示轉寫：分解者讓物質回到土壤；能量沿途散失成熱。此文字為預先編寫，不是 ASR。" }),
+      makeChatEvent({ id: "m005", author: "Nova Agent", actorType: "agent", type: "text", text: "如果有人說『能量也會像養分一樣繞回太陽』，你們會用哪一條觀察或機制來反駁？", replyTo: "m004", patchId: "p005", snapshotId: "s005", timestamp: "09:12" }),
+      makeChatEvent({ id: "m006", author: "美琳", actorType: "human", type: "text", text: "@浩然 我會說每次營養階層轉移都有一部分能量成為熱；捕食者這條連線先標暫定，因為我們只有一次觀察。", replyTo: "m005", patchId: "p006", snapshotId: "s006", timestamp: "09:14" }),
+      makeChatEvent({ id: "m007", author: "Nova Agent", actorType: "agent", type: "summary", text: "目前共識：能量由太陽進入，經生產者與消費者單向流動；物質則由分解與吸收回到系統。待查證：次級消費者的直接觀察證據。", patchId: "p007", snapshotId: "s007", timestamp: "09:16" })
+    ];
+
+    /** @type {ConceptMapPatch[]} */
+    const conceptPatches = [
+      makeConceptMapPatch({ id: "p001", edgeId: "sun-plant", state: "confirmed", messageIds: ["m001", "m007"], evidenceCount: 2, confidence: 0.94, firstSeen: "09:02", lastSeen: "09:16" }, 1),
+      makeConceptMapPatch({ id: "p002", edgeId: "plant-herb", state: "confirmed", messageIds: ["m002", "m007"], evidenceCount: 2, confidence: 0.88, firstSeen: "09:05", lastSeen: "09:16" }, 2),
+      makeConceptMapPatch({ id: "p003", edgeId: "herb-decomposer", state: "confirmed", messageIds: ["m003", "m006"], evidenceCount: 2, confidence: 0.83, firstSeen: "09:08", lastSeen: "09:14" }, 3),
+      makeConceptMapPatch({ id: "p004", edgeId: "decomposer-soil", state: "confirmed", messageIds: ["m003", "m007"], evidenceCount: 2, confidence: 0.90, firstSeen: "09:08", lastSeen: "09:16" }, 4),
+      makeConceptMapPatch({ id: "p005", edgeId: "energy-cycle", state: "disputed", messageIds: ["m005"], evidenceCount: 1, confidence: 0.22, firstSeen: "09:12", lastSeen: "09:12" }, 5),
+      makeConceptMapPatch({ id: "p006", edgeId: "herb-predator", state: "provisional", messageIds: ["m006"], evidenceCount: 1, confidence: 0.61, firstSeen: "09:14", lastSeen: "09:14" }, 6),
+      makeConceptMapPatch({ id: "p007", edgeId: "soil-plant", state: "confirmed", messageIds: ["m004", "m007"], evidenceCount: 2, confidence: 0.86, firstSeen: "09:10", lastSeen: "09:16" }, 7)
+    ];
+
+    const SNA_SEED_NODES = [
+      { nodeId: "yaqing", actorKind: "human", label: "雅晴" },
+      { nodeId: "zilang", actorKind: "human", label: "子朗" },
+      { nodeId: "meilin", actorKind: "human", label: "美琳" },
+      { nodeId: "haoran", actorKind: "human", label: "浩然" },
+      { nodeId: "nova", actorKind: "agent", agentRole: "socratic_facilitator", label: "Nova Agent" },
+      { nodeId: "ROOM", actorKind: "room", label: "共學聊天室" }
+    ];
+
+    const SNA_SEED_EDGES = [
+      { source: "yaqing", target: "ROOM", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m001"] },
+      { source: "yaqing", target: "zilang", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m002"] },
+      { source: "zilang", target: "yaqing", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m006"] },
+      { source: "meilin", target: "haoran", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m006"] },
+      { source: "haoran", target: "zilang", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m004"] },
+      { source: "nova", target: "yaqing", layer: "facilitation", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m005"] },
+      { source: "nova", target: "zilang", layer: "facilitation", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m005"] },
+      { source: "meilin", target: "nova", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m006"] },
+      { source: "nova", target: "haoran", layer: "facilitation", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m007"] },
+      { source: "yaqing", target: "meilin", layer: "communication", positive: 1, challenge: 0, uncertain: 0, weight: 1, evidenceIds: ["m002"] }
+    ];
+
+    function seedEdgesThrough(messageNumber) {
+      return SNA_SEED_EDGES.filter((edge) => edge.evidenceIds.some((eventId) => Number(eventId.slice(1)) <= messageNumber));
+    }
+
+    /** @type {SnaSnapshot[]} */
+    const snaSnapshots = [
+      makeSnaSnapshot({ id: "s001", version: 1, completeThrough: "09:02", sourceEvent: "m001", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(1), metrics: { participationBalance: 0.64, reciprocity: 0.2, agentShare: 0, semanticCoverage: 0.24 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s002", version: 2, completeThrough: "09:05", sourceEvent: "m002", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(2), metrics: { participationBalance: 0.7, reciprocity: 0.34, agentShare: 0, semanticCoverage: 0.36 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s003", version: 3, completeThrough: "09:08", sourceEvent: "m003", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(3), metrics: { participationBalance: 0.74, reciprocity: 0.34, agentShare: 0, semanticCoverage: 0.48 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s004", version: 4, completeThrough: "09:10", sourceEvent: "m004", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(4), metrics: { participationBalance: 0.81, reciprocity: 0.4, agentShare: 0, semanticCoverage: 0.56 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s005", version: 5, completeThrough: "09:12", sourceEvent: "m005", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(5), metrics: { participationBalance: 0.78, reciprocity: 0.4, agentShare: 0.2, semanticCoverage: 0.61 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s006", version: 6, completeThrough: "09:14", sourceEvent: "m006", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(6), metrics: { participationBalance: 0.8, reciprocity: 0.43, agentShare: 0.18, semanticCoverage: 0.68 }, warnings: [] }),
+      makeSnaSnapshot({ id: "s007", version: 7, completeThrough: "09:16", sourceEvent: "m007", view: "observed", nodes: SNA_SEED_NODES, edges: seedEdgesThrough(7), metrics: { participationBalance: 0.78, reciprocity: 0.43, agentShare: 0.26, semanticCoverage: 0.72 }, warnings: [] })
+    ];
+
+    const SNA_VIEW_METRICS = {
+      observed: { participationBalance: 0.78, reciprocity: 0.43, agentShare: 0.26, semanticCoverage: 0.72 },
+      human_only: { participationBalance: 0.74, reciprocity: 0.5, agentShare: 0, semanticCoverage: 0.58 },
+      lineage_adjusted: { participationBalance: 0.76, reciprocity: 0.46, agentShare: 0.18, semanticCoverage: 0.68 }
+    };
+
+    const SNA_VIEW_LABELS = {
+      observed: "全體互動",
+      human_only: "只看同學",
+      lineage_adjusted: "來源歸因"
+    };
+
+    const STATE_LABELS = {
+      confirmed: "已確認",
+      provisional: "暫定",
+      disputed: "有爭議",
+      inactive: "未啟用"
+    };
+
+    const STATE_STYLES = {
+      confirmed: "實線 · 已確認",
+      provisional: "虛線 · 暫定",
+      disputed: "點劃線 · 有爭議",
+      inactive: "點線 · 未啟用"
+    };
+
+    const EDGE_MESSAGE_SOURCE = {
+      "sna-e1": "m002",
+      "sna-e2": "m006",
+      "sna-e3": "m006",
+      "sna-e4": "m004",
+      "sna-e5": "m005",
+      "sna-e6": "m005",
+      "sna-e7": "m006",
+      "sna-e8": "m007",
+      "sna-e9": "m002"
+    };
+
+    const messageList = document.getElementById("message-list");
+    const composer = document.getElementById("message-composer");
+    const composerStatus = document.getElementById("composer-status");
+    const batchStatus = document.getElementById("batch-status");
+    const snaStatus = document.getElementById("sna-status");
+    const replyTarget = document.getElementById("reply-target");
+    const replyTargetCopy = document.getElementById("reply-target-copy");
+    let activeReplyId = "";
+    let nextMessageNumber = 8;
+    let currentSnaView = "observed";
+    let currentSnaMetrics = { ...SNA_VIEW_METRICS.observed };
+    const runtimeObservedSnapshots = [];
+    let conceptTimelineIndex = conceptPatches.length;
+    let timelineTimer = null;
+    let batchGeneration = 0;
+
+    function iconMarkup(name) {
+      const paths = {
+        reply: '<path d="M9 8 4 12l5 4"></path><path d="M5 12h8a6 6 0 0 1 6 6"></path>',
+        play: '<path d="m9 6 9 6-9 6V6Z"></path>',
+        pause: '<path d="M9 6v12M15 6v12"></path>'
+      };
+      return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ""}</svg>`;
+    }
+
+    function appendTextWithMentions(container, text) {
+      const parts = text.split(/(@(?:Nova Agent|雅晴|子朗|美琳|浩然))/g);
+      parts.forEach((part) => {
+        if (part.startsWith("@")) {
+          const span = document.createElement("span");
+          span.className = "mention-token";
+          span.textContent = part;
+          container.append(span);
+        } else {
+          container.append(document.createTextNode(part));
+        }
+      });
+    }
+
+    function buildObservationSketch() {
+      const figure = document.createElement("figure");
+      figure.className = "inline-observation";
+      figure.innerHTML = `
+        <svg viewBox="0 0 520 245" role="img" aria-labelledby="sketch-title sketch-desc">
+          <title id="sketch-title">生態瓶觀察草圖</title>
+          <desc id="sketch-desc">陽光照到植物，毛蟲取食葉片，枯葉和遺體指向真菌與土壤。</desc>
+          <rect width="520" height="245" fill="#F4FAEF"></rect>
+          <circle cx="68" cy="52" r="25" fill="#F4B942"></circle>
+          <g fill="none" stroke="#C48C18" stroke-width="3"><path d="M68 14V3M68 101V90M30 52H18M118 52h-12M41 25l-9-9M104 88l-9-9M95 25l9-9M32 88l9-9"></path></g>
+          <path d="M130 202c10-62 22-108 55-132M183 70c-22 4-37 18-40 38 25 4 42-10 40-38ZM185 114c22 3 38 17 42 37-24 5-42-8-42-37Z" fill="#8EDB52" stroke="#1F7A3B" stroke-width="4" stroke-linecap="round"></path>
+          <path d="M266 102c18-13 40-7 47 9 8 18-9 37-31 31-18-5-28-26-16-40Z" fill="#F4B942" stroke="#8A630F" stroke-width="3"></path>
+          <circle cx="278" cy="114" r="3" fill="#173A2A"></circle><circle cx="292" cy="109" r="3" fill="#173A2A"></circle><circle cx="301" cy="122" r="3" fill="#173A2A"></circle>
+          <path d="M318 181c-8-28 1-55 25-69 24 15 32 42 24 69Z" fill="#E9D4B4" stroke="#745435" stroke-width="3"></path><path d="M343 116v66" stroke="#745435" stroke-width="5"></path>
+          <path d="M82 207c102-32 245-29 358 0" fill="none" stroke="#745435" stroke-width="19" stroke-linecap="round"></path>
+          <g fill="none" stroke="#0B6E99" stroke-width="3" marker-end="url(#sketch-arrow)"><path d="M98 62c34 2 46 12 63 30"></path><path d="M215 103c21-2 29 2 45 12"></path><path d="M307 149c14 17 18 25 26 37"></path><path d="M319 189c-39 4-70 5-98 5"></path></g>
+          <defs><marker id="sketch-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7Z" fill="#0B6E99"></path></marker></defs>
+          <g fill="#173A2A" font-family="sans-serif" font-size="12" font-weight="700"><text x="48" y="94">陽光</text><text x="143" y="224">植物</text><text x="266" y="91">毛蟲</text><text x="319" y="101">真菌</text><text x="379" y="226">土壤</text></g>
+        </svg>`;
+      return figure;
+    }
+
+    function buildVoiceCard(event) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "voice-card";
+      if (event.audioUrl) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = event.audioUrl;
+        audio.setAttribute("aria-label", `${event.author} 的本地錄音`);
+        audio.style.width = "100%";
+        audio.style.gridColumn = "1 / 3";
+        wrapper.append(audio);
+        const duration = document.createElement("span");
+        duration.className = "voice-duration";
+        duration.textContent = formatDuration(event.duration || 0);
+        wrapper.append(duration);
+        return wrapper;
+      }
+
+      const button = document.createElement("button");
+      button.className = "voice-play";
+      button.type = "button";
+      button.setAttribute("aria-label", "播放預載演示語音");
+      button.innerHTML = iconMarkup("play");
+      const wave = document.createElement("div");
+      wave.className = "voice-wave";
+      wave.innerHTML = `<svg viewBox="0 0 180 28" role="img" aria-label="預載語音波形"><g stroke="#0B6E99" stroke-width="4" stroke-linecap="round"><path d="M4 14v-4M14 14V7M24 14V4M34 14V9M44 14V2M54 14V8M64 14V5M74 14V10M84 14V3M94 14V7M104 14V5M114 14V9M124 14V3M134 14V8M144 14V5M154 14V10M164 14V7M174 14v-4"></path><path opacity=".35" d="M4 16v3M14 16v5M24 16v8M34 16v4M44 16v10M54 16v6M64 16v8M74 16v4M84 16v9M94 16v6M104 16v7M114 16v4M124 16v9M134 16v5M144 16v8M154 16v4M164 16v6M174 16v3"></path></g></svg><div class="voice-progress"><span></span></div>`;
+      const duration = document.createElement("span");
+      duration.className = "voice-duration";
+      duration.textContent = formatDuration(event.duration || 12);
+      let progress = 0;
+      let timer = null;
+      button.addEventListener("click", () => {
+        const playing = button.dataset.playing === "true";
+        if (playing) {
+          clearInterval(timer);
+          button.dataset.playing = "false";
+          button.innerHTML = iconMarkup("play");
+          button.setAttribute("aria-label", "繼續播放預載演示語音");
+          return;
+        }
+        button.dataset.playing = "true";
+        button.innerHTML = iconMarkup("pause");
+        button.setAttribute("aria-label", "暫停預載演示語音");
+        timer = window.setInterval(() => {
+          progress += 100 / ((event.duration || 12) * 5);
+          if (progress >= 100) {
+            progress = 0;
+            clearInterval(timer);
+            button.dataset.playing = "false";
+            button.innerHTML = iconMarkup("play");
+            button.setAttribute("aria-label", "播放預載演示語音");
+          }
+          wave.style.setProperty("--progress", `${Math.min(progress, 100)}%`);
+        }, 200);
+      });
+      wrapper.append(button, wave, duration);
+      return wrapper;
+    }
+
+    function renderMessage(event, options = {}) {
+      const item = document.createElement("li");
+      item.className = `message ${event.actorType === "agent" ? "agent" : ""} ${event.isCurrentUser ? "is-current-user" : ""}`;
+      item.id = event.id;
+      item.dataset.messageId = event.id;
+
+      const style = participantStyles[event.author] || { initials: "學", color: "#586B63" };
+      const avatar = document.createElement("div");
+      avatar.className = "message-avatar";
+      avatar.style.setProperty("--avatar", style.color);
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = style.initials;
+
+      const column = document.createElement("article");
+      column.className = "message-column";
+      column.setAttribute("aria-label", `${event.author}，${event.timestamp}`);
+      const meta = document.createElement("div");
+      meta.className = "message-meta";
+      meta.innerHTML = `<span class="message-author"></span><time></time><span class="message-id"></span>`;
+      meta.querySelector(".message-author").textContent = event.author;
+      meta.querySelector("time").textContent = event.timestamp;
+      meta.querySelector(".message-id").textContent = `#${event.id}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = "message-bubble";
+      if (event.replyTo) {
+        const reference = document.createElement("button");
+        reference.type = "button";
+        reference.className = "reply-reference";
+        reference.dataset.scrollMessage = event.replyTo;
+        const replied = document.getElementById(event.replyTo);
+        const repliedAuthor = replied?.querySelector(".message-author")?.textContent || "較早訊息";
+        reference.textContent = `回覆 #${event.replyTo} · ${repliedAuthor}`;
+        bubble.append(reference);
+      }
+
+      const paragraph = document.createElement("p");
+      appendTextWithMentions(paragraph, event.text);
+      bubble.append(paragraph);
+
+      if (event.type === "image") {
+        let figure;
+        if (event.inlineSketch) {
+          figure = buildObservationSketch();
+        } else {
+          figure = document.createElement("figure");
+          figure.className = "inline-observation";
+          const image = document.createElement("img");
+          image.src = event.dataUrl;
+          image.alt = event.alt;
+          figure.append(image);
+        }
+        const caption = document.createElement("figcaption");
+        caption.textContent = event.caption || event.alt;
+        figure.append(caption);
+        bubble.append(figure);
+      }
+
+      if (event.type === "voice") {
+        bubble.append(buildVoiceCard(event));
+        if (event.transcript) {
+          const transcript = document.createElement("p");
+          transcript.className = "transcript";
+          const strong = document.createElement("strong");
+          strong.textContent = "演示轉寫　";
+          transcript.append(strong, document.createTextNode(event.transcript.replace(/^演示轉寫：/, "")));
+          bubble.append(transcript);
+        }
+      }
+
+      if (event.type === "summary") {
+        bubble.style.borderLeft = "4px solid var(--blue-700)";
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      const reply = document.createElement("button");
+      reply.type = "button";
+      reply.dataset.replyId = event.id;
+      reply.dataset.replyAuthor = event.author;
+      reply.innerHTML = `${iconMarkup("reply")}<span>回覆</span>`;
+      reply.setAttribute("aria-label", `回覆 ${event.author} 的訊息 ${event.id}`);
+      actions.append(reply);
+      column.append(meta, bubble, actions);
+      item.append(avatar, column);
+      messageList.append(item);
+      if (options.scroll) {
+        item.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+      return item;
+    }
+
+    function addSystemNotice(text) {
+      const item = document.createElement("li");
+      item.className = "system-message";
+      item.setAttribute("role", "status");
+      item.textContent = text;
+      messageList.append(item);
+      item.scrollIntoView({ block: "nearest" });
+    }
+
+    function setReply(messageId, author) {
+      activeReplyId = messageId;
+      replyTargetCopy.textContent = `回覆 #${messageId} · ${author}`;
+      replyTarget.hidden = false;
+      composer.focus();
+    }
+
+    function clearReply() {
+      activeReplyId = "";
+      replyTarget.hidden = true;
+    }
+
+    function currentClock() {
+      const minute = 17 + Math.min(9, nextMessageNumber - 8);
+      return `09:${String(minute).padStart(2, "0")}`;
+    }
+
+    function nextId() {
+      const id = `m${String(nextMessageNumber).padStart(3, "0")}`;
+      nextMessageNumber += 1;
+      return id;
+    }
+
+    function formatDuration(totalSeconds) {
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = Math.floor(totalSeconds % 60);
+      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    function detectSemanticAction(text) {
+      if (/分解者/.test(text) && /(土壤|養分)/.test(text)) return "decomposer-soil";
+      if (/(生產者|植物)/.test(text) && /(消費者|毛蟲|草食)/.test(text)) return "producer-consumer";
+      if (/能量/.test(text) && /(循環|回到太陽|繞回)/.test(text)) return "energy-dispute";
+      return "";
+    }
+
+    const actionPacks = {
+      "producer-consumer": {
+        text: "補充證據：生產者儲存的化學能會在被取食時轉移到初級消費者。",
+        edgeId: "plant-herb",
+        state: "confirmed",
+        confidence: 0.92,
+        snaTopology: { key: "producer-consumer", from: "yaqing", to: "zilang", kind: "evidence", ariaLabel: "雅晴為子朗補充生產者到消費者的證據" },
+        snaMetrics: { participationBalance: 0.8, reciprocity: 0.46, agentShare: 0.24, semanticCoverage: 0.78 }
+      },
+      "decomposer-soil": {
+        text: "補充證據：分解者把遺體中的物質轉成可被生產者再利用的土壤養分。",
+        edgeId: "decomposer-soil",
+        state: "confirmed",
+        confidence: 0.94,
+        snaTopology: { key: "decomposer-soil", from: "yaqing", to: "meilin", kind: "evidence", ariaLabel: "雅晴為美琳補充分解者到土壤的證據" },
+        snaMetrics: { participationBalance: 0.81, reciprocity: 0.46, agentShare: 0.23, semanticCoverage: 0.82 }
+      },
+      "energy-dispute": {
+        text: "提出爭議：能量會循環回太陽。我的依據需要再檢查。",
+        edgeId: "energy-cycle",
+        state: "disputed",
+        confidence: 0.14,
+        snaTopology: { key: "energy-dispute", from: "yaqing", to: "haoran", kind: "dispute", ariaLabel: "雅晴向浩然提出能量循環爭議" },
+        snaMetrics: { participationBalance: 0.79, reciprocity: 0.48, agentShare: 0.23, semanticCoverage: 0.8 }
+      }
+    };
+
+    function dispatchAction(actionId, textOverride = "") {
+      const pack = actionPacks[actionId];
+      if (!pack) return;
+      const event = makeChatEvent({
+        id: nextId(),
+        author: "雅晴",
+        actorType: "human",
+        type: "text",
+        text: textOverride || pack.text,
+        replyTo: activeReplyId || undefined,
+        timestamp: currentClock(),
+        isCurrentUser: true
+      });
+      renderMessage(event, { scroll: true });
+      clearReply();
+      const patch = makeConceptMapPatch({
+        id: `runtime-${event.id}`,
+        edgeId: pack.edgeId,
+        state: pack.state,
+        messageId: event.id,
+        evidenceDelta: 1,
+        confidence: pack.confidence,
+        seen: event.timestamp,
+        completeThrough: event.eventTime,
+        reasonCodes: ["demo_rule_match"]
+      }, Number(event.id.slice(1)));
+      const snapshot = makeSnaSnapshot({
+        id: `runtime-sna-${event.id}`,
+        version: Number(event.id.slice(1)),
+        completeThrough: event.eventTime,
+        sourceEvent: event.id,
+        view: "observed",
+        nodes: SNA_SEED_NODES,
+        edges: [{
+          source: pack.snaTopology.from,
+          target: pack.snaTopology.to,
+          layer: pack.snaTopology.kind === "dispute" ? "stance" : "communication",
+          positive: pack.snaTopology.kind === "dispute" ? 0 : 1,
+          challenge: pack.snaTopology.kind === "dispute" ? 1 : 0,
+          uncertain: 0,
+          weight: 1,
+          evidenceIds: [event.eventId]
+        }],
+        metrics: { ...pack.snaMetrics },
+        warnings: ["simulated_rule_based_update"],
+        topology: { ...pack.snaTopology }
+      });
+      batchUpdate(patch, snapshot);
+    }
+
+    document.getElementById("message-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = composer.value.trim();
+      if (!text) {
+        composerStatus.textContent = "請先輸入內容";
+        composer.focus();
+        return;
+      }
+      const actionId = detectSemanticAction(text);
+      if (actionId) {
+        dispatchAction(actionId, text);
+      } else {
+        const chatEvent = makeChatEvent({
+          id: nextId(),
+          author: "雅晴",
+          actorType: "human",
+          type: "text",
+          text,
+          replyTo: activeReplyId || undefined,
+          timestamp: currentClock(),
+          isCurrentUser: true
+        });
+        renderMessage(chatEvent, { scroll: true });
+        clearReply();
+        recordObservedInteraction(chatEvent);
+        addSystemNotice("演示規則未辨識此內容；訊息已保留、概念圖未更新，互動網絡已記錄 actor → ROOM communication。這不是 LLM 判讀。");
+        composerStatus.textContent = "訊息與互動事件已加入；概念規則未匹配";
+      }
+      composer.value = "";
+    });
+
+    composer.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById("message-form").requestSubmit();
+      }
+    });
+
+    document.querySelectorAll("[data-mention]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const token = `@${button.dataset.mention} `;
+        const start = composer.selectionStart;
+        const end = composer.selectionEnd;
+        composer.value = `${composer.value.slice(0, start)}${token}${composer.value.slice(end)}`;
+        composer.focus();
+        composer.setSelectionRange(start + token.length, start + token.length);
+        composerStatus.textContent = `已插入 ${token.trim()}`;
+      });
+    });
+
+    messageList.addEventListener("click", (event) => {
+      const replyButton = event.target.closest("[data-reply-id]");
+      if (replyButton) {
+        setReply(replyButton.dataset.replyId, replyButton.dataset.replyAuthor);
+        return;
+      }
+      const reference = event.target.closest("[data-scroll-message]");
+      if (reference) {
+        const target = document.getElementById(reference.dataset.scrollMessage);
+        target?.scrollIntoView({ behavior: "smooth", block: "center" });
+        target?.querySelector("button")?.focus({ preventScroll: true });
+      }
+    });
+
+    document.getElementById("reply-cancel").addEventListener("click", clearReply);
+    document.querySelectorAll("[data-concept-action]").forEach((button) => {
+      button.addEventListener("click", () => dispatchAction(button.dataset.conceptAction));
+    });
+
+    /* Local image handling: FileReader only, with user-supplied alt and caption. */
+    const imageInput = document.getElementById("image-input");
+    const imagePickerButton = document.getElementById("image-picker-button");
+    const imageTray = document.getElementById("image-tray");
+    const imagePreview = document.getElementById("image-preview");
+    const imageAlt = document.getElementById("image-alt");
+    const imageCaption = document.getElementById("image-caption");
+    let pendingImageData = "";
+
+    imagePickerButton.addEventListener("click", () => imageInput.click());
+
+    imageInput.addEventListener("change", () => {
+      const file = imageInput.files?.[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        composerStatus.textContent = "只接受圖片檔案";
+        imageInput.value = "";
+        return;
+      }
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        pendingImageData = String(reader.result || "");
+        imagePreview.src = pendingImageData;
+        imageAlt.value = file.name.replace(/\.[^.]+$/, "");
+        imageCaption.value = "本地圖片；只存在於目前頁面";
+        imageTray.hidden = false;
+        imageAlt.focus();
+        composerStatus.textContent = "本地圖片已預覽，請確認替代文字";
+      });
+      reader.addEventListener("error", () => {
+        composerStatus.textContent = "無法讀取此圖片；請改用另一個本地檔案";
+      });
+      reader.readAsDataURL(file);
+    });
+
+    function clearImageTray() {
+      pendingImageData = "";
+      imagePreview.removeAttribute("src");
+      imageAlt.value = "";
+      imageCaption.value = "";
+      imageInput.value = "";
+      imageTray.hidden = true;
+    }
+
+    document.getElementById("image-cancel").addEventListener("click", () => {
+      clearImageTray();
+      composerStatus.textContent = "已取消本地圖片";
+    });
+
+    document.getElementById("image-send").addEventListener("click", () => {
+      const alt = imageAlt.value.trim();
+      if (!pendingImageData || !alt) {
+        composerStatus.textContent = "請先提供有意義的替代文字";
+        imageAlt.focus();
+        return;
+      }
+      const event = makeChatEvent({
+        id: nextId(),
+        author: "雅晴",
+        actorType: "human",
+        type: "image",
+        text: "我加入一張本地觀察圖片，請根據圖片說明討論。",
+        timestamp: currentClock(),
+        isCurrentUser: true,
+        dataUrl: pendingImageData,
+        alt,
+        caption: imageCaption.value.trim() || alt
+      });
+      renderMessage(event, { scroll: true });
+      recordObservedInteraction(event, "image_not_semantically_analyzed");
+      clearImageTray();
+      addSystemNotice("圖片只作本地預覽；本演示不會執行 OCR、影像辨識或上傳。");
+      composerStatus.textContent = "本地圖片已加入對話";
+    });
+
+    /* MediaRecorder is feature-detected; permission and unsupported paths stay explicit. */
+    const voiceRecord = document.getElementById("voice-record");
+    const voiceStop = document.getElementById("voice-stop");
+    const voiceDelete = document.getElementById("voice-delete");
+    const voiceSend = document.getElementById("voice-send");
+    const recordingTray = document.getElementById("recording-tray");
+    const recordingIdle = document.getElementById("recording-idle");
+    const recordingPreview = document.getElementById("recording-preview");
+    const recordedAudio = document.getElementById("recorded-audio");
+    const recordingDuration = document.getElementById("recording-duration");
+    let recordingStartPending = false;
+    let recordingSessionToken = 0;
+    let activeRecordingSession = null;
+    let recordedUrl = "";
+    let recordedDurationSeconds = 0;
+    const runtimeAudioUrls = new Set();
+
+    function updateRecordingClock(session) {
+      if (activeRecordingSession !== session) return;
+      recordingDuration.textContent = formatDuration(session.seconds);
+      voiceRecord.setAttribute("aria-label", `正在錄音 ${formatDuration(session.seconds)}`);
+    }
+
+    function stopSessionTracks(session) {
+      session?.stream?.getTracks().forEach((track) => track.stop());
+      if (session) session.stream = null;
+    }
+
+    function isStaleRecordingSession(session) {
+      return activeRecordingSession !== session || session.token !== recordingSessionToken;
+    }
+
+    async function startRecording() {
+      if (recordingStartPending || activeRecordingSession) return;
+      recordingTray.hidden = false;
+      recordingIdle.hidden = false;
+      recordingPreview.hidden = true;
+      if (!("MediaRecorder" in window) || !navigator.mediaDevices?.getUserMedia) {
+        recordingIdle.innerHTML = "<strong>此瀏覽器不支援本地錄音</strong><p style='margin:4px 0 0;color:var(--ink-500);font-size:.82rem'>仍可使用文字或本地圖片；沒有替代 ASR。</p>";
+        composerStatus.textContent = "MediaRecorder 不受支援";
+        return;
+      }
+
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      recordedUrl = "";
+      recordedDurationSeconds = 0;
+      recordedAudio.removeAttribute("src");
+      voiceDelete.disabled = true;
+      voiceSend.disabled = true;
+
+      recordingStartPending = true;
+      voiceRecord.disabled = true;
+      const sessionToken = ++recordingSessionToken;
+      const session = {
+        token: sessionToken,
+        stream: null,
+        recorder: null,
+        chunks: [],
+        timer: null,
+        seconds: 0,
+        discard: false,
+        reenableAfterStop: false
+      };
+      activeRecordingSession = session;
+      try {
+        session.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (isStaleRecordingSession(session)) {
+          stopSessionTracks(session);
+          return;
+        }
+        session.recorder = new MediaRecorder(session.stream);
+        session.recorder.addEventListener("dataavailable", (event) => {
+          if (event.data.size) session.chunks.push(event.data);
+        });
+        session.recorder.addEventListener("stop", () => {
+          window.clearInterval(session.timer);
+          stopSessionTracks(session);
+          if (isStaleRecordingSession(session) || session.discard) {
+            if (session.reenableAfterStop && !activeRecordingSession) voiceRecord.disabled = false;
+            return;
+          }
+          const blob = new Blob(session.chunks, { type: session.recorder.mimeType || "audio/webm" });
+          if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+          recordedUrl = URL.createObjectURL(blob);
+          recordedDurationSeconds = session.seconds;
+          recordedAudio.src = recordedUrl;
+          recordingIdle.hidden = true;
+          recordingPreview.hidden = false;
+          voiceDelete.disabled = false;
+          voiceSend.disabled = false;
+          voiceStop.disabled = true;
+          voiceRecord.classList.remove("is-recording");
+          voiceRecord.disabled = false;
+          voiceRecord.setAttribute("aria-label", "重新開始本地錄音");
+          composerStatus.textContent = "錄音完成，可播放、刪除或加入對話";
+          activeRecordingSession = null;
+          recordingStartPending = false;
+        });
+        session.recorder.start();
+        recordingStartPending = false;
+        voiceRecord.classList.add("is-recording");
+        voiceStop.disabled = false;
+        voiceDelete.disabled = true;
+        voiceSend.disabled = true;
+        updateRecordingClock(session);
+        session.timer = window.setInterval(() => {
+          session.seconds += 1;
+          updateRecordingClock(session);
+        }, 1000);
+        composerStatus.textContent = "正在本地錄音；按停止以建立播放卡片";
+      } catch (error) {
+        window.clearInterval(session.timer);
+        stopSessionTracks(session);
+        if (!isStaleRecordingSession(session)) {
+          activeRecordingSession = null;
+          recordingStartPending = false;
+          recordingIdle.innerHTML = "<strong>未能取得麥克風權限</strong><p style='margin:4px 0 0;color:var(--ink-500);font-size:.82rem'>請在瀏覽器設定允許後重試，或改用文字訊息。</p>";
+          voiceRecord.disabled = false;
+          voiceStop.disabled = true;
+          composerStatus.textContent = "麥克風權限遭拒或裝置不可用";
+        }
+      }
+    }
+
+    voiceRecord.addEventListener("click", startRecording);
+    voiceStop.addEventListener("click", () => {
+      const session = activeRecordingSession;
+      if (session?.recorder?.state === "recording") {
+        window.clearInterval(session.timer);
+        voiceStop.disabled = true;
+        session.recorder.stop();
+      }
+    });
+
+    function cancelActiveRecordingSession() {
+      const session = activeRecordingSession;
+      recordingSessionToken += 1;
+      activeRecordingSession = null;
+      recordingStartPending = false;
+      if (!session) {
+        voiceRecord.disabled = false;
+        return;
+      }
+      session.discard = true;
+      window.clearInterval(session.timer);
+      if (session.recorder?.state === "recording") {
+        session.reenableAfterStop = true;
+        voiceStop.disabled = true;
+        session.recorder.stop();
+      } else {
+        stopSessionTracks(session);
+        voiceRecord.disabled = false;
+      }
+    }
+
+    function deleteRecording() {
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      recordedUrl = "";
+      recordedDurationSeconds = 0;
+      recordedAudio.removeAttribute("src");
+      recordingPreview.hidden = true;
+      recordingIdle.hidden = false;
+      recordingIdle.innerHTML = "<strong>本地錄音</strong><p style='margin:4px 0 0;color:var(--ink-500);font-size:.82rem'>錄音只保留在此頁記憶體；沒有自動轉寫或上傳。</p>";
+      voiceDelete.disabled = true;
+      voiceSend.disabled = true;
+      voiceRecord.disabled = false;
+      voiceRecord.setAttribute("aria-label", "開始本地錄音");
+      composerStatus.textContent = "本地錄音已刪除";
+    }
+
+    voiceDelete.addEventListener("click", deleteRecording);
+    voiceSend.addEventListener("click", () => {
+      if (!recordedUrl) return;
+      const event = makeChatEvent({
+        id: nextId(),
+        author: "雅晴",
+        actorType: "human",
+        type: "voice",
+        text: "我加入一段本地錄音；請直接聆聽，演示不會產生自動轉寫。",
+        timestamp: currentClock(),
+        isCurrentUser: true,
+        audioUrl: recordedUrl,
+        duration: recordedDurationSeconds
+      });
+      renderMessage(event, { scroll: true });
+      recordObservedInteraction(event, "audio_not_semantically_analyzed");
+      runtimeAudioUrls.add(recordedUrl);
+      recordedUrl = "";
+      recordedDurationSeconds = 0;
+      recordedAudio.removeAttribute("src");
+      recordingTray.hidden = true;
+      voiceDelete.disabled = true;
+      voiceSend.disabled = true;
+      composerStatus.textContent = "本地錄音已加入對話";
+    });
+
+    window.addEventListener("beforeunload", () => {
+      const session = activeRecordingSession;
+      if (session) {
+        session.discard = true;
+        stopSessionTracks(session);
+      }
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      runtimeAudioUrls.forEach((url) => URL.revokeObjectURL(url));
+    });
+
+    /* Concept-map state and event replay. */
+    const conceptEdges = [...document.querySelectorAll(".concept-edge")];
+    const conceptBase = Object.fromEntries(conceptEdges.map((edge) => [edge.dataset.edgeId, {
+      state: "inactive",
+      messageIds: [],
+      firstSeen: "—",
+      lastSeen: "—",
+      evidenceCount: 0,
+      confidence: 0.08
+    }]));
+    const conceptState = structuredCloneSafe(conceptBase);
+
+    function structuredCloneSafe(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function markerForState(state) {
+      return `url(#concept-arrow-${state === "confirmed" ? "green" : state === "provisional" ? "amber" : state === "disputed" ? "coral" : "muted"})`;
+    }
+
+    function syncConceptEdge(edgeId) {
+      const edge = document.querySelector(`[data-edge-id="${edgeId}"]`);
+      const state = conceptState[edgeId];
+      if (!edge || !state) return;
+      edge.classList.remove("edge--confirmed", "edge--provisional", "edge--disputed", "edge--inactive");
+      edge.classList.add(`edge--${state.state}`);
+      edge.dataset.state = state.state;
+      edge.dataset.messageId = state.messageIds.length ? state.messageIds.join(", ") : "尚無來源";
+      edge.dataset.firstSeen = state.firstSeen;
+      edge.dataset.lastSeen = state.lastSeen;
+      edge.dataset.evidenceCount = String(state.evidenceCount);
+      edge.dataset.confidence = String(state.confidence);
+      edge.querySelector(".edge-state-label").textContent = STATE_STYLES[state.state];
+      edge.querySelector(".edge-line").setAttribute("marker-end", markerForState(state.state));
+      edge.setAttribute("aria-label", `${edge.dataset.ariaLabel}，${STATE_LABELS[state.state]}`);
+    }
+
+    function applyConceptPatch(patch) {
+      const state = conceptState[patch.edgeId];
+      if (!state) return;
+      state.state = patch.state;
+      if (patch.messageIds) {
+        state.messageIds = [...patch.messageIds];
+        state.firstSeen = patch.firstSeen || "—";
+        state.lastSeen = patch.lastSeen || state.firstSeen;
+        state.evidenceCount = patch.evidenceCount ?? patch.messageIds.length;
+      } else if (patch.messageId) {
+        if (!state.messageIds.includes(patch.messageId)) state.messageIds.push(patch.messageId);
+        if (state.firstSeen === "—") state.firstSeen = patch.seen || "—";
+        state.lastSeen = patch.seen || state.lastSeen;
+        state.evidenceCount += patch.evidenceDelta || 0;
+      }
+      state.confidence = patch.confidence;
+      syncConceptEdge(patch.edgeId);
+    }
+
+    function resetConceptState() {
+      Object.keys(conceptState).forEach((edgeId) => {
+        conceptState[edgeId] = structuredCloneSafe(conceptBase[edgeId]);
+        syncConceptEdge(edgeId);
+      });
+    }
+
+    function replayConceptPatches(count) {
+      resetConceptState();
+      conceptPatches.slice(0, count).forEach(applyConceptPatch);
+      conceptEdges.forEach((edge) => {
+        const revealStep = Number(edge.dataset.revealStep || 99);
+        edge.classList.toggle("timeline-hidden", revealStep > count);
+      });
+      document.getElementById("timeline-progress").textContent = `事件 ${count} / ${conceptPatches.length}`;
+      renderConceptList();
+      const selected = conceptEdges.find((edge) => !edge.classList.contains("timeline-hidden")) || conceptEdges[0];
+      showConceptDetails(selected);
+    }
+
+    function replay(events = defaultEvents) {
+      messageList.replaceChildren();
+      events.forEach((event) => renderMessage(event));
+      const patchIds = new Set(events.map((event) => event.patchId).filter(Boolean));
+      conceptTimelineIndex = conceptPatches.filter((patch) => patchIds.has(patch.id)).length;
+      replayConceptPatches(conceptTimelineIndex);
+      const latestSnapshot = [...snaSnapshots].reverse().find((snapshot) => events.some((event) => event.snapshotId === snapshot.id));
+      if (latestSnapshot) {
+        currentSnaMetrics = { ...latestSnapshot.metrics };
+        updateMetricCards(currentSnaMetrics);
+      }
+    }
+
+    function showConceptDetails(edge) {
+      if (!edge) return;
+      document.getElementById("concept-detail-relation").textContent = edge.dataset.ariaLabel;
+      document.getElementById("concept-detail-source").textContent = edge.dataset.messageId;
+      document.getElementById("concept-detail-time").textContent = `${edge.dataset.firstSeen} · ${edge.dataset.lastSeen}`;
+      document.getElementById("concept-detail-evidence").textContent = `${edge.dataset.evidenceCount} · ${Math.round(Number(edge.dataset.confidence) * 100)}% · ${STATE_LABELS[edge.dataset.state]}`;
+    }
+
+    conceptEdges.forEach((edge) => {
+      edge.addEventListener("click", () => showConceptDetails(edge));
+      edge.addEventListener("focus", () => showConceptDetails(edge));
+      edge.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          showConceptDetails(edge);
+        }
+      });
+    });
+
+    function renderConceptList() {
+      const list = document.getElementById("relation-list");
+      list.replaceChildren();
+      conceptEdges.forEach((edge) => {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = `<span class="relation-copy"><strong></strong><span></span></span><span class="state-pill ${edge.dataset.state}">${STATE_LABELS[edge.dataset.state]}</span>`;
+        button.querySelector("strong").textContent = edge.dataset.ariaLabel;
+        button.querySelector(".relation-copy span").textContent = `來源 ${edge.dataset.messageId} · 證據 ${edge.dataset.evidenceCount}`;
+        button.addEventListener("click", () => showConceptDetails(edge));
+        item.append(button);
+        list.append(item);
+      });
+    }
+
+    document.getElementById("timeline-reset").addEventListener("click", resetDemoState);
+
+    document.getElementById("timeline-play").addEventListener("click", () => {
+      if (conceptTimelineIndex >= conceptPatches.length) conceptTimelineIndex = 0;
+      document.getElementById("timeline-play").disabled = true;
+      document.getElementById("timeline-pause").disabled = false;
+      timelineTimer = window.setInterval(() => {
+        conceptTimelineIndex += 1;
+        replayConceptPatches(conceptTimelineIndex);
+        batchStatus.textContent = `已重放事件 ${conceptTimelineIndex}`;
+        if (conceptTimelineIndex >= conceptPatches.length) {
+          window.clearInterval(timelineTimer);
+          timelineTimer = null;
+          document.getElementById("timeline-play").disabled = false;
+          document.getElementById("timeline-pause").disabled = true;
+        }
+      }, 700);
+    });
+
+    document.getElementById("timeline-pause").addEventListener("click", () => {
+      window.clearInterval(timelineTimer);
+      timelineTimer = null;
+      document.getElementById("timeline-play").disabled = false;
+      document.getElementById("timeline-pause").disabled = true;
+      batchStatus.textContent = `時間軸暫停在事件 ${conceptTimelineIndex}`;
+    });
+
+    function setupViewToggle(graphButtonId, listButtonId, graphViewId, listViewId, onChange) {
+      const graphButton = document.getElementById(graphButtonId);
+      const listButton = document.getElementById(listButtonId);
+      const graphView = document.getElementById(graphViewId);
+      const listView = document.getElementById(listViewId);
+      const controller = {
+        mode: "graph",
+        userChosen: false,
+        setMode(mode, userInitiated = false) {
+          controller.mode = mode;
+          if (userInitiated) controller.userChosen = true;
+          graphButton.setAttribute("aria-pressed", String(mode === "graph"));
+          listButton.setAttribute("aria-pressed", String(mode === "list"));
+          graphView.hidden = mode !== "graph";
+          listView.hidden = mode !== "list";
+          onChange?.(mode);
+        }
+      };
+      graphButton.addEventListener("click", () => controller.setMode("graph", true));
+      listButton.addEventListener("click", () => controller.setMode("list", true));
+      return controller;
+    }
+
+    const conceptViewController = setupViewToggle("concept-graph", "concept-list", "concept-graph-view", "concept-list-view");
+    let snaViewController = null;
+    const mobileGraphMedia = window.matchMedia("(max-width: 767px)");
+
+    function applyMobileListFallback() {
+      [conceptViewController, snaViewController].filter(Boolean).forEach((controller) => {
+        if (!controller.userChosen) controller.setMode(mobileGraphMedia.matches ? "list" : "graph");
+      });
+    }
+
+    /* SNA geometry uses final screen transforms and unique incident ports. */
+    const snaSvg = document.getElementById("sna-svg");
+    const snaNodes = [...snaSvg.querySelectorAll(".sna-node")];
+    const snaEdgeLayer = document.getElementById("sna-edge-layer");
+    let snaEdges = [...snaSvg.querySelectorAll(".sna-edge")];
+    const snaNodeMap = Object.fromEntries(snaNodes.map((node) => [node.dataset.nodeId, node]));
+
+    function bindSnaEdge(edge) {
+      if (edge.dataset.interactionBound === "true") return;
+      edge.dataset.interactionBound = "true";
+      if (edge.dataset.ariaLabel) edge.setAttribute("aria-label", edge.dataset.ariaLabel);
+      edge.addEventListener("focus", () => showSnaDetails(edge));
+      edge.addEventListener("click", () => showSnaDetails(edge));
+      edge.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          showSnaDetails(edge);
+        }
+      });
+    }
+
+    function refreshSnaEdges() {
+      snaEdges = [...snaSvg.querySelectorAll(".sna-edge")];
+      snaEdges.forEach(bindSnaEdge);
+    }
+
+    function installGraphHitTargets() {
+      conceptEdges.forEach((edge) => {
+        if (edge.querySelector(".concept-edge-hit-path")) return;
+        const visualPath = edge.querySelector(".edge-line");
+        const hitPath = visualPath.cloneNode(false);
+        hitPath.classList.remove("edge-line");
+        hitPath.classList.add("graph-hit-path", "concept-edge-hit-path");
+        hitPath.removeAttribute("marker-end");
+        hitPath.setAttribute("aria-hidden", "true");
+        hitPath.setAttribute("focusable", "false");
+        edge.insertBefore(hitPath, visualPath);
+      });
+
+      snaEdges.forEach((edge) => {
+        if (snaEdgeLayer.querySelector(`[data-hit-for="${edge.id}"]`)) return;
+        const hitPath = edge.cloneNode(false);
+        hitPath.removeAttribute("id");
+        hitPath.removeAttribute("role");
+        hitPath.removeAttribute("tabindex");
+        hitPath.removeAttribute("marker-end");
+        hitPath.removeAttribute("aria-label");
+        [...hitPath.attributes].forEach((attribute) => {
+          if (attribute.name.startsWith("data-") || attribute.name === "style") hitPath.removeAttribute(attribute.name);
+        });
+        hitPath.className.baseVal = "graph-hit-path sna-edge-hit-path";
+        hitPath.setAttribute("data-hit-for", edge.id);
+        hitPath.setAttribute("aria-hidden", "true");
+        hitPath.setAttribute("focusable", "false");
+        hitPath.addEventListener("click", () => {
+          edge.focus();
+          showSnaDetails(edge);
+        });
+        edge.insertAdjacentElement("afterend", hitPath);
+      });
+
+      snaNodes.forEach((node) => {
+        if (node.querySelector(".graph-node-hit-shape")) return;
+        const visibleShape = node.querySelector("circle, polygon");
+        const hitShape = visibleShape.cloneNode(false);
+        hitShape.classList.add("graph-node-hit-shape");
+        hitShape.setAttribute("aria-hidden", "true");
+        hitShape.setAttribute("focusable", "false");
+        node.insertBefore(hitShape, visibleShape);
+      });
+    }
+
+    function getNodePoint(nodeId) {
+      const node = snaNodeMap[nodeId];
+      return { x: Number(node.dataset.x), y: Number(node.dataset.y), radius: node.dataset.type === "agent" ? 38 : 31 };
+    }
+
+    function layoutSnaEdges() {
+      const screenMatrix = snaSvg.getScreenCTM();
+      const fallbackScale = Math.max(0.1, (snaSvg.getBoundingClientRect().width || 520) / 520);
+      const incidence = {};
+      snaNodes.forEach((node) => { incidence[node.dataset.nodeId] = []; });
+      snaEdges.forEach((edge) => {
+        incidence[edge.dataset.from].push({ edge, end: "from" });
+        incidence[edge.dataset.to].push({ edge, end: "to" });
+      });
+      const portIndex = new Map();
+      Object.entries(incidence).forEach(([nodeId, entries]) => {
+        entries.forEach((entry, index) => {
+          portIndex.set(`${entry.edge.dataset.edgeId}:${entry.end}`, { index, total: entries.length, nodeId });
+        });
+      });
+
+      snaEdges.forEach((edge) => {
+        const source = getNodePoint(edge.dataset.from);
+        const target = getNodePoint(edge.dataset.to);
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const baseAngle = Math.atan2(dy, dx);
+        const sourcePort = portIndex.get(`${edge.dataset.edgeId}:from`);
+        const targetPort = portIndex.get(`${edge.dataset.edgeId}:to`);
+        const sourceFan = (sourcePort.index - (sourcePort.total - 1) / 2) * 0.055;
+        const targetFan = (targetPort.index - (targetPort.total - 1) / 2) * 0.055;
+        const sx = source.x + Math.cos(baseAngle + sourceFan) * source.radius;
+        const sy = source.y + Math.sin(baseAngle + sourceFan) * source.radius;
+        const tx = target.x + Math.cos(baseAngle + Math.PI + targetFan) * target.radius;
+        const ty = target.y + Math.sin(baseAngle + Math.PI + targetFan) * target.radius;
+        const reciprocal = snaEdges.some((candidate) => candidate !== edge && candidate.dataset.from === edge.dataset.to && candidate.dataset.to === edge.dataset.from);
+        const normalX = -dy / distance;
+        const normalY = dx / distance;
+        const curve = reciprocal ? 16 : Math.min(12, distance * 0.045) + (sourcePort.index % 3 - 1) * 3;
+        const cx = (sx + tx) / 2 + normalX * curve;
+        const cy = (sy + ty) / 2 + normalY * curve;
+        const pathData = `M ${sx.toFixed(2)} ${sy.toFixed(2)} Q ${cx.toFixed(2)} ${cy.toFixed(2)} ${tx.toFixed(2)} ${ty.toFixed(2)}`;
+        edge.setAttribute("d", pathData);
+        snaEdgeLayer.querySelector(`[data-hit-for="${edge.id}"]`)?.setAttribute("d", pathData);
+        edge.dataset.fromPort = `${edge.dataset.from}-p${sourcePort.index + 1}`;
+        edge.dataset.toPort = `${edge.dataset.to}-p${targetPort.index + 1}`;
+        const screenLength = screenMatrix
+          ? (() => {
+              const screenSource = new DOMPoint(sx, sy).matrixTransform(screenMatrix);
+              const screenTarget = new DOMPoint(tx, ty).matrixTransform(screenMatrix);
+              return Math.hypot(screenTarget.x - screenSource.x, screenTarget.y - screenSource.y);
+            })()
+          : Math.hypot(tx - sx, ty - sy) * fallbackScale;
+        const screenScale = screenMatrix ? Math.hypot(screenMatrix.a, screenMatrix.b) : fallbackScale;
+        edge.dataset.screenLength = screenLength.toFixed(1);
+        edge.dataset.screenScale = screenScale.toFixed(3);
+      });
+      snaSvg.dataset.layoutScale = (screenMatrix ? Math.hypot(screenMatrix.a, screenMatrix.b) : fallbackScale).toFixed(3);
+      const selected = document.activeElement?.classList?.contains("sna-edge") ? document.activeElement : snaEdges[0];
+      showSnaDetails(selected);
+    }
+
+    function interactionLabel(kind) {
+      return ({ reply: "回覆", mention: "提及", prompt: "追問", summary: "整理", evidence: "補證", dispute: "提出爭議" })[kind] || kind;
+    }
+
+    function displayNodeName(nodeId) {
+      return snaNodeMap[nodeId]?.dataset.name || nodeId;
+    }
+
+    function showSnaDetails(edge) {
+      if (!edge?.classList?.contains("sna-edge")) return;
+      document.getElementById("sna-detail-relation").textContent = `${displayNodeName(edge.dataset.from)} —${interactionLabel(edge.dataset.kind)}→ ${displayNodeName(edge.dataset.to)}`;
+      const sources = edge.dataset.sourceEvents || EDGE_MESSAGE_SOURCE[edge.dataset.edgeId] || "尚無來源";
+      document.getElementById("sna-detail-source").textContent = `${sources} · 證據 ${edge.dataset.evidenceCount || 1}`;
+      document.getElementById("sna-detail-ports").textContent = `${edge.dataset.fromPort} · ${edge.dataset.toPort}`;
+      document.getElementById("sna-detail-length").textContent = `${edge.dataset.screenLength} px`;
+    }
+
+    refreshSnaEdges();
+
+    snaNodes.forEach((node) => {
+      const showNode = () => {
+        const incident = snaEdges.filter((edge) => edge.dataset.from === node.dataset.nodeId || edge.dataset.to === node.dataset.nodeId);
+        document.getElementById("sna-detail-relation").textContent = `${node.dataset.name} · ${node.dataset.type === "agent" ? "Agent 六角節點" : "Human 圓形節點"}`;
+        document.getElementById("sna-detail-source").textContent = `${incident.length} 條可見 incident edge`;
+        document.getElementById("sna-detail-ports").textContent = "每條邊使用獨立端口";
+        document.getElementById("sna-detail-length").textContent = `座標 ${node.dataset.x}, ${node.dataset.y}`;
+      };
+      node.addEventListener("focus", showNode);
+      node.addEventListener("click", showNode);
+      node.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          showNode();
+        }
+      });
+    });
+
+    function updateMetricCards(metrics) {
+      const mappings = [
+        ["participationBalance", "metric-balance", "bar-balance"],
+        ["reciprocity", "metric-reciprocity", "bar-reciprocity"],
+        ["agentShare", "metric-agent", "bar-agent"],
+        ["semanticCoverage", "metric-semantic", "bar-semantic"]
+      ];
+      mappings.forEach(([key, textId, barId]) => {
+        const percentage = Math.round(metrics[key] * 100);
+        document.getElementById(textId).textContent = `${percentage}%`;
+        document.getElementById(barId).style.setProperty("--metric-width", `${percentage}%`);
+      });
+    }
+
+    function applySnaTopologyEvent(snapshot) {
+      const topology = snapshot.topology;
+      if (!topology) return { edge: null, topologyChanged: false };
+      let edge = snaEdgeLayer.querySelector(`[data-runtime-edge="${topology.key}"]`);
+      let topologyChanged = false;
+      if (!edge) {
+        edge = document.createElementNS(snaSvg.namespaceURI, "path");
+        edge.id = `sna-runtime-${topology.key}`;
+        edge.setAttribute("class", "sna-edge is-runtime-edge");
+        edge.setAttribute("tabindex", "0");
+        edge.setAttribute("role", "button");
+        edge.setAttribute("data-runtime-edge", topology.key);
+        edge.dataset.edgeId = edge.id;
+        edge.dataset.from = topology.from;
+        edge.dataset.to = topology.to;
+        edge.dataset.kind = topology.kind;
+        edge.dataset.views = topology.from === "nova" || topology.to === "nova"
+          ? "observed lineage_adjusted"
+          : "observed human_only lineage_adjusted";
+        edge.dataset.fromPort = "pending";
+        edge.dataset.toPort = "pending";
+        edge.dataset.screenLength = "pending";
+        edge.dataset.sourceEvents = snapshot.sourceEvent;
+        edge.dataset.evidenceCount = "1";
+        edge.dataset.ariaLabel = topology.ariaLabel;
+        edge.setAttribute("aria-label", topology.ariaLabel);
+        const agentEdge = topology.from === "nova" || topology.to === "nova";
+        if (agentEdge) edge.classList.add("is-agent-edge");
+        edge.setAttribute("marker-end", agentEdge ? "url(#sna-arrow-agent)" : "url(#sna-arrow)");
+        snaEdgeLayer.append(edge);
+        topologyChanged = true;
+      } else {
+        const sourceEvents = edge.dataset.sourceEvents.split(" ").filter(Boolean);
+        if (!sourceEvents.includes(snapshot.sourceEvent)) sourceEvents.push(snapshot.sourceEvent);
+        edge.dataset.sourceEvents = sourceEvents.join(" ");
+        edge.dataset.evidenceCount = String(Number(edge.dataset.evidenceCount || 0) + 1);
+      }
+      edge.style.strokeWidth = String(Math.min(6, 3.2 + Number(edge.dataset.evidenceCount) * 0.45));
+      refreshSnaEdges();
+      installGraphHitTargets();
+      layoutSnaEdges();
+      renderInteractionList();
+      showSnaDetails(edge);
+      return { edge, topologyChanged };
+    }
+
+    function recordObservedInteraction(chatEvent, warning = "concept_rule_unmatched") {
+      const metrics = {
+        ...currentSnaMetrics,
+        participationBalance: Math.min(1, currentSnaMetrics.participationBalance + 0.01)
+      };
+      const snapshot = makeSnaSnapshot({
+        id: `observed-${chatEvent.eventId}`,
+        version: Number(chatEvent.eventId.slice(1)) || runtimeObservedSnapshots.length + 1,
+        completeThrough: chatEvent.eventTime,
+        sourceEvent: chatEvent.eventId,
+        view: "observed",
+        nodes: [
+          { nodeId: chatEvent.actorId, actorKind: chatEvent.actorKind, label: chatEvent.author },
+          { nodeId: "ROOM", actorKind: "room", label: "共學聊天室" }
+        ],
+        edges: [{
+          source: chatEvent.actorId,
+          target: "ROOM",
+          layer: "communication",
+          positive: 1,
+          challenge: 0,
+          uncertain: 0,
+          weight: chatEvent.sourceConfidence,
+          evidenceIds: [chatEvent.eventId]
+        }],
+        metrics,
+        warnings: [warning]
+      });
+      runtimeObservedSnapshots.push(snapshot);
+      currentSnaMetrics = { ...snapshot.metrics };
+      updateMetricCards(currentSnaMetrics);
+      renderInteractionList();
+      snaStatus.textContent = `已記錄 ${chatEvent.eventId}：${chatEvent.author} → ROOM communication 超事件`;
+      batchStatus.textContent = `互動網絡已記錄 ${chatEvent.eventId}；沒有新增概念命題。`;
+      return snapshot;
+    }
+
+    function renderInteractionList() {
+      const list = document.getElementById("interaction-list");
+      list.replaceChildren();
+      snaEdges.filter((edge) => edge.dataset.views.split(" ").includes(currentSnaView)).forEach((edge) => {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = '<span class="interaction-copy"><strong></strong><span></span></span><span class="state-pill confirmed">有向</span>';
+        button.querySelector("strong").textContent = edge.dataset.ariaLabel || `${displayNodeName(edge.dataset.from)} —${interactionLabel(edge.dataset.kind)}→ ${displayNodeName(edge.dataset.to)}`;
+        const sources = edge.dataset.sourceEvents || EDGE_MESSAGE_SOURCE[edge.dataset.edgeId] || "尚無來源";
+        button.querySelector(".interaction-copy span").textContent = `來源 ${sources} · 證據 ${edge.dataset.evidenceCount || 1} · ${edge.dataset.fromPort} / ${edge.dataset.toPort}`;
+        button.addEventListener("click", () => showSnaDetails(edge));
+        item.append(button);
+        list.append(item);
+      });
+      runtimeObservedSnapshots.forEach((snapshot) => {
+        snapshot.edges.forEach((edge) => {
+          const item = document.createElement("li");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.innerHTML = '<span class="interaction-copy"><strong></strong><span></span></span><span class="state-pill provisional">超事件</span>';
+          button.querySelector("strong").textContent = `${displayNodeName(edge.source)} —廣播→ 共學聊天室`;
+          button.querySelector(".interaction-copy span").textContent = `來源 ${edge.evidenceIds.join(", ")} · communication · 不拆成人際邊`;
+          button.addEventListener("click", () => {
+            document.getElementById("sna-detail-relation").textContent = `${displayNodeName(edge.source)} —廣播→ 共學聊天室`;
+            document.getElementById("sna-detail-source").textContent = `${edge.evidenceIds.join(", ")} · 證據 1`;
+            document.getElementById("sna-detail-ports").textContent = "actor → ROOM 超事件";
+            document.getElementById("sna-detail-length").textContent = "不拆分為個人邊";
+          });
+          item.append(button);
+          list.append(item);
+        });
+      });
+    }
+
+    function setSnaView(view) {
+      currentSnaView = view;
+      document.querySelectorAll("[data-sna-view]").forEach((button) => {
+        button.setAttribute("aria-pressed", String(button.dataset.snaView === view));
+      });
+      snaEdges.forEach((edge) => {
+        const visible = edge.dataset.views.split(" ").includes(view);
+        edge.classList.toggle("is-view-hidden", !visible);
+        edge.classList.toggle("is-lineage", view === "lineage_adjusted" && edge.classList.contains("is-agent-edge"));
+        edge.setAttribute("aria-hidden", String(!visible));
+        edge.tabIndex = visible ? 0 : -1;
+        snaEdgeLayer.querySelector(`[data-hit-for="${edge.id}"]`)?.classList.toggle("is-view-hidden", !visible);
+      });
+      const nova = document.getElementById("sna-node-nova");
+      nova.classList.toggle("is-view-hidden", view === "human_only");
+      nova.setAttribute("aria-hidden", String(view === "human_only"));
+      nova.tabIndex = view === "human_only" ? -1 : 0;
+      const viewNotes = {
+        observed: "全體互動：顯示學生與 Agent 的可見訊息回應。",
+        human_only: "只看同學：暫時排除 Nova Agent 節點及相連邊。",
+        lineage_adjusted: "來源歸因：保留 Agent 邊，但以虛線標示其提示或整理來源。"
+      };
+      document.getElementById("sna-view-note").textContent = viewNotes[view];
+      currentSnaMetrics = { ...SNA_VIEW_METRICS[view] };
+      updateMetricCards(currentSnaMetrics);
+      renderInteractionList();
+      snaStatus.textContent = `SNA 已切換至 ${SNA_VIEW_LABELS[view]}`;
+    }
+
+    document.querySelectorAll("[data-sna-view]").forEach((button) => {
+      button.addEventListener("click", () => setSnaView(button.dataset.snaView));
+    });
+
+    snaViewController = setupViewToggle("sna-graph", "sna-list", "sna-graph-view", "sna-list-view", (mode) => {
+      if (mode === "graph") window.requestAnimationFrame(layoutSnaEdges);
+      else renderInteractionList();
+    });
+
+    if ("ResizeObserver" in window) {
+      const snaResizeObserver = new ResizeObserver(() => window.requestAnimationFrame(layoutSnaEdges));
+      snaResizeObserver.observe(document.getElementById("sna-graph-view"));
+    } else {
+      window.addEventListener("resize", () => window.requestAnimationFrame(layoutSnaEdges));
+    }
+
+    function removeRuntimeSnaTopology() {
+      const runtimeEdges = [...snaEdgeLayer.querySelectorAll("[data-runtime-edge]")];
+      runtimeEdges.forEach((edge) => {
+        snaEdgeLayer.querySelector(`[data-hit-for="${edge.id}"]`)?.remove();
+        edge.remove();
+      });
+      refreshSnaEdges();
+      renderInteractionList();
+    }
+
+    function resetDemoState() {
+      batchGeneration += 1;
+      window.clearInterval(timelineTimer);
+      timelineTimer = null;
+      document.getElementById("timeline-play").disabled = false;
+      document.getElementById("timeline-pause").disabled = true;
+
+      cancelActiveRecordingSession();
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      recordedUrl = "";
+      recordedDurationSeconds = 0;
+      runtimeAudioUrls.forEach((url) => URL.revokeObjectURL(url));
+      runtimeAudioUrls.clear();
+      recordedAudio.removeAttribute("src");
+      recordingDuration.textContent = "00:00";
+      recordingTray.hidden = true;
+      recordingPreview.hidden = true;
+      recordingIdle.hidden = false;
+      recordingIdle.innerHTML = "<strong>本地錄音</strong><p style='margin:4px 0 0;color:var(--ink-500);font-size:.82rem'>錄音只保留在此頁記憶體；沒有自動轉寫或上傳。</p>";
+      voiceDelete.disabled = true;
+      voiceSend.disabled = true;
+      voiceStop.disabled = true;
+      voiceRecord.classList.remove("is-recording");
+      voiceRecord.setAttribute("aria-label", "開始本地錄音");
+
+      clearImageTray();
+      clearReply();
+      composer.value = "";
+      runtimeObservedSnapshots.length = 0;
+      removeRuntimeSnaTopology();
+      nextMessageNumber = 8;
+      conceptTimelineIndex = conceptPatches.length;
+      replay(defaultEvents);
+      setSnaView("observed");
+      conceptViewController.userChosen = false;
+      snaViewController.userChosen = false;
+      applyMobileListFallback();
+      installGraphHitTargets();
+      layoutSnaEdges();
+
+      batchStatus.textContent = "已重設為初始演示：聊天、概念圖與 SNA 已恢復種子資料。";
+      snaStatus.textContent = "已重設為初始演示：全體互動。";
+      composerStatus.textContent = "已重設為初始演示";
+    }
+
+    function batchUpdate(patch, snapshot) {
+      const scheduledGeneration = batchGeneration;
+      window.requestAnimationFrame(() => {
+        if (scheduledGeneration !== batchGeneration) return;
+        applyConceptPatch(patch);
+        conceptEdges.find((edge) => edge.dataset.edgeId === patch.edgeId)?.classList.remove("timeline-hidden");
+        renderConceptList();
+        showConceptDetails(conceptEdges.find((edge) => edge.dataset.edgeId === patch.edgeId));
+        const topologyResult = applySnaTopologyEvent(snapshot);
+        if (currentSnaView === "observed") {
+          currentSnaMetrics = { ...snapshot.metrics };
+          updateMetricCards(currentSnaMetrics);
+        }
+        const topologyCopy = topologyResult.topologyChanged
+          ? `新增 SNA 有向互動 1 條（來源 ${snapshot.sourceEvent}）`
+          : `更新 SNA 有向互動證據至 ${topologyResult.edge.dataset.evidenceCount} 筆`;
+        batchStatus.textContent = `批次更新完成：聊天 ${snapshot.sourceEvent}、概念關係 1 條；${topologyCopy}。`;
+        snaStatus.textContent = topologyCopy;
+        composerStatus.textContent = "訊息、概念圖與 SNA 已同步更新";
+      });
+    }
+
+    replay(defaultEvents);
+    setSnaView("observed");
+    installGraphHitTargets();
+    layoutSnaEdges();
+    applyMobileListFallback();
+    mobileGraphMedia.addEventListener?.("change", applyMobileListFallback);
+  </script>
+</body>
+</html>

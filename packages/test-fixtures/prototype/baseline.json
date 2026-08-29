@@ -1,0 +1,8 @@
+{
+  "sourceDate": "2026-08-28",
+  "syntheticDataOnly": true,
+  "claimBoundary": "Local interaction and visual regression baseline; not a backend, model, algorithm, safety, latency, or learning-effect proof.",
+  "sha256": {
+    "learning-orbit-demo.html": "4cbd52ff587d438b8813450672c15745d2c7c27f0d51f145306b42878f25ee9e"
+  }
+}
