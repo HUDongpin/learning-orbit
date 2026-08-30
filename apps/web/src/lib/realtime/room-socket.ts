@@ -1,14 +1,17 @@
 import {
   realtimeContract,
+  routes,
   type RoomCommand,
   type RoomEventEnvelope,
-  type RealtimeFrame,
+  type ServerFrame,
 } from "@learning-orbit/contracts";
+import { isRoomId } from "../session/room-route";
 
 export interface SocketLike {
   readonly readyState?: number;
   send(data: string): void;
   close?(code?: number, reason?: string): void;
+  addEventListener?(type: string, listener: (event: { data?: unknown; code?: number }) => void): void;
 }
 
 export interface RoomSocketOptions {
@@ -16,13 +19,28 @@ export interface RoomSocketOptions {
   readonly storageKeyPrefix?: string;
   readonly clientId?: string;
   readonly now?: () => number;
+  readonly onSessionExpired?: () => void;
+  readonly onRoomUnavailable?: (code: 4403 | 4410) => void;
+  readonly onConnectionChange?: (connected: boolean) => void;
+  readonly onProtocolError?: () => void;
 }
 
 type EventSink = (event: RoomEventEnvelope) => void;
-type ControlSink = (frame: RealtimeFrame) => void;
+type ControlSink = (frame: ServerFrame) => void;
 type ConnectFactory = () => SocketLike;
 
 const OPEN = 1;
+
+export function roomWebSocketUrl(
+  roomId: string,
+  location: Readonly<{ protocol: string; host: string }> = globalThis.location,
+): string {
+  if (!isRoomId(roomId)) throw new Error("INVALID_ROOM_ID");
+  if (location.protocol !== "https:" && location.protocol !== "http:") throw new Error("INVALID_PUBLIC_ORIGIN");
+  if (!location.host || /[/?#@\\]/u.test(location.host)) throw new Error("INVALID_PUBLIC_ORIGIN");
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}${routes.rooms.websocket(roomId)}`;
+}
 
 function makeClientId(): string {
   const cryptoApi = globalThis.crypto;
@@ -54,10 +72,15 @@ export class RoomSocket {
   #retryDelays: readonly number[];
   #retryIndex = 0;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #reconnectGate: Promise<void> | undefined;
   #socket: SocketLike | undefined;
   #connectFactory: ConnectFactory | undefined;
   #closed = false;
   #now: () => number;
+  #onSessionExpired: () => void;
+  #onRoomUnavailable: (code: 4403 | 4410) => void;
+  #onConnectionChange: (connected: boolean) => void;
+  #onProtocolError: () => void;
 
   constructor(
     roomId: string,
@@ -73,6 +96,10 @@ export class RoomSocket {
     this.#controlSink = controlSink;
     this.#retryDelays = options.retryDelaysMs ?? [500, 1_000, 2_000, 4_000, 8_000];
     this.#now = options.now ?? Date.now;
+    this.#onSessionExpired = options.onSessionExpired ?? (() => undefined);
+    this.#onRoomUnavailable = options.onRoomUnavailable ?? (() => undefined);
+    this.#onConnectionChange = options.onConnectionChange ?? (() => undefined);
+    this.#onProtocolError = options.onProtocolError ?? (() => undefined);
     this.clientId = options.clientId ?? makeClientId();
     const saved = Number(storage.getItem(this.#storageKey) ?? "0");
     this.lastRoomSeq = Number.isSafeInteger(saved) && saved >= 0 ? saved : 0;
@@ -90,21 +117,38 @@ export class RoomSocket {
     return [...this.#pending.keys()];
   }
 
+  /**
+   * Prevent a replacement socket from sending an obsolete resume cursor while
+   * an authenticated RoomEvent page recovery is still in flight.
+   */
+  deferReconnectUntil(recovery: Promise<void>): void {
+    this.#reconnectGate = recovery;
+  }
+
   send(command: RoomCommand, socket: SocketLike = this.#socket ?? { send: () => undefined }): void {
     // Validate before storing so forged or malformed commands never become
     // automatic reconnect retries.
-    const encoded = realtimeContract.encodeRoomCommand(command);
+    realtimeContract.encodeRoomCommand(command);
     this.#pending.set(command.commandId, command);
-    if (isOpen(socket)) socket.send(JSON.stringify({ type: "command", command: JSON.parse(encoded) }));
+    if (isOpen(socket)) socket.send(realtimeContract.encodeClientFrame({ type: "command", command }));
   }
 
   onFrame(value: unknown, socket: SocketLike = this.#socket ?? { send: () => undefined }): void {
-    const frame = realtimeContract.parseRealtimeFrame(value);
+    const frame = realtimeContract.parseServerFrame(value);
     if (frame.type === "event") {
       this.#acceptEvent(frame.event);
     } else if (frame.type === "resume_complete") {
+      if (frame.throughRoomSeq !== this.lastRoomSeq) {
+        this.#controlSink({
+          type: "snapshot_required",
+          afterSeq: this.lastRoomSeq,
+          throughRoomSeq: Math.max(this.lastRoomSeq, frame.throughRoomSeq),
+        });
+        return;
+      }
       this.#retryIndex = 0;
       this.#flushPending(socket);
+      this.#controlSink(frame);
     } else if (frame.type === "snapshot_required") {
       // The caller must fetch an authorized snapshot. We still expose this
       // control frame and do not mutate the durable cursor optimistically.
@@ -114,6 +158,7 @@ export class RoomSocket {
       // An acknowledgement is not a durable event delivery. Advancing the
       // replay cursor here could skip an event that is still in flight; only a
       // contiguous `event` frame is allowed to move lastRoomSeq.
+      this.#controlSink(frame);
     } else if (frame.type === "reject") {
       if (frame.commandId && !frame.retryable) this.#pending.delete(frame.commandId);
       this.#controlSink(frame);
@@ -128,14 +173,75 @@ export class RoomSocket {
     this.#clearRetry();
     const socket = factory();
     this.#socket = socket;
+    socket.addEventListener?.("open", () => {
+      if (!this.#closed && this.#socket === socket) {
+        this.#onConnectionChange(true);
+        this.#sendHello(socket);
+      }
+    });
+    socket.addEventListener?.("message", (event) => {
+      if (this.#closed || this.#socket !== socket) return;
+      try {
+        const value = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+        this.onFrame(value, socket);
+      } catch {
+        this.#protocolFailure(socket);
+      }
+    });
+    socket.addEventListener?.("close", (event) => {
+      if (this.#socket === socket) this.onClose(event.code);
+    });
     if (isOpen(socket)) {
-      socket.send(JSON.stringify(this.hello()));
+      this.#onConnectionChange(true);
+      this.#sendHello(socket);
     }
     return socket;
   }
 
-  onClose(): void {
+  onClose(code?: number): void {
     this.#socket = undefined;
+    this.#onConnectionChange(false);
+    if (code === 4400) {
+      this.#closed = true;
+      this.#clearRetry();
+      this.#onProtocolError();
+      return;
+    }
+    if (code === 4401) {
+      this.#closed = true;
+      this.#clearRetry();
+      this.#onSessionExpired();
+      return;
+    }
+    if (code === 4403 || code === 4410) {
+      this.#closed = true;
+      this.#clearRetry();
+      this.#onRoomUnavailable(code);
+      return;
+    }
+    if (code === 4409 && !this.#reconnectGate) {
+      this.#closed = true;
+      this.#clearRetry();
+      this.#onProtocolError();
+      return;
+    }
+    const gate = this.#reconnectGate;
+    if (gate) {
+      void gate.then(
+        () => {
+          if (this.#reconnectGate === gate) this.#reconnectGate = undefined;
+          this.#scheduleReconnect();
+        },
+        () => {
+          if (this.#reconnectGate === gate) this.#reconnectGate = undefined;
+        },
+      );
+      return;
+    }
+    this.#scheduleReconnect();
+  }
+
+  #scheduleReconnect(): void {
     if (this.#closed || !this.#connectFactory || this.#retryTimer) return;
     const delay = this.#retryDelays[Math.min(this.#retryIndex, this.#retryDelays.length - 1)];
     if (delay === undefined) return;
@@ -151,10 +257,37 @@ export class RoomSocket {
     this.#clearRetry();
     this.#socket?.close?.(1000, "client closed");
     this.#socket = undefined;
+    this.#onConnectionChange(false);
+  }
+
+  destroy(): void {
+    this.close();
+    this.#pending.clear();
+    this.#seen.clear();
+    this.#storage.removeItem(this.#storageKey);
+    this.#readonlyRoomId = "";
+    this.#storageKey = "";
+    this.lastRoomSeq = 0;
+    this.#reconnectGate = undefined;
+    this.#connectFactory = undefined;
   }
 
   #flushPending(socket: SocketLike): void {
     for (const command of this.#pending.values()) this.send(command, socket);
+  }
+
+  #sendHello(socket: SocketLike): void {
+    socket.send(realtimeContract.encodeClientFrame(this.hello()));
+  }
+
+  #protocolFailure(socket: SocketLike): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#clearRetry();
+    if (this.#socket === socket) this.#socket = undefined;
+    this.#onConnectionChange(false);
+    socket.close?.(4400, "invalid server frame");
+    this.#onProtocolError();
   }
 
   #acceptEvent(event: RoomEventEnvelope): void {

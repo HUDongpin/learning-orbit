@@ -156,6 +156,8 @@ describe("envelope, HTTP catalog, and realtime behavior", () => {
     expect(realtimeContract.encodeClientFrame({ type: "command", command: validCommand })).toContain("command");
     expect(() => realtimeContract.encodeClientFrame({ type: "welcome", serverTime: at, roomId: uuid, cursor: 0, status: "open" })).toThrow("INVALID_CLIENT_FRAME");
     expect(realtimeContract.parseRealtimeFrame({ type: "heartbeat", serverTime: at })).toMatchObject({ type: "heartbeat" });
+    expect(realtimeContract.parseServerFrame({ type: "welcome", serverTime: at, roomId: uuid, cursor: 0, status: "open" })).toMatchObject({ type: "welcome" });
+    expect(() => realtimeContract.parseServerFrame({ type: "hello", clientId: uuid, resumeFrom: 0 })).toThrow("INVALID_SERVER_FRAME");
     expect(() => realtimeContract.parseRealtimeFrame({ type: "reject", code: "NOT_A_CODE" })).toThrow("INVALID_REALTIME_FRAME");
     expect(() => realtimeContract.parseRealtimeFrame({ type: "degraded", scope: "analytics", code: "STUDENT_ANALYTICS_NOT_PROMOTED", updatedAt: at })).toThrow("INVALID_REALTIME_FRAME");
     expect(realtimeContract.parseRealtimeFrame({ type: "degraded", scope: "analytics", code: "STUDENT_ANALYTICS_NOT_PROMOTED", updatedAt: at, projectionKey: "echo.student_approved" })).toMatchObject({ type: "degraded" });

@@ -1,4 +1,6 @@
-import type { RoomEventEnvelope } from "../contracts.js";
+import { realtimeContract, type RoomEventEnvelope } from "../contracts";
+
+export type LedgerAppendResult = "appended" | "duplicate" | "stale" | "gap";
 
 export type LedgerMessage = {
   messageId: string;
@@ -10,6 +12,8 @@ export type LedgerMessage = {
   revision: number;
   operation: RoomEventEnvelope["operation"];
   eventTime: string;
+  firstRoomSeq: number;
+  roomSeq: number;
   replyTo: string | null;
   mentions: string[];
   mediaIds: string[];
@@ -28,39 +32,53 @@ export class EventLedger {
   #events = new Map<string, RoomEventEnvelope>();
   #messages = new Map<string, LedgerMessage>();
   #lastSeq = 0;
+  #roomId: string | undefined;
+
+  constructor(roomId?: string) { this.#roomId = roomId; }
 
   get lastRoomSeq(): number {
     return this.#lastSeq;
   }
 
-  append(event: RoomEventEnvelope): boolean {
-    // Transport replay can arrive out of order; only the event id is an
-    // idempotency key. The cursor remains the highest sequence observed.
-    if (this.#events.has(event.eventId)) return false;
+  append(value: unknown): LedgerAppendResult {
+    const frame = realtimeContract.parseServerFrame({ type: "event", event: value });
+    if (frame.type !== "event") throw new Error("ROOM_EVENT_REQUIRED");
+    const event = frame.event;
+    if (this.#roomId !== undefined && event.roomId !== this.#roomId) {
+      throw new Error("ROOM_EVENT_ROOM_MISMATCH");
+    }
+    if (this.#events.has(event.eventId)) return "duplicate";
+    if (event.roomSeq <= this.#lastSeq) return "stale";
+    if (event.roomSeq !== this.#lastSeq + 1) return "gap";
     this.#events.set(event.eventId, event);
-    this.#lastSeq = Math.max(this.#lastSeq, event.roomSeq);
+    this.#lastSeq = event.roomSeq;
     const payload = event.payload;
+    const isMessageEvent = event.type === "message.added"
+      || event.type === "message.revised"
+      || event.type === "message.retracted";
     const messageId = stringValue(payload.messageId);
-    if (messageId) {
+    if (isMessageEvent && messageId) {
       const previous = this.#messages.get(messageId);
       if (!previous || event.revision >= previous.revision) {
         this.#messages.set(messageId, {
           messageId,
           text: stringValue(payload.text) ?? "",
-          actorId: event.actorId,
-          actorKind: event.actorKind,
-          actorRole: event.actorRole,
+          actorId: previous?.actorId ?? event.actorId,
+          actorKind: previous?.actorKind ?? event.actorKind,
+          actorRole: previous?.actorRole ?? event.actorRole,
           eventId: event.eventId,
           revision: event.revision,
           operation: event.operation,
           eventTime: event.eventTime,
+          firstRoomSeq: previous?.firstRoomSeq ?? event.roomSeq,
+          roomSeq: event.roomSeq,
           replyTo: stringValue(payload.replyTo),
           mentions: stringArray(payload.mentions),
           mediaIds: stringArray(payload.mediaIds),
         });
       }
     }
-    return true;
+    return "appended";
   }
 
   events(): RoomEventEnvelope[] {
@@ -68,12 +86,17 @@ export class EventLedger {
   }
 
   messages(): LedgerMessage[] {
-    return [...this.#messages.values()].sort((a, b) => a.eventTime.localeCompare(b.eventTime));
+    return [...this.#messages.values()].sort((a, b) => a.firstRoomSeq - b.firstRoomSeq);
   }
 
   reset(): void {
     this.#events.clear();
     this.#messages.clear();
     this.#lastSeq = 0;
+  }
+
+  destroy(): void {
+    this.reset();
+    this.#roomId = undefined;
   }
 }

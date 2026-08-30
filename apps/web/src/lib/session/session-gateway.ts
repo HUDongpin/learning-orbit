@@ -10,6 +10,7 @@ import {
   type CreateRoomResponse,
   type JoinRoomRequest,
   type RoomDetails,
+  type RoomEventPage,
   type TeacherMagicLinkAccepted,
   type TeacherMagicLinkRequest,
   type TeacherRoomListResponse,
@@ -24,6 +25,7 @@ export interface SessionGateway {
   getTeacherRooms(): Promise<TeacherRoomListResponse>;
   createRoom(input: CreateRoomRequest): Promise<CreateRoomResponse>;
   getRoom(roomId: string): Promise<RoomDetails>;
+  getRoomEvents(roomId: string, afterSeq: number, limit?: number): Promise<RoomEventPage>;
   logout(): Promise<void>;
 }
 
@@ -199,6 +201,24 @@ export class FetchSessionGateway implements SessionGateway {
     }
     try {
       return roomHttpContract.parseRoomDetails(await jsonBody(response));
+    } catch {
+      return responseInvalid();
+    }
+  }
+
+  async getRoomEvents(roomId: string, afterSeq: number, limit?: number): Promise<RoomEventPage> {
+    const path = routes.rooms.events(roomId, { afterSeq, ...(limit === undefined ? {} : { limit }) });
+    const response = await this.#request(path, { method: "GET" });
+    if (response.status !== 200) {
+      return legalError(response, {
+        400: ["INVALID_QUERY"],
+        401: ["AUTH_REQUIRED"],
+        404: ["ROOM_NOT_FOUND"],
+        503: ["ROOM_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try {
+      return roomHttpContract.parseRoomEventPage(await jsonBody(response));
     } catch {
       return responseInvalid();
     }

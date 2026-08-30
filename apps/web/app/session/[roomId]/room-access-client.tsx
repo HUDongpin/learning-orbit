@@ -2,7 +2,7 @@
 
 import type { AuthSession, RoomDetails } from "@learning-orbit/contracts";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useReducer, useState } from "react";
 
 import {
   FetchSessionGateway,
@@ -10,13 +10,15 @@ import {
   type SessionGateway,
 } from "../../../src/lib/session/session-gateway";
 import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
+import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
 
 type AccessMode = "student" | "teacher";
 type AccessState =
   | { kind: "checking" }
-  | { kind: "student-ready"; session: Extract<AuthSession, { role: "student" }>; room: RoomDetails }
-  | { kind: "teacher-ready"; room: RoomDetails }
+  | { kind: "student-ready"; hydrated: HydratedSessionState }
+  | { kind: "teacher-ready"; hydrated: HydratedSessionState }
   | { kind: "forbidden" }
+  | { kind: "authority-lost" }
   | { kind: "unavailable" };
 
 const STATUS_COPY: Readonly<Record<RoomDetails["status"], string>> = {
@@ -39,9 +41,11 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   const [state, setState] = useState<AccessState>(() => validRoomId ? { kind: "checking" } : { kind: "forbidden" });
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string>();
+  const [, renderHydratedUpdate] = useReducer((version: number) => version + 1, 0);
 
   useEffect(() => {
     let active = true;
+    let hydrated: HydratedSessionState | undefined;
     void (async () => {
       if (!validRoomId) return;
       try {
@@ -69,25 +73,45 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
             router.replace(roomPagePath(roomId, "teacher"));
             return;
           }
-          setState({ kind: "teacher-ready", room: details });
+        }
+        hydrated = await HydratedSessionState.create({
+          session,
+          room: details,
+          gateway: api,
+          onSessionExpired: () => {
+            if (active) setState({ kind: "checking" });
+            router.replace(mode === "teacher" ? "/login?role=teacher" : "/login");
+          },
+          onRoomUnavailable: () => {
+            if (active) setState({ kind: "authority-lost" });
+          },
+        });
+        if (!active) {
+          hydrated.dispose();
           return;
         }
-        setState({ kind: "student-ready", session, room: details });
+        if (details.status !== "closed" && typeof globalThis.WebSocket === "function") hydrated.connectNative();
+        setState(session.role === "teacher" ? { kind: "teacher-ready", hydrated } : { kind: "student-ready", hydrated });
       } catch (error) {
         if (!active) return;
         if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
           router.replace(mode === "teacher" ? "/login?role=teacher" : "/login");
           return;
         }
-        if (error instanceof SessionGatewayError && error.code === "ROOM_NOT_FOUND") {
-          setState({ kind: "forbidden" });
+        if (error instanceof SessionGatewayError && (error.code === "ROOM_NOT_FOUND" || error.code === "FORBIDDEN")) {
+          setState({ kind: "authority-lost" });
           return;
         }
         setState({ kind: "unavailable" });
       }
     })();
-    return () => { active = false; };
+    return () => { active = false; hydrated?.dispose(); };
   }, [api, mode, roomId, router, validRoomId]);
+
+  useEffect(() => {
+    if (state.kind !== "student-ready" && state.kind !== "teacher-ready") return;
+    return state.hydrated.subscribe(() => renderHydratedUpdate());
+  }, [state]);
 
   async function logout() {
     setLoggingOut(true);
@@ -119,6 +143,22 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
     );
   }
 
+  if (state.kind === "authority-lost") {
+    return (
+      <main className="room-gate-shell room-gate-centered">
+        <section className="room-gate-card">
+          <p className="login-eyebrow">房間不可用</p>
+          <h1>目前的 Session 無法再開啟這個課堂</h1>
+          <p>房間可能已結束、刪除，或目前的房間權限已變更。系統已清除記憶體中的課堂狀態，也不會載入 Fixture。</p>
+          {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
+          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
+            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   if (state.kind === "unavailable") {
     return (
       <main className="room-gate-shell room-gate-centered">
@@ -136,7 +176,24 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   }
 
   const isTeacher = state.kind === "teacher-ready";
-  const details = state.room;
+  const hydrated = state.hydrated;
+  if (hydrated.recoveryError) {
+    return (
+      <main className="room-gate-shell room-gate-centered">
+        <section className="room-gate-card">
+          <p className="login-eyebrow">Fail closed</p>
+          <h1>即時同步已停止</h1>
+          <p role="alert">事件資料未能連續、完整地通過伺服器 Contract 驗證。為避免顯示過期或不完整的課堂內容，本頁已隱藏房間資料並停止自動重連。</p>
+          {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
+          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
+            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+          </button>
+        </section>
+      </main>
+    );
+  }
+  const details = hydrated.room;
+  const liveState = hydrated.sessionState;
   return (
     <main className="room-gate-shell">
       <header className="room-gate-header">
@@ -155,15 +212,15 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
         {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
         <div className="room-gate-heading">
           <div>
-            <p className="login-eyebrow">{isTeacher ? "教師房間控制台" : state.session.pseudonym}</p>
+            <p className="login-eyebrow">{isTeacher ? "教師房間控制台" : hydrated.session.role === "student" ? hydrated.session.pseudonym : ""}</p>
             <h1>{details.topic}</h1>
-            <p>45 分鐘課堂 · {STATUS_COPY[details.status]} · {details.participants.length} 個匿名座位</p>
+            <p>45 分鐘課堂 · {STATUS_COPY[liveState.status]} · {details.participants.length} 個匿名座位</p>
           </div>
-          <span className={`teacher-status status-${details.status}`}>{STATUS_COPY[details.status]}</span>
+          <span className={`teacher-status status-${liveState.status}`}>{STATUS_COPY[liveState.status]}</span>
         </div>
         <div className="room-hydration-notice" role="status">
           <h2>房間權限已確認</h2>
-          <p>聊天室、WebSocket 事件與 ECHO／TRACE 投影必須完成伺服器水合後才會顯示；目前沒有使用 Seed Message、固定指標或 Fixture。</p>
+          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。沒有使用 Seed Message、固定指標或 Fixture。</p>
         </div>
       </section>
     </main>

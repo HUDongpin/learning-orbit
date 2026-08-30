@@ -202,4 +202,25 @@ describe("typed SessionGateway", () => {
     });
     await expect(illegal.getRoom(createdRoom.room.roomId)).rejects.toThrow("SESSION_RESPONSE_INVALID");
   });
+
+  it("loads a generated, cursor-bound room event page through the canonical route", async () => {
+    const page = { events: [], throughRoomSeq: 4, nextAfterSeq: 4 };
+    const fetch = vi.fn().mockResolvedValue(json(page));
+    await expect(new FetchSessionGateway({ fetch }).getRoomEvents(createdRoom.room.roomId, 4, 50))
+      .resolves.toEqual(page);
+    expect(fetch).toHaveBeenCalledWith(`/v1/rooms/${createdRoom.room.roomId}/events?afterSeq=4&limit=50`, expect.objectContaining({
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    }));
+
+    const hidden = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "ROOM_NOT_FOUND" }, 404)) });
+    await expect(hidden.getRoomEvents(createdRoom.room.roomId, 0))
+      .rejects.toEqual(new SessionGatewayError("ROOM_NOT_FOUND"));
+    const leakedForbidden = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "FORBIDDEN" }, 403)) });
+    await expect(leakedForbidden.getRoomEvents(createdRoom.room.roomId, 0))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+    const invalid = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...page, secret: true })) });
+    await expect(invalid.getRoomEvents(createdRoom.room.roomId, 4)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RoomSocket, type SocketLike } from "../src/lib/realtime/room-socket.js";
+import { RoomSocket, roomWebSocketUrl, type SocketLike } from "../src/lib/realtime/room-socket.js";
 
 const ROOM_ID = "00000000-0000-4000-8000-000000000010";
 const EVENT_ID = "00000000-0000-4000-8000-000000000101";
@@ -33,7 +33,7 @@ function event(roomSeq: number) {
   return {
     type: "event" as const,
     event: {
-      eventId: EVENT_ID,
+      eventId: `00000000-0000-4000-8001-${String(roomSeq).padStart(12, "0")}`,
       schemaVersion: 1 as const,
       roomId: ROOM_ID,
       roomSeq,
@@ -83,6 +83,69 @@ describe("RoomSocket", () => {
     expect(socket.pendingCommandIds()).toEqual([]);
   });
 
+  it("never advances across a gap or an incomplete resume", () => {
+    const sink = vi.fn();
+    const controls = vi.fn();
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), sink, {}, controls);
+    socket.onFrame(event(2));
+    expect(socket.lastRoomSeq).toBe(0);
+    expect(controls).toHaveBeenLastCalledWith({ type: "snapshot_required", afterSeq: 0, throughRoomSeq: 1 });
+    socket.onFrame(event(1));
+    expect(socket.lastRoomSeq).toBe(1);
+    socket.onFrame({ type: "resume_complete", throughRoomSeq: 3 });
+    expect(socket.lastRoomSeq).toBe(1);
+    expect(controls).toHaveBeenLastCalledWith({ type: "snapshot_required", afterSeq: 1, throughRoomSeq: 3 });
+  });
+
+  it("keeps retryable rejects pending but clears terminal rejects", () => {
+    const controls = vi.fn();
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {}, controls);
+    socket.send(command(), fakeSocket());
+    socket.onFrame({ type: "reject", commandId: COMMAND_ID, code: "INTERNAL", retryable: true });
+    expect(socket.pendingCommandIds()).toEqual([COMMAND_ID]);
+    socket.onFrame({ type: "reject", commandId: COMMAND_ID, code: "ROOM_NOT_OPEN", retryable: false });
+    expect(socket.pendingCommandIds()).toEqual([]);
+    expect(controls).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes non-event frames without mutating the durable cursor", () => {
+    const controls = vi.fn();
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {}, controls);
+    const frames = [
+      { type: "welcome", serverTime: AT, roomId: ROOM_ID, cursor: 4, status: "open" },
+      { type: "presence", actorId: ACTOR_ID, state: "active", expiresAt: AT },
+      { type: "typing", actorId: ACTOR_ID, active: true, expiresAt: AT },
+      { type: "degraded", scope: "media", code: "PROVIDER_UNAVAILABLE", updatedAt: AT },
+      { type: "projection", roomId: ROOM_ID, projectionKey: "echo.student_approved", analysisEpoch: CORRELATION, projectionVersion: 1, completeThroughRoomSeq: 0, snapshotUrl: `/v1/rooms/${ROOM_ID}/analytics/echo.student_approved/latest` },
+    ] as const;
+    for (const frame of frames) socket.onFrame(frame);
+    expect(controls.mock.calls.map(([frame]) => frame.type)).toEqual(["welcome", "presence", "typing", "degraded", "projection"]);
+    expect(socket.lastRoomSeq).toBe(0);
+  });
+
+  it("binds a native-style socket, sends generated hello on open, and parses text frames", () => {
+    const listeners = new Map<string, (event: { data?: unknown }) => void>();
+    const sent: string[] = [];
+    const native = {
+      readyState: 0,
+      send: (value: string) => sent.push(value),
+      addEventListener: (type: string, listener: (event: { data?: unknown }) => void) => listeners.set(type, listener),
+    };
+    const sink = vi.fn();
+    const connectionChange = vi.fn();
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), sink, {
+      clientId: "00000000-0000-4000-8000-000000000777",
+      onConnectionChange: connectionChange,
+    });
+    socket.connect(() => native);
+    expect(sent).toEqual([]);
+    listeners.get("open")?.({});
+    expect(connectionChange).toHaveBeenLastCalledWith(true);
+    expect(JSON.parse(sent[0]!)).toEqual({ type: "hello", clientId: "00000000-0000-4000-8000-000000000777", resumeFrom: 0 });
+    listeners.get("message")?.({ data: JSON.stringify(event(1)) });
+    expect(sink).toHaveBeenCalledWith(event(1).event);
+  });
+
   it("retries reconnect with bounded exponential delays", () => {
     vi.useFakeTimers();
     const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), { retryDelaysMs: [10, 20] });
@@ -96,5 +159,118 @@ describe("RoomSocket", () => {
     vi.advanceTimersByTime(20);
     expect(connect).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
+  });
+
+  it("stops reconnect and reports an expired server session on close 4401", () => {
+    vi.useFakeTimers();
+    const expired = vi.fn();
+    const connect = vi.fn(() => fakeSocket());
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {
+      retryDelaysMs: [10],
+      onSessionExpired: expired,
+    });
+    socket.connect(connect);
+    socket.onClose(4401);
+    vi.advanceTimersByTime(100);
+    expect(expired).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it.each([4403, 4410] as const)("stops reconnect and reports hidden room authority loss on close %s", (code) => {
+    vi.useFakeTimers();
+    try {
+      const unavailable = vi.fn();
+      const expired = vi.fn();
+      const connect = vi.fn(() => fakeSocket());
+      const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {
+        retryDelaysMs: [10],
+        onSessionExpired: expired,
+        onRoomUnavailable: unavailable,
+      });
+      socket.connect(connect);
+      socket.onClose(code);
+      vi.advanceTimersByTime(100);
+      expect(unavailable).toHaveBeenCalledWith(code);
+      expect(expired).not.toHaveBeenCalled();
+      expect(connect).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for authenticated gap recovery before reconnecting with the new cursor", async () => {
+    vi.useFakeTimers();
+    try {
+      let finishRecovery!: () => void;
+      const recovery = new Promise<void>((resolve) => { finishRecovery = resolve; });
+      const sockets: Array<SocketLike & { sent: string[] }> = [];
+      const connect = vi.fn(() => {
+        const next = fakeSocket();
+        sockets.push(next);
+        return next;
+      });
+      const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), { retryDelaysMs: [10] });
+      socket.connect(connect);
+      socket.deferReconnectUntil(recovery);
+      socket.onClose(4409);
+      vi.advanceTimersByTime(100);
+      expect(connect).toHaveBeenCalledOnce();
+
+      socket.onFrame(event(1));
+      finishRecovery();
+      await recovery;
+      await Promise.resolve();
+      vi.advanceTimersByTime(10);
+
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(sockets[1]!.sent[0]!)).toMatchObject({ type: "hello", resumeFrom: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed once on an invalid server frame without reconnecting", () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Map<string, (event: { data?: unknown; code?: number }) => void>();
+      const close = vi.fn();
+      const native: SocketLike = {
+        readyState: 0,
+        send: vi.fn(),
+        close,
+        addEventListener: (type, listener) => listeners.set(type, listener),
+      };
+      const protocolError = vi.fn();
+      const connectionChange = vi.fn();
+      const connect = vi.fn(() => native);
+      const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {
+        retryDelaysMs: [10],
+        onConnectionChange: connectionChange,
+        onProtocolError: protocolError,
+      });
+
+      socket.connect(connect);
+      listeners.get("message")?.({ data: "{not-json" });
+      listeners.get("close")?.({ code: 4400 });
+      vi.advanceTimersByTime(100);
+
+      expect(close).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledWith(4400, "invalid server frame");
+      expect(protocolError).toHaveBeenCalledOnce();
+      expect(connectionChange).toHaveBeenLastCalledWith(false);
+      expect(connect).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("derives one credential-free same-origin WebSocket URL", () => {
+    expect(roomWebSocketUrl(ROOM_ID, { protocol: "https:", host: "127.0.0.1:3000" }))
+      .toBe(`wss://127.0.0.1:3000/v1/rooms/${ROOM_ID}/realtime`);
+    expect(roomWebSocketUrl(ROOM_ID, { protocol: "http:", host: "localhost:3000" }))
+      .toBe(`ws://localhost:3000/v1/rooms/${ROOM_ID}/realtime`);
+    expect(roomWebSocketUrl(ROOM_ID, { protocol: "https:", host: "127.0.0.1:3000" })).not.toMatch(/[?&](token|ticket)=/i);
+    expect(() => roomWebSocketUrl("demo-room", { protocol: "https:", host: "127.0.0.1:3000" })).toThrow("INVALID_ROOM_ID");
   });
 });

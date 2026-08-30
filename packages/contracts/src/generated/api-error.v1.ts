@@ -14,5 +14,6 @@ export interface ApiError {
     | "INVALID_ROOM_REQUEST"
     | "ROOM_CODE_UNAVAILABLE"
     | "RETENTION_POLICY_NOT_CONFIGURED"
-    | "INVALID_QUERY";
+    | "INVALID_QUERY"
+    | "FORBIDDEN";
 }

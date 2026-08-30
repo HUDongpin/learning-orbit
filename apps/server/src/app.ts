@@ -59,6 +59,12 @@ export interface BuildAppOptions {
   mailTransport?: MailTransport;
   sessions?: SessionService;
   teacherRooms?: Pick<TeacherRoomListService, "list">;
+  lifecycle?: RoomLifecycleService;
+  realtime?: {
+    hub: RoomHub;
+    authorizer: RealtimeDeliveryAuthorizer;
+    publisher: OutboxPublisher;
+  };
   createSmtpMailer?: typeof createSmtpMailer;
   codeHasher?: CodeHasher;
   roomCodeSource?: RoomCodeSource;
@@ -107,7 +113,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ? new CodeHasher(config.roomCodePepperCurrentVersion, config.roomCodePeppers)
     : undefined;
   const codeHasher = options.codeHasher ?? configuredHasher;
-  const lifecycle = pool ? new RoomLifecycleService(new RoomEventRepository(pool, eventPayloadRegistry, clock), clock) : undefined;
+  const lifecycle = options.lifecycle
+    ?? (pool ? new RoomLifecycleService(new RoomEventRepository(pool, eventPayloadRegistry, clock), clock) : undefined);
   const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   const jobClaims = options.jobClaims ?? new JobClaimAuthority();
@@ -115,7 +122,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     policy: new AnalyticsPolicy(pool),
     repository: new AnalyticsRepository(pool),
   } : undefined;
-  const realtime = pool ? (() => {
+  const realtime = options.realtime ?? (pool ? (() => {
     const authorizer = new RealtimeDeliveryAuthorizer(pool);
     const hub = new RoomHub(pool, authorizer);
     const authorizeProjection: ProjectionDeliveryAuthorizer = async ({ connection, frame, principal }) => {
@@ -144,7 +151,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       hub,
       publisher: new OutboxPublisher(pool, hub, undefined, projection),
     };
-  })() : undefined;
+  })() : undefined);
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
   const media: MediaDeps | undefined = options.media ?? (pool ? {
     pool,

@@ -54,6 +54,7 @@ function gateway(overrides: Partial<SessionGateway> = {}): SessionGateway {
     getTeacherRooms: vi.fn(async () => ({ rooms: [], truncated: false })),
     createRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
     getRoom: vi.fn(async () => roomDetails),
+    getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };

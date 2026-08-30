@@ -51,6 +51,35 @@ const room: RoomDetails = {
   ],
 };
 
+function messageEventFrame(roomSeq: number) {
+  return {
+    type: "event" as const,
+    event: {
+      eventId: `00000000-0000-4000-8001-${String(roomSeq).padStart(12, "0")}`,
+      schemaVersion: 1 as const,
+      roomId,
+      roomSeq,
+      type: "message.added",
+      actorId: student.actorId,
+      actorKind: "human" as const,
+      actorRole: "student" as const,
+      revision: 1,
+      operation: "add" as const,
+      eventTime: "2026-08-30T09:00:00.000Z",
+      ingestTime: "2026-08-30T09:00:01.000Z",
+      causationId: "00000000-0000-4000-8000-000000000201",
+      correlationId: "00000000-0000-4000-8000-000000000401",
+      payload: {
+        messageId: "00000000-0000-4000-8000-000000000501",
+        text: "真實訊息",
+        replyTo: null,
+        mentions: [],
+        mediaIds: [],
+      },
+    },
+  };
+}
+
 function gateway(session: AuthSession = student, overrides: Partial<SessionGateway> = {}): SessionGateway {
   return {
     getSession: vi.fn(async () => session),
@@ -59,6 +88,7 @@ function gateway(session: AuthSession = student, overrides: Partial<SessionGatew
     getTeacherRooms: vi.fn(async () => ({ rooms: [], truncated: false })),
     createRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
     getRoom: vi.fn(async () => room),
+    getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -68,6 +98,7 @@ describe("room route access guard", () => {
   afterEach(() => {
     cleanup();
     replace.mockReset();
+    vi.unstubAllGlobals();
   });
 
   it("hydrates a same-room student only after server room confirmation", async () => {
@@ -76,6 +107,8 @@ describe("room route access guard", () => {
     expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
     expect(screen.getByText("探索者 A")).toBeInTheDocument();
     expect(api.getRoom).toHaveBeenCalledWith(roomId);
+    expect(api.getRoomEvents).toHaveBeenCalledWith(roomId, 0, 500);
+    expect(screen.getByText(/已按伺服器 roomSeq 同步 0 個 RoomEvent/)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/本地演示|模擬即時|太陽是生態系統/);
   });
 
@@ -118,7 +151,7 @@ describe("room route access guard", () => {
       getRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
     });
     render(<RoomAccessClient gateway={foreignApi} mode="teacher" roomId={otherRoomId} />);
-    expect(await screen.findByRole("heading", { name: "無法開啟這個課堂" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "目前的 Session 無法再開啟這個課堂" })).toBeInTheDocument();
   });
 
   it("redirects an expired session to the correct login entry", async () => {
@@ -141,12 +174,108 @@ describe("room route access guard", () => {
 
   it("offers logout recovery instead of a login loop when room hydration is unavailable", async () => {
     const api = gateway(student, {
-      getRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
+      getRoomEvents: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
     });
     render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
     expect(await screen.findByRole("heading", { name: "課堂服務暫時不可用" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "清除 Session 並返回登入" }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
     expect(replace).toHaveBeenCalledWith("/login");
+  });
+
+  it("clears the ready room before navigating after an expired socket session", async () => {
+    let closeListener: ((event: { code?: number }) => void) | undefined;
+    class TestWebSocket {
+      readonly readyState = 0;
+      constructor(readonly url: string) {}
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { code?: number }) => void) {
+        if (type === "close") closeListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    closeListener?.({ code: 4401 });
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
+    expect(screen.queryByRole("heading", { name: "生態系統探究" })).not.toBeInTheDocument();
+    expect(screen.getByText("正在驗證 Session 與房間權限…")).toBeInTheDocument();
+  });
+
+  it.each([4403, 4410] as const)("clears room authority without creating a login loop after close %s", async (code) => {
+    let closeListener: ((event: { code?: number }) => void) | undefined;
+    class TestWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { code?: number }) => void) {
+        if (type === "close") closeListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    const api = gateway();
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    closeListener?.({ code });
+    expect(await screen.findByRole("heading", { name: "目前的 Session 無法再開啟這個課堂" })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "清除 Session 並返回登入" }));
+    await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    expect(replace).toHaveBeenCalledWith("/login");
+  });
+
+  it("hides all room data and offers real logout after an invalid native server frame", async () => {
+    let messageListener: ((event: { data?: unknown }) => void) | undefined;
+    const urls: string[] = [];
+    class TestWebSocket {
+      readonly readyState = 0;
+      constructor(url: string) { urls.push(url); }
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+        if (type === "message") messageListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    messageListener?.({ data: "{not-json" });
+    expect(await screen.findByRole("heading", { name: "即時同步已停止" })).toBeInTheDocument();
+    expect(screen.queryByText("生態系統探究")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清除 Session 並返回登入" })).toBeInTheDocument();
+    expect(urls).toHaveLength(1);
+  });
+
+  it("stops an open socket and hides last-good room data when live gap recovery fails", async () => {
+    let messageListener: ((event: { data?: unknown }) => void) | undefined;
+    const close = vi.fn();
+    class TestWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close = close;
+      addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+        if (type === "message") messageListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    let initial = true;
+    const api = gateway(student, {
+      getRoomEvents: vi.fn(async () => {
+        if (initial) {
+          initial = false;
+          return { events: [], throughRoomSeq: 0 };
+        }
+        throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE");
+      }),
+    });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    messageListener?.({ data: JSON.stringify(messageEventFrame(2)) });
+    expect(await screen.findByRole("heading", { name: "即時同步已停止" })).toBeInTheDocument();
+    expect(screen.queryByText("生態系統探究")).not.toBeInTheDocument();
+    expect(close).toHaveBeenCalledWith(1000, "client closed");
+    messageListener?.({ data: JSON.stringify(messageEventFrame(1)) });
+    expect(screen.queryByText("生態系統探究")).not.toBeInTheDocument();
   });
 });
