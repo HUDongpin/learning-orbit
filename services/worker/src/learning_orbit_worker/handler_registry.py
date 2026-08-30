@@ -69,6 +69,7 @@ class WorkerDeps:
     attempt_cancelled: Event | None = None
     stop_heartbeat: Event | None = None
     job_claims: JobClaims | None = None
+    projection_store: Any = None
 
     def __post_init__(self) -> None:
         if self.job_claims is None:
