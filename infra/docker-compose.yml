@@ -1,0 +1,23 @@
+name: learning-orbit
+
+services:
+  postgres:
+    image: postgres:18
+    ports:
+      - "127.0.0.1:55432:5432"
+    environment:
+      POSTGRES_DB: learning_orbit
+      POSTGRES_USER: learning_orbit
+      POSTGRES_PASSWORD: ${LO_POSTGRES_PASSWORD:?LO_POSTGRES_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    volumes:
+      - learning_orbit_postgres_data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  learning_orbit_postgres_data:

@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit false",
+    "build": "tsc -p tsconfig.json --noEmit false && node scripts/copy-sql-resources.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "tsx watch src/index.ts",
-    "db:migrate": "tsx scripts/migration-placeholder.ts db:migrate",
-    "db:migrate:test": "tsx scripts/migration-placeholder.ts db:migrate:test"
+    "db:migrate": "tsx src/db/migrate-cli.ts",
+    "db:migrate:test": "tsx src/db/migrate-cli.ts --test"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",
