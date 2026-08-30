@@ -79,6 +79,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .recording-time { font-size: .78rem; font-weight: 750; }
 .reply-strip { border-left: 3px solid var(--orbit-blue); padding: 5px 8px; margin-bottom: 7px; color: var(--orbit-muted); font-size: .78rem; background: rgba(11,110,153,.06); }
 .media-card { margin-top: 9px; border: 1px dashed #b8d8bf; border-radius: 13px; padding: 10px; color: var(--orbit-muted); background: rgba(255,255,255,.8); }
+.agent-status-card { min-block-size: 52px; }
+.agent-status-card .media-caption, .agent-status-card .composer-error { font-size: 1rem; line-height: 1.5; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding: 0 20px 10px; scrollbar-width: thin; }
 .chip { flex: 0 0 auto; min-height: 44px; border: 1px solid #c9e4ce; border-radius: 999px; padding: 8px 13px; background: #fff; color: var(--orbit-green); font-size: .82rem; }
 .chip:hover { background: #f0faed; }

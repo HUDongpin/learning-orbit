@@ -71,6 +71,283 @@ function event(seq: number, kind: "open" | "message" = "message"): RoomEventEnve
 }
 
 describe("HydratedSessionState", () => {
+  it("hydrates generated Agent current state and keeps endpoint unavailability explicit", async () => {
+    const gateway = { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) };
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway,
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: null,
+        serviceHealth: "unavailable",
+        agentEnabled: false,
+        updatedAt: AT,
+      },
+    });
+    expect(hydrated.agentStatus).toMatchObject({
+      type: "agent_status", roomId: ROOM_ID, agentRunId: null, state: "idle",
+      serviceHealth: "unavailable", agentEnabled: false,
+    });
+    expect(hydrated.agentServiceUnavailable).toBe(false);
+
+    const unavailable = await HydratedSessionState.create({
+      session: student, room, gateway, agentServiceUnavailable: true,
+    });
+    expect(unavailable.agentStatus).toBeUndefined();
+    expect(unavailable.agentServiceUnavailable).toBe(true);
+    unavailable.clearForSessionExpiry();
+    expect(unavailable.agentServiceUnavailable).toBe(false);
+  });
+
+  it("orders Agent run transitions by persisted run time instead of REST assembly time", async () => {
+    const runId = "00000000-0000-4000-8000-000000000801";
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: {
+          agentRunId: runId,
+          state: "queued",
+          failureCode: null,
+          createdAt: "2026-08-30T09:00:00.000Z",
+          updatedAt: "2026-08-30T09:00:01.000Z",
+        },
+        serviceHealth: "healthy",
+        agentEnabled: true,
+        updatedAt: "2026-08-30T09:00:03.000Z",
+      },
+    });
+    hydrated.receiveFrame({
+      type: "agent_status", roomId: ROOM_ID, agentRunId: runId, state: "running",
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:02.000Z", failureCode: null,
+    });
+    expect(hydrated.agentStatus?.state).toBe("running");
+  });
+
+  it("rejects same-time regressions, conflicting terminal upgrades, and unproven run replacement", async () => {
+    const runA = "00000000-0000-4000-8000-000000000801";
+    const runB = "00000000-0000-4000-8000-000000000802";
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+    });
+    const frame = (overrides: Record<string, unknown>) => ({
+      type: "agent_status" as const, roomId: ROOM_ID, agentRunId: runA, state: "streaming" as const,
+      serviceHealth: "healthy" as const, agentEnabled: true,
+      updatedAt: "2026-08-30T09:00:01.000Z", failureCode: null, ...overrides,
+    });
+    hydrated.receiveFrame(frame({}));
+    hydrated.receiveFrame(frame({ state: "queued" }));
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runA, state: "streaming" });
+
+    hydrated.receiveFrame(frame({ state: "failed", failureCode: "PROVIDER_UNAVAILABLE", updatedAt: "2026-08-30T09:00:02.000Z" }));
+    hydrated.receiveFrame(frame({ state: "completed", failureCode: null, updatedAt: "2026-08-30T09:00:02.000Z" }));
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runA, state: "failed" });
+
+    hydrated.receiveFrame(frame({ agentRunId: runB, state: "queued", failureCode: null, updatedAt: "2026-08-30T09:00:02.000Z" }));
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runA, state: "failed" });
+    hydrated.receiveFrame(frame({ agentRunId: runB, state: "queued", failureCode: null, updatedAt: "2026-08-30T09:00:03.000Z" }));
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runB, state: "queued" });
+    hydrated.receiveFrame(frame({ agentRunId: runA, state: "completed", failureCode: null, updatedAt: "2026-08-30T09:00:04.000Z" }));
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runB, state: "queued" });
+  });
+
+  it("does not let a delayed pre-idle run overwrite an authoritative idle watermark", async () => {
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+      agentCurrent: {
+        roomId: ROOM_ID, run: null, serviceHealth: "healthy", agentEnabled: true,
+        updatedAt: "2026-08-30T09:00:10.000Z",
+      },
+    });
+    hydrated.receiveFrame({
+      type: "agent_status", roomId: ROOM_ID,
+      agentRunId: "00000000-0000-4000-8000-000000000801", state: "queued",
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:09.000Z", failureCode: null,
+    });
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: null, state: "idle" });
+  });
+
+  it("reconciles Agent current after every resume and lets a live frame supersede a pending refresh", async () => {
+    const runId = "00000000-0000-4000-8000-000000000801";
+    const getAgentCurrent = vi.fn()
+      .mockResolvedValueOnce({
+        roomId: ROOM_ID,
+        run: { agentRunId: runId, state: "running", failureCode: null, createdAt: AT, updatedAt: "2026-08-30T09:00:02.000Z" },
+        serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:02.500Z",
+      })
+      .mockResolvedValueOnce({
+        roomId: ROOM_ID,
+        run: { agentRunId: runId, state: "streaming", failureCode: null, createdAt: AT, updatedAt: "2026-08-30T09:00:03.000Z" },
+        serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:03.500Z",
+      })
+      .mockImplementationOnce(async (_roomId: string, options?: { signal?: AbortSignal }) => await new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      }));
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })), getAgentCurrent },
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: { agentRunId: runId, state: "queued", failureCode: null, createdAt: AT, updatedAt: "2026-08-30T09:00:01.000Z" },
+        serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:01.500Z",
+      },
+      agentStatusTimeoutMs: 10,
+    });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    expect(hydrated.agentStatusPending).toBe(true);
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus?.state).toBe("running");
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus?.state).toBe("streaming");
+
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    hydrated.receiveFrame({
+      type: "agent_status", roomId: ROOM_ID, agentRunId: runId, state: "completed",
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:04.000Z", failureCode: null,
+    });
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus?.state).toBe("completed");
+    expect(hydrated.agentServiceUnavailable).toBe(false);
+    expect(getAgentCurrent).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks only the Agent slot unavailable when a resume reconciliation fails", async () => {
+    const runId = "00000000-0000-4000-8000-000000000801";
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getAgentCurrent: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+      },
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: { agentRunId: runId, state: "running", failureCode: null, createdAt: AT, updatedAt: AT },
+        serviceHealth: "healthy", agentEnabled: true, updatedAt: AT,
+      },
+    });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus?.state).toBe("running");
+    expect(hydrated.agentServiceUnavailable).toBe(true);
+    expect(hydrated.sessionState.roomId).toBe(ROOM_ID);
+  });
+
+  it("does not let a stale live Agent frame cancel the post-resume authoritative refresh", async () => {
+    const runId = "00000000-0000-4000-8000-000000000801";
+    let resolveCurrent!: (value: {
+      roomId: string;
+      run: { agentRunId: string; state: "streaming"; failureCode: null; createdAt: string; updatedAt: string };
+      serviceHealth: "healthy";
+      agentEnabled: true;
+      updatedAt: string;
+    }) => void;
+    const current = new Promise<Parameters<typeof resolveCurrent>[0]>((resolve) => { resolveCurrent = resolve; });
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getAgentCurrent: vi.fn(async () => await current),
+      },
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: { agentRunId: runId, state: "running", failureCode: null, createdAt: AT, updatedAt: "2026-08-30T09:00:10.000Z" },
+        serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:10.500Z",
+      },
+    });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    hydrated.receiveFrame({
+      type: "agent_status", roomId: ROOM_ID, agentRunId: runId, state: "running",
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:10.000Z", failureCode: null,
+    });
+    hydrated.receiveFrame({
+      type: "agent_status", roomId: ROOM_ID, agentRunId: runId, state: "queued",
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:09.000Z", failureCode: null,
+    });
+    resolveCurrent({
+      roomId: ROOM_ID,
+      run: { agentRunId: runId, state: "streaming", failureCode: null, createdAt: AT, updatedAt: "2026-08-30T09:00:11.000Z" },
+      serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T09:00:11.500Z",
+    });
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus?.state).toBe("streaming");
+    expect(hydrated.agentServiceUnavailable).toBe(false);
+    expect(hydrated.agentStatusPending).toBe(false);
+  });
+
+  it("lets authoritative REST current replace an old active run after missed terminal frames", async () => {
+    const runA = "00000000-0000-4000-8000-000000000801";
+    const runB = "00000000-0000-4000-8000-000000000802";
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getAgentCurrent: vi.fn(async () => ({
+          roomId: ROOM_ID,
+          run: {
+            agentRunId: runB,
+            state: "queued" as const,
+            failureCode: null,
+            createdAt: "2026-08-30T09:00:03.000Z",
+            updatedAt: "2026-08-30T09:00:03.000Z",
+          },
+          serviceHealth: "healthy" as const,
+          agentEnabled: true,
+          updatedAt: "2026-08-30T09:00:03.500Z",
+        })),
+      },
+      agentCurrent: {
+        roomId: ROOM_ID,
+        run: {
+          agentRunId: runA,
+          state: "running",
+          failureCode: null,
+          createdAt: "2026-08-30T09:00:01.000Z",
+          updatedAt: "2026-08-30T09:00:01.000Z",
+        },
+        serviceHealth: "healthy",
+        agentEnabled: true,
+        updatedAt: "2026-08-30T09:00:01.500Z",
+      },
+    });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    await hydrated.whenIdle();
+    expect(hydrated.agentStatus).toMatchObject({ agentRunId: runB, state: "queued" });
+  });
+
+  it("settles and clears the local Agent timeout on dispose even when a Gateway ignores AbortSignal", async () => {
+    vi.useFakeTimers();
+    try {
+      const hydrated = await HydratedSessionState.create({
+        session: student,
+        room,
+        gateway: {
+          getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+          getAgentCurrent: vi.fn(async () => await new Promise<never>(() => undefined)),
+        },
+        agentStatusTimeoutMs: 1_000,
+      });
+      const refresh = hydrated.refreshAgentCurrent();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      hydrated.dispose();
+      await refresh;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hydrates paginated REST events contiguously and derives server room timing", async () => {
     const getRoomEvents = vi.fn(async (_roomId: string, afterSeq: number) => afterSeq === 0
       ? { events: [event(1, "open"), event(2)], throughRoomSeq: 2, nextAfterSeq: 2 }
@@ -194,7 +471,8 @@ describe("HydratedSessionState", () => {
     hydrated.receiveFrame({ type: "presence", actorId, state: "active", expiresAt: CLOSES });
     hydrated.receiveFrame({ type: "typing", actorId, active: true, expiresAt: CLOSES });
     hydrated.receiveFrame({ type: "media_status", mediaId: "00000000-0000-4000-8000-000000000701", state: "processing", failureCode: null, updatedAt: AT });
-    hydrated.receiveFrame({ type: "agent_status", roomId: ROOM_ID, agentRunId: null, state: "idle", serviceHealth: "unavailable", agentEnabled: false, updatedAt: AT, failureCode: "PROVIDER_UNAVAILABLE" });
+    hydrated.receiveFrame({ type: "agent_status", roomId: ROOM_ID, agentRunId: null, state: "idle", serviceHealth: "unavailable", agentEnabled: false, updatedAt: AT, failureCode: null });
+    hydrated.receiveFrame({ type: "agent_status", roomId: ROOM_ID, agentRunId: "00000000-0000-4000-8000-000000000801", state: "running", serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T08:59:00.000Z", failureCode: null });
     hydrated.receiveFrame({ type: "projection", roomId: ROOM_ID, projectionKey: "echo.student_approved", analysisEpoch: "00000000-0000-4000-8000-000000000601", projectionVersion: 1, completeThroughRoomSeq: 0, snapshotUrl: `/v1/rooms/${ROOM_ID}/analytics/echo.student_approved/latest` });
     hydrated.receiveFrame({ type: "degraded", scope: "media", code: "PROVIDER_UNAVAILABLE", updatedAt: AT });
     expect(hydrated.sessionState).toMatchObject({ connected: true, status: "paused", lastRoomSeq: 0 });

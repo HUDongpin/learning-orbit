@@ -1,5 +1,6 @@
 import {
   apiErrorContract,
+  agentContract,
   authContract,
   mediaAttachmentContract,
   mediaCommandContract,
@@ -7,6 +8,7 @@ import {
   routes,
   teacherRoomListContract,
   type ApiError,
+  type AgentCurrentState,
   type AuthSession,
   type CreateRoomRequest,
   type CreateRoomResponse,
@@ -37,6 +39,7 @@ export interface SessionGateway {
   completeMediaUpload(roomId: string, mediaId: string): Promise<CompleteMediaUploadResponse>;
   getMedia(roomId: string, mediaId: string): Promise<MediaAttachmentView>;
   getMediaDownloadGrant(roomId: string, mediaId: string): Promise<MediaDownloadGrant>;
+  getAgentCurrent(roomId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AgentCurrentState>;
   logout(): Promise<void>;
 }
 
@@ -299,6 +302,27 @@ export class FetchSessionGateway implements SessionGateway {
       });
     }
     try { return mediaCommandContract.parseDownloadGrant(await jsonBody(response)); }
+    catch { return responseInvalid(); }
+  }
+
+  async getAgentCurrent(roomId: string, options: Readonly<{ signal?: AbortSignal }> = {}): Promise<AgentCurrentState> {
+    const response = await this.#request(routes.agent.current(roomId), {
+      method: "GET",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status !== 200) {
+      return legalError(response, {
+        401: ["AUTH_REQUIRED"],
+        404: ["ROOM_NOT_FOUND"],
+        500: ["INTERNAL"],
+        503: ["AGENT_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try {
+      const current = agentContract.parseCurrent(await jsonBody(response));
+      if (current.roomId !== roomId) return responseInvalid();
+      return current;
+    }
     catch { return responseInvalid(); }
   }
 

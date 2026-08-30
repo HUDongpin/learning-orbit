@@ -86,6 +86,13 @@ const mediaView = {
   createdAt: "2026-08-31T01:00:00.000Z",
   updatedAt: "2026-08-31T01:01:00.000Z",
 };
+const agentCurrent = {
+  roomId: createdRoom.room.roomId,
+  run: null,
+  serviceHealth: "unavailable" as const,
+  agentEnabled: false,
+  updatedAt: "2026-08-31T01:01:00.000Z",
+};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -277,5 +284,20 @@ describe("typed SessionGateway", () => {
     const derivativePending = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "MEDIA_NOT_READY" }, 409)) });
     await expect(derivativePending.getMedia(createdRoom.room.roomId, mediaId))
       .rejects.toEqual(new SessionGatewayError("MEDIA_NOT_READY"));
+  });
+
+  it("loads only the generated room-owned Agent current state", async () => {
+    const fetch = vi.fn().mockResolvedValue(json(agentCurrent));
+    const controller = new AbortController();
+    await expect(new FetchSessionGateway({ fetch }).getAgentCurrent(createdRoom.room.roomId, { signal: controller.signal })).resolves.toEqual(agentCurrent);
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/agent/current`,
+      expect.objectContaining({ method: "GET", credentials: "include", cache: "no-store", redirect: "error", signal: controller.signal }),
+    );
+    const unavailable = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "AGENT_SERVICE_UNAVAILABLE" }, 503)) });
+    await expect(unavailable.getAgentCurrent(createdRoom.room.roomId))
+      .rejects.toEqual(new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"));
+    const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...agentCurrent, provider: "fixture" })) });
+    await expect(leaked.getAgentCurrent(createdRoom.room.roomId)).rejects.toThrow("SESSION_RESPONSE_INVALID");
   });
 });

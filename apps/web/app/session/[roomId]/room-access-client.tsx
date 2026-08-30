@@ -15,10 +15,11 @@ import { ChatPanel } from "../../../src/lib/chat/chat-panel";
 import { parseStorageBrowserOrigins } from "../../../src/lib/media/media-upload";
 
 type AccessMode = "student" | "teacher";
+type AccessAuthority = Readonly<{ api: SessionGateway; mode: AccessMode; roomId: string }>;
 type AccessState =
   | { kind: "checking" }
-  | { kind: "student-ready"; hydrated: HydratedSessionState }
-  | { kind: "teacher-ready"; hydrated: HydratedSessionState }
+  | { kind: "student-ready"; hydrated: HydratedSessionState; authority: AccessAuthority }
+  | { kind: "teacher-ready"; hydrated: HydratedSessionState; authority: AccessAuthority }
   | { kind: "forbidden" }
   | { kind: "authority-lost" }
   | { kind: "unavailable" };
@@ -30,16 +31,19 @@ const STATUS_COPY: Readonly<Record<RoomDetails["status"], string>> = {
   closed: "已結束",
 };
 const MEDIA_UPLOAD_ORIGINS = parseStorageBrowserOrigins(process.env.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS);
+const DEFAULT_AGENT_STATUS_TIMEOUT_MS = 1_500;
 
 export interface RoomAccessClientProps {
   gateway?: SessionGateway;
   mode: AccessMode;
   roomId: string;
+  agentStatusTimeoutMs?: number;
 }
 
-export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProps) {
+export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs = DEFAULT_AGENT_STATUS_TIMEOUT_MS }: RoomAccessClientProps) {
   const router = useRouter();
   const api = useMemo(() => gateway ?? new FetchSessionGateway(), [gateway]);
+  const authority = useMemo<AccessAuthority>(() => ({ api, mode, roomId }), [api, mode, roomId]);
   const validRoomId = isRoomId(roomId);
   const [state, setState] = useState<AccessState>(() => validRoomId ? { kind: "checking" } : { kind: "forbidden" });
   const [loggingOut, setLoggingOut] = useState(false);
@@ -78,10 +82,12 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
             return;
           }
         }
+        const supportsRealtime = details.status !== "closed" && typeof globalThis.WebSocket === "function";
         hydrated = await HydratedSessionState.create({
           session,
           room: details,
           gateway: api,
+          agentStatusTimeoutMs,
           onSessionExpired: () => {
             if (!active) return;
             setState({ kind: "checking" });
@@ -98,8 +104,11 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
         unsubscribeHydrated = hydrated.subscribe(() => {
           if (active) renderHydratedUpdate();
         });
-        if (details.status !== "closed" && typeof globalThis.WebSocket === "function") hydrated.connectNative();
-        setState(session.role === "teacher" ? { kind: "teacher-ready", hydrated } : { kind: "student-ready", hydrated });
+        if (supportsRealtime) hydrated.connectNative();
+        setState(session.role === "teacher"
+          ? { kind: "teacher-ready", hydrated, authority }
+          : { kind: "student-ready", hydrated, authority });
+        if (!supportsRealtime) void hydrated.refreshAgentCurrent();
       } catch (error) {
         if (!active) return;
         if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
@@ -118,7 +127,7 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
       unsubscribeHydrated?.();
       hydrated?.dispose();
     };
-  }, [api, mode, roomId, router, validRoomId]);
+  }, [agentStatusTimeoutMs, api, authority, mode, roomId, router, validRoomId]);
 
   async function logout() {
     setLoggingOut(true);
@@ -138,7 +147,7 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   }
 
   if ((state.kind === "student-ready" || state.kind === "teacher-ready")
-    && state.hydrated.sessionState.roomId !== roomId) {
+    && (state.authority !== authority || state.hydrated.sessionState.roomId !== roomId)) {
     return <main className="room-gate-shell room-gate-centered" aria-busy="true"><p role="status">正在驗證 Session 與房間權限…</p></main>;
   }
 

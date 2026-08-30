@@ -71,6 +71,7 @@ export interface BuildAppOptions {
   jobClaims?: JobClaimAuthority;
   media?: MediaDeps;
   mediaStore?: MediaStore;
+  agent?: AgentService;
   /** Explicitly injected in tests/pilot; production requires LO_AUDIT_SALT. */
   governance?: GovernanceService;
 }
@@ -181,7 +182,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     : undefined;
   const analyticsTeacher = pool && lifecycle && analytics
     ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined;
-  const agent = pool ? new AgentService(pool, clock) : undefined;
+  const agent = options.agent ?? (pool ? new AgentService(pool, clock) : undefined);
   const agentProviderHealth = pool && assertionTrust ? new InternalProviderHealthRoute(
     new ProviderHealthRepository(pool, clock), assertionTrust, clock,
     { providerId: "fixture", manifestSha256: "0".repeat(64) },

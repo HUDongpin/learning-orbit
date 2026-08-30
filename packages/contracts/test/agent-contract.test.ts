@@ -16,5 +16,10 @@ describe("agent contracts", () => {
     const status = { type: "agent_status", roomId: ids.roomId, agentRunId: ids.runId, state: "streaming", serviceHealth: "healthy", agentEnabled: true, updatedAt: "2026-08-30T08:00:00Z", failureCode: null };
     expect(realtimeContract.parseRealtimeFrame(status)).toEqual(status);
     expect(() => realtimeContract.parseRealtimeFrame({ ...status, provider: "secret" })).toThrow();
+    expect(() => realtimeContract.parseRealtimeFrame({ ...status, agentRunId: null })).toThrow();
+    expect(() => realtimeContract.parseRealtimeFrame({ ...status, agentRunId: ids.runId, state: "idle" })).toThrow();
+    expect(realtimeContract.parseRealtimeFrame({
+      ...status, agentRunId: null, state: "idle", failureCode: null,
+    })).toMatchObject({ agentRunId: null, state: "idle" });
   });
 });

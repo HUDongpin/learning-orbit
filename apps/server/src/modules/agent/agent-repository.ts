@@ -6,7 +6,14 @@ import { inTransaction } from "../../db/transactions.js";
 import { lockRoomInTransaction } from "../rooms/room-lock.js";
 
 export type AgentRunOwner = Readonly<{ teacherId: string | null; roomMemberId: string | null; actorId: string; role: "teacher" | "student" }>;
-export type AgentRunRequest = Readonly<{ roomId: string; triggerEventId: string; correlationId: string; owner: AgentRunOwner; sessionId?: string }>;
+export type AgentRunRequest = Readonly<{
+  roomId: string;
+  triggerEventId: string;
+  owner: AgentRunOwner;
+  sessionId?: string;
+  beforeCreate?: (tx: PoolClient) => Promise<void>;
+}>;
+export type AgentRunCreation = Readonly<{ run: AgentRun; created: boolean }>;
 
 type RunRow = {
   agent_run_id: string; room_id: string; state: AgentRun["state"]; trigger_event_id: string;
@@ -66,20 +73,67 @@ export class AgentRepository {
     if (active.rowCount !== 1) throw new Error("ROOM_NOT_FOUND");
   }
 
-  async getOrCreateRunAndJob(input: AgentRunRequest): Promise<AgentRun> {
+  async getOrCreateRunAndJob(input: AgentRunRequest, retryTriggerConflict = true): Promise<AgentRunCreation> {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, input.roomId);
+      const room = await tx.query<{ status: string; agent_enabled: boolean; nova_actor_id: string }>(
+        `SELECT status, agent_enabled, nova_actor_id FROM classroom_room
+         WHERE room_id = $1 FOR UPDATE`,
+        [input.roomId],
+      );
+      const lockedRoom = room.rows[0];
+      if (!lockedRoom) throw new Error("ROOM_NOT_FOUND");
       await this.requireActiveSession(tx, input.roomId, input.owner, input.sessionId);
       const existing = await tx.query<RunRow>(`SELECT ${runColumns} FROM agent_run WHERE room_id = $1 AND trigger_event_id = $2 FOR UPDATE`, [input.roomId, input.triggerEventId]);
-      if (existing.rowCount === 1) return asRun(existing.rows[0]!);
-      const trigger = await tx.query<{ room_seq: string; correlation_id: string }>(
-        `SELECT room_seq, correlation_id FROM room_event WHERE room_id = $1 AND event_id = $2`,
+      if (existing.rowCount === 1) return { run: asRun(existing.rows[0]!), created: false };
+      if (lockedRoom.status !== "open") throw new Error("ROOM_NOT_OPEN");
+      if (!lockedRoom.agent_enabled) throw new Error("AGENT_DISABLED");
+      const trigger = await tx.query<{
+        room_seq: string;
+        correlation_id: string;
+        actor_kind: string;
+        type: string;
+        operation: string;
+        payload: { messageId?: unknown };
+      }>(
+        `SELECT room_seq, correlation_id, actor_kind, type, operation, payload
+         FROM room_event WHERE room_id = $1 AND event_id = $2`,
         [input.roomId, input.triggerEventId],
       );
       if (trigger.rowCount !== 1) throw new Error("TRIGGER_EVENT_NOT_FOUND");
+      const triggerRow = trigger.rows[0]!;
+      if (triggerRow.actor_kind === "agent") throw new Error("AGENT_CANNOT_TRIGGER_AGENT");
+      if (!["message.added", "message.revised"].includes(triggerRow.type)
+        || triggerRow.operation === "retract"
+        || typeof triggerRow.payload?.messageId !== "string"
+        || !UUID.test(triggerRow.payload.messageId)) {
+        throw new Error("TRIGGER_EVENT_NOT_ACTIVE");
+      }
+      const latest = await tx.query<{ room_seq: string; operation: string; payload: { mentions?: unknown } }>(
+        `SELECT room_seq, operation, payload FROM room_event
+         WHERE room_id = $1
+           AND type IN ('message.added','message.revised','message.retracted')
+           AND payload->>'messageId' = $2
+         ORDER BY revision DESC, room_seq DESC LIMIT 1 FOR SHARE`,
+        [input.roomId, triggerRow.payload.messageId],
+      );
+      const latestRow = latest.rows[0];
+      if (!latestRow || latestRow.operation === "retract") throw new Error("TRIGGER_EVENT_NOT_ACTIVE");
+      const latestMentions = Array.isArray(latestRow.payload?.mentions) ? latestRow.payload.mentions : [];
+      if (input.owner.role !== "teacher" && !latestMentions.includes(lockedRoom.nova_actor_id)) {
+        throw new Error("EXPLICIT_TRIGGER_REQUIRED");
+      }
+      const active = await tx.query(
+        `SELECT agent_run_id FROM agent_run
+         WHERE room_id = $1 AND state IN ('queued','running','streaming')
+         ORDER BY created_at LIMIT 1 FOR UPDATE`,
+        [input.roomId],
+      );
+      if (active.rowCount !== 0) throw new Error("AGENT_RUN_ALREADY_ACTIVE");
+      await input.beforeCreate?.(tx);
       const agentRunId = randomUUID();
       const now = this.clock.now();
-      const seq = Number(trigger.rows[0]!.room_seq);
+      const seq = Number(latestRow.room_seq);
       await tx.query(
         `INSERT INTO agent_run(agent_run_id, room_id, state, trigger_event_id,
           requested_by_teacher_id, requested_by_room_member_id, input_from_room_seq,
@@ -88,14 +142,14 @@ export class AgentRepository {
          VALUES ($1, $2, 'queued', $3, $4, $5, 1, $6, $7, 'fixture',
           'fixture-socratic-v1', 'socratic-facilitator-v1', 'socratic-policy-v1', $8, $8)`,
         [agentRunId, input.roomId, input.triggerEventId, input.owner.teacherId,
-          input.owner.roomMemberId, seq, input.correlationId, now],
+          input.owner.roomMemberId, seq, triggerRow.correlation_id, now],
       );
       await tx.query(
         `INSERT INTO worker_job(job_type, room_id, source_event_id, dedupe_key,
           correlation_id, payload, run_after)
          VALUES ('agent.execute.v1', $1, $2, $3, $4, $5, $6)`,
         [input.roomId, input.triggerEventId, `agent.execute.v1:${agentRunId}`,
-          input.correlationId, { agentRunId }, now],
+          triggerRow.correlation_id, { agentRunId }, now],
       );
       await tx.query(
         `INSERT INTO agent_run_transition(transition_id, agent_run_id, from_state,
@@ -104,8 +158,13 @@ export class AgentRepository {
         [randomUUID(), agentRunId, input.triggerEventId, now],
       );
       const created = await tx.query<RunRow>(`SELECT ${runColumns} FROM agent_run WHERE agent_run_id = $1`, [agentRunId]);
-      return asRun(created.rows[0]!);
+      return { run: asRun(created.rows[0]!), created: true };
     }).catch((error) => {
+      if (retryTriggerConflict
+        && (error as { code?: string }).code === "23505"
+        && (error as { constraint?: string }).constraint === "one_agent_run_per_trigger") {
+        return this.getOrCreateRunAndJob(input, false);
+      }
       if ((error as { code?: string }).code === "23505" && (error as { constraint?: string }).constraint === "one_active_agent_run_per_room") throw new Error("AGENT_RUN_ALREADY_ACTIVE");
       throw error;
     });

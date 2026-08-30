@@ -1,12 +1,14 @@
-import type {
-  AgentStatusFrame,
-  AuthSession,
-  MediaStatusFrame,
-  RoomDetails,
-  RoomEventEnvelope,
-  ServerFrame,
-  ServerPresence,
-  ServerTyping,
+import {
+  realtimeContract,
+  type AgentCurrentState,
+  type AgentStatusFrame,
+  type AuthSession,
+  type MediaStatusFrame,
+  type RoomDetails,
+  type RoomEventEnvelope,
+  type ServerFrame,
+  type ServerPresence,
+  type ServerTyping,
 } from "@learning-orbit/contracts";
 
 import { RoomSocket, roomWebSocketUrl, type SocketLike } from "../realtime/room-socket";
@@ -16,7 +18,7 @@ import { makeSessionCommandBus, type RoomCommandIntent, type SessionCommandBus }
 import { SessionGatewayError, type SessionGateway } from "./session-gateway";
 import { createSessionState, sessionReducer, type SessionState } from "./session-store";
 
-type EventGateway = Pick<SessionGateway, "getRoomEvents">;
+type EventGateway = Pick<SessionGateway, "getRoomEvents"> & Partial<Pick<SessionGateway, "getAgentCurrent">>;
 type AckFrame = Extract<ServerFrame, { type: "ack" }>;
 type RejectFrame = Extract<ServerFrame, { type: "reject" }>;
 type DegradedFrame = Extract<ServerFrame, { type: "degraded" }>;
@@ -24,6 +26,45 @@ const MAX_ACK_HISTORY = 500;
 const MAX_REJECT_HISTORY = 100;
 const MAX_MEDIA_STATUS_HISTORY = 500;
 const TERMINAL_MEDIA_STATES = new Set<MediaStatusFrame["state"]>(["quarantined", "failed", "deleted"]);
+const TERMINAL_AGENT_STATES = new Set<AgentStatusFrame["state"]>(["completed", "blocked_by_policy", "cancelled", "failed"]);
+const AGENT_PROGRESS_RANK: Readonly<Partial<Record<AgentStatusFrame["state"], number>>> = {
+  queued: 0,
+  running: 1,
+  streaming: 2,
+};
+const AGENT_HEALTH_RANK: Readonly<Record<AgentStatusFrame["serviceHealth"], number>> = {
+  healthy: 0,
+  degraded: 1,
+  unavailable: 2,
+};
+const DEFAULT_AGENT_STATUS_TIMEOUT_MS = 1_500;
+
+function agentFrameIdentityIsValid(frame: AgentStatusFrame): boolean {
+  return frame.state === "idle"
+    ? frame.agentRunId === null && frame.failureCode === null
+    : frame.agentRunId !== null;
+}
+
+function acceptAgentRunTransition(
+  previous: AgentStatusFrame,
+  next: AgentStatusFrame,
+  previousTime: number | undefined,
+  nextTime: number,
+  authoritativeReplacement: boolean,
+): boolean {
+  if (previous.agentRunId === null) {
+    return next.agentRunId !== null && previousTime !== undefined && nextTime > previousTime;
+  }
+  if (next.agentRunId === null || previousTime === undefined || nextTime < previousTime) return false;
+  if (previous.agentRunId !== next.agentRunId) {
+    return nextTime > previousTime
+      && (authoritativeReplacement || TERMINAL_AGENT_STATES.has(previous.state));
+  }
+  if (previous.state === next.state) return nextTime > previousTime;
+  if (TERMINAL_AGENT_STATES.has(previous.state)) return false;
+  if (TERMINAL_AGENT_STATES.has(next.state)) return true;
+  return (AGENT_PROGRESS_RANK[next.state] ?? -1) > (AGENT_PROGRESS_RANK[previous.state] ?? -1);
+}
 
 export type HydratedSessionOptions = Readonly<{
   session: AuthSession;
@@ -35,6 +76,9 @@ export type HydratedSessionOptions = Readonly<{
   onRoomUnavailable?: () => void;
   commandClock?: () => Date;
   commandUuid?: () => string;
+  agentCurrent?: AgentCurrentState;
+  agentServiceUnavailable?: boolean;
+  agentStatusTimeoutMs?: number;
 }>;
 
 class VolatileCursorStorage implements Storage {
@@ -70,6 +114,8 @@ export class HydratedSessionState {
   readonly mediaStatuses = new Map<string, MediaStatusFrame>();
   readonly degraded = new Map<string, DegradedFrame>();
   agentStatus: AgentStatusFrame | undefined;
+  agentServiceUnavailable = false;
+  agentStatusPending = false;
   lastProjectionResult: ProjectionAcceptResult | undefined;
   lastServerTime: string | undefined;
   recoveryError: string | undefined;
@@ -82,6 +128,13 @@ export class HydratedSessionState {
   #onRoomUnavailable: () => void;
   #pageLimit: number;
   #requiredThroughSeq = 0;
+  #agentRunUpdatedAt: number | undefined;
+  #agentMetaUpdatedAt: number | undefined;
+  #agentRefresh: Promise<void> | undefined;
+  #agentRefreshAbort: AbortController | undefined;
+  #agentRefreshGeneration = 0;
+  #agentLiveVersion = 0;
+  #agentStatusTimeoutMs: number;
   readonly #listeners = new Set<() => void>();
   #session: AuthSession | undefined;
   #room: RoomDetails | undefined;
@@ -91,7 +144,7 @@ export class HydratedSessionState {
     session: AuthSession,
     room: RoomDetails,
     private readonly gateway: EventGateway,
-    options: Pick<HydratedSessionOptions, "pageLimit" | "retryDelaysMs" | "onSessionExpired" | "onRoomUnavailable" | "commandClock" | "commandUuid">,
+    options: Pick<HydratedSessionOptions, "pageLimit" | "retryDelaysMs" | "onSessionExpired" | "onRoomUnavailable" | "commandClock" | "commandUuid" | "agentCurrent" | "agentServiceUnavailable" | "agentStatusTimeoutMs">,
   ) {
     const participantActorIds = room.participants.map(({ actorId }) => actorId);
     if (new Set(participantActorIds).size !== room.participants.length
@@ -115,7 +168,16 @@ export class HydratedSessionState {
     }
     this.#onSessionExpired = options.onSessionExpired ?? (() => undefined);
     this.#onRoomUnavailable = options.onRoomUnavailable ?? (() => undefined);
+    this.#agentStatusTimeoutMs = options.agentStatusTimeoutMs ?? DEFAULT_AGENT_STATUS_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.#agentStatusTimeoutMs) || this.#agentStatusTimeoutMs < 1 || this.#agentStatusTimeoutMs > 30_000) {
+      throw new Error("AGENT_STATUS_TIMEOUT_INVALID");
+    }
     this.#state = createSessionState(room.roomId, room.status, room.startsAt, room.closesAt);
+    if (options.agentCurrent) {
+      this.#mergeAgentCurrent(options.agentCurrent);
+    } else {
+      this.agentServiceUnavailable = options.agentServiceUnavailable === true;
+    }
     this.ledger = new EventLedger(room.roomId);
     this.projections = new ProjectionSync(room.roomId, session);
     this.socket = new RoomSocket(
@@ -247,6 +309,16 @@ export class HydratedSessionState {
 
   async whenIdle(): Promise<void> {
     await (this.#recovery ?? Promise.resolve());
+    let refresh = this.#agentRefresh;
+    while (refresh) {
+      await refresh;
+      if (this.#agentRefresh === refresh) break;
+      refresh = this.#agentRefresh;
+    }
+  }
+
+  refreshAgentCurrent(): Promise<void> {
+    return this.#refreshAgentCurrent();
   }
 
   progress(now: number): Readonly<{ elapsedSeconds: number; ratio: number }> {
@@ -341,6 +413,10 @@ export class HydratedSessionState {
         void recovery.catch(() => this.#failRecovery("ROOM_EVENT_RECOVERY_FAILED"));
         return;
       }
+      if (frame.type === "resume_complete") {
+        void this.#refreshAgentCurrent();
+        return;
+      }
       if (frame.type === "ack") {
         this.acks.set(frame.commandId, frame);
         if (this.acks.size > MAX_ACK_HISTORY) this.acks.delete(this.acks.keys().next().value!);
@@ -372,7 +448,10 @@ export class HydratedSessionState {
       }
       if (frame.type === "agent_status") {
         if (frame.roomId !== this.room.roomId) throw new Error("AGENT_STATUS_ROOM_MISMATCH");
-        this.agentStatus = frame;
+        if (this.#mergeAgentFrame(frame, Date.parse(frame.updatedAt), Date.parse(frame.updatedAt))) {
+          this.#agentLiveVersion += 1;
+          this.agentServiceUnavailable = false;
+        }
         return;
       }
       if (frame.type === "projection") { this.lastProjectionResult = this.projections.accept(frame); return; }
@@ -388,6 +467,10 @@ export class HydratedSessionState {
   }
 
   #clearState(notify: boolean): void {
+    this.#agentRefreshGeneration += 1;
+    this.#agentRefreshAbort?.abort();
+    this.#agentRefreshAbort = undefined;
+    this.#agentRefresh = undefined;
     this.socket.destroy();
     this.ledger.destroy();
     this.projections.clearAuthority();
@@ -398,6 +481,10 @@ export class HydratedSessionState {
     this.mediaStatuses.clear();
     this.degraded.clear();
     this.agentStatus = undefined;
+    this.agentServiceUnavailable = false;
+    this.agentStatusPending = false;
+    this.#agentRunUpdatedAt = undefined;
+    this.#agentMetaUpdatedAt = undefined;
     this.lastProjectionResult = undefined;
     this.lastServerTime = undefined;
     this.recoveryError = undefined;
@@ -417,5 +504,139 @@ export class HydratedSessionState {
 
   #notify(): void {
     for (const listener of this.#listeners) listener();
+  }
+
+  #mergeAgentCurrent(current: AgentCurrentState): void {
+    if (current.roomId !== this.room.roomId) throw new Error("AGENT_CURRENT_ROOM_MISMATCH");
+    const frame = realtimeContract.parseServerFrame({
+      type: "agent_status",
+      roomId: current.roomId,
+      agentRunId: current.run?.agentRunId ?? null,
+      state: current.run?.state ?? "idle",
+      serviceHealth: current.serviceHealth,
+      agentEnabled: current.agentEnabled,
+      updatedAt: current.updatedAt,
+      failureCode: current.run?.failureCode ?? null,
+    });
+    if (frame.type !== "agent_status") throw new Error("AGENT_CURRENT_FRAME_INVALID");
+    this.#mergeAgentFrame(
+      frame,
+      current.run ? Date.parse(current.run.updatedAt) : Date.parse(current.updatedAt),
+      Date.parse(current.updatedAt),
+      true,
+    );
+  }
+
+  #mergeAgentFrame(
+    frame: AgentStatusFrame,
+    runTime: number,
+    metaTime: number,
+    authoritativeReplacement = false,
+  ): boolean {
+    if (!agentFrameIdentityIsValid(frame) || !Number.isFinite(runTime) || !Number.isFinite(metaTime)) {
+      throw new Error("AGENT_STATUS_INVALID");
+    }
+    const previous = this.agentStatus;
+    if (!previous) {
+      this.#agentRunUpdatedAt = runTime;
+      this.#agentMetaUpdatedAt = metaTime;
+      this.agentStatus = {
+        ...frame,
+        updatedAt: new Date(Math.max(runTime, metaTime)).toISOString(),
+      };
+      return true;
+    }
+
+    const acceptRun = acceptAgentRunTransition(
+      previous,
+      frame,
+      this.#agentRunUpdatedAt,
+      runTime,
+      authoritativeReplacement,
+    );
+    const previousMetaTime = this.#agentMetaUpdatedAt;
+    const newerMeta = previousMetaTime === undefined || metaTime > previousMetaTime;
+    const sameMeta = previousMetaTime !== undefined && metaTime === previousMetaTime;
+    const acceptHealth = newerMeta || (sameMeta
+      && AGENT_HEALTH_RANK[frame.serviceHealth] > AGENT_HEALTH_RANK[previous.serviceHealth]);
+    const acceptEnabled = newerMeta || (sameMeta && previous.agentEnabled && !frame.agentEnabled);
+
+    if (acceptRun) this.#agentRunUpdatedAt = runTime;
+    if (newerMeta) this.#agentMetaUpdatedAt = metaTime;
+    const combinedTime = Math.max(this.#agentRunUpdatedAt ?? Number.NEGATIVE_INFINITY, this.#agentMetaUpdatedAt ?? Number.NEGATIVE_INFINITY);
+    this.agentStatus = {
+      ...previous,
+      ...(acceptRun ? {
+        agentRunId: frame.agentRunId,
+        state: frame.state,
+        failureCode: frame.failureCode,
+      } : {}),
+      ...(acceptHealth ? { serviceHealth: frame.serviceHealth } : {}),
+      ...(acceptEnabled ? { agentEnabled: frame.agentEnabled } : {}),
+      updatedAt: new Date(combinedTime).toISOString(),
+    };
+    return acceptRun || acceptHealth || acceptEnabled;
+  }
+
+  #refreshAgentCurrent(): Promise<void> {
+    if (!this.gateway.getAgentCurrent || !this.#room) return Promise.resolve();
+    const generation = this.#agentRefreshGeneration + 1;
+    const liveVersion = this.#agentLiveVersion;
+    this.#agentRefreshGeneration = generation;
+    this.#agentRefreshAbort?.abort();
+    this.agentStatusPending = true;
+    this.#notify();
+    const controller = new AbortController();
+    this.#agentRefreshAbort = controller;
+    const roomId = this.#room.roomId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("AGENT_STATUS_TIMEOUT"));
+      }, this.#agentStatusTimeoutMs);
+    });
+    let removeAbortListener: () => void = () => undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      const onAbort = () => reject(new Error("AGENT_STATUS_ABORTED"));
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => controller.signal.removeEventListener("abort", onAbort);
+    });
+    const task = (async () => {
+      try {
+        const current = await Promise.race([
+          this.gateway.getAgentCurrent!(roomId, { signal: controller.signal }),
+          timeout,
+          aborted,
+        ]);
+        if (generation !== this.#agentRefreshGeneration || !this.#room) return;
+        this.#mergeAgentCurrent(current);
+        this.agentServiceUnavailable = false;
+        this.#notify();
+      } catch (error) {
+        if (generation !== this.#agentRefreshGeneration || !this.#room) return;
+        if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
+          this.clearForSessionExpiry();
+        } else if (error instanceof SessionGatewayError && (error.code === "FORBIDDEN" || error.code === "ROOM_NOT_FOUND")) {
+          this.clearForRoomUnavailable();
+        } else if (liveVersion !== this.#agentLiveVersion) {
+          return;
+        } else {
+          this.agentServiceUnavailable = true;
+          this.#notify();
+        }
+      } finally {
+        removeAbortListener();
+        if (timer !== undefined) clearTimeout(timer);
+        if (generation === this.#agentRefreshGeneration) {
+          this.agentStatusPending = false;
+          this.#agentRefreshAbort = undefined;
+          this.#agentRefresh = undefined;
+          this.#notify();
+        }
+      }
+    })();
+    this.#agentRefresh = task;
+    return task;
   }
 }

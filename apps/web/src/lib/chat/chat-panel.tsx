@@ -13,6 +13,7 @@ import { MediaComposer, type MediaUploadFunction, type ObjectUrlPort } from "../
 import { MediaRecorderControl } from "../media/media-recorder";
 import { uploadMediaFile, type MediaGateway } from "../media/media-upload";
 import { MediaSlotReservations } from "../media/media-slot-reservations";
+import { AgentStatusPanel } from "../agent/agent-status-panel";
 
 type RejectView = Pick<Extract<ServerFrame, { type: "reject" }>, "code" | "commandId" | "retryable">;
 type PendingSubmission = Readonly<{ commandId: string; replyTo: string | null; mediaIds: readonly string[] }>;
@@ -25,6 +26,9 @@ export interface ClassroomChatRuntime {
   readonly rejects: readonly RejectView[];
   readonly acks: ReadonlyMap<string, unknown>;
   readonly mediaStatuses?: ReadonlyMap<string, MediaStatusFrame>;
+  readonly agentStatus?: Extract<ServerFrame, { type: "agent_status" }> | undefined;
+  readonly agentServiceUnavailable?: boolean | undefined;
+  readonly agentStatusPending?: boolean | undefined;
   messages(): LedgerMessage[];
   pendingCommandIds(): string[];
   sendIntent(intent: RoomCommandIntent): string;
@@ -109,6 +113,11 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
         </div>
         <span className="panel-meta">{runtime.sessionState.connected ? "WebSocket 已連線" : "等待連線"}</span>
       </header>
+      <AgentStatusPanel
+        {...(runtime.agentStatus ? { frame: runtime.agentStatus } : {})}
+        serviceUnavailable={runtime.agentServiceUnavailable === true}
+        pending={runtime.agentStatusPending === true}
+      />
       <div className="messages" aria-live="polite">
         {messages.length ? messages.map((message) => {
           const replySequence = message.replyTo ? sequenceByMessageId.get(message.replyTo) : undefined;

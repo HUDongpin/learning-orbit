@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { authContract, analyticsContract, roomHttpContract, teacherRoomListContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
@@ -57,6 +57,55 @@ interface AuthRouteDependencies {
 const genericAccepted = { accepted: true };
 const recoveryBody = "This sign-in link is no longer available. Request a new link.";
 
+function agentRouteError(error: unknown): { status: number; code: string } {
+  const code = error instanceof AgentError
+    ? error.code
+    : error instanceof Error && error.message === "INVALID_AGENT_COMMAND"
+      ? "INVALID_AGENT_COMMAND"
+      : "INTERNAL";
+  const status = ["FORBIDDEN", "EXPLICIT_TRIGGER_REQUIRED"].includes(code) ? 403
+    : ["ROOM_NOT_FOUND", "TRIGGER_EVENT_NOT_FOUND", "AGENT_RUN_NOT_FOUND"].includes(code) ? 404
+      : ["INVALID_AGENT_COMMAND", "AGENT_CANNOT_TRIGGER_AGENT", "TRIGGER_EVENT_NOT_ACTIVE"].includes(code) ? 422
+        : ["ROOM_NOT_OPEN", "AGENT_DISABLED", "AGENT_RUN_ALREADY_ACTIVE", "AGENT_RUN_NOT_ACTIVE"].includes(code) ? 409
+          : code === "RATE_LIMITED" ? 429
+            : code === "AGENT_SERVICE_UNAVAILABLE" ? 503
+              : 500;
+  return status === 500 ? { status, code: "INTERNAL" } : { status, code };
+}
+
+function agentCommandErrorHandler(error: FastifyError, _request: FastifyRequest, reply: FastifyReply) {
+  reply.header("Cache-Control", "no-store");
+  if (["FST_ERR_CTP_INVALID_JSON_BODY", "FST_ERR_CTP_EMPTY_JSON_BODY"].includes(error.code)) {
+    return reply.code(422).type("application/json").send({ code: "INVALID_AGENT_COMMAND" });
+  }
+  return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function agentRateDecision(value: unknown): "allow" | "deny" {
+  if (!value || typeof value !== "object") throw new Error("AGENT_RATE_RESULT_INVALID");
+  const result = value as Record<string, unknown>;
+  if (result.isAllowed === true) {
+    if (typeof result.key !== "string") throw new Error("AGENT_RATE_RESULT_INVALID");
+    return "allow";
+  }
+  if (result.isAllowed !== false
+    || typeof result.key !== "string"
+    || !isFiniteNumber(result.max)
+    || !isFiniteNumber(result.timeWindow)
+    || !isFiniteNumber(result.remaining)
+    || !isFiniteNumber(result.ttl)
+    || !isFiniteNumber(result.ttlInSeconds)
+    || typeof result.isExceeded !== "boolean"
+    || typeof result.isBanned !== "boolean") {
+    throw new Error("AGENT_RATE_RESULT_INVALID");
+  }
+  return result.isExceeded ? "deny" : "allow";
+}
+
 function sessionCookie(token: string): { value: string; options: { httpOnly: true; secure: true; sameSite: "lax"; path: "/"; maxAge: number } } {
   return { value: token, options: { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 8 * 60 * 60 } };
 }
@@ -65,6 +114,15 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
   const failedJoinLimit = app.createRateLimit({
     ...ratePolicies.failedJoin,
     keyGenerator: normalizedRequestIp,
+  });
+  const agentRateKeys = new WeakMap<object, string>();
+  const agentTriggerLimit = app.createRateLimit({
+    ...ratePolicies.agentTrigger,
+    keyGenerator: (request) => {
+      const key = agentRateKeys.get(request);
+      if (!key) throw new Error("AGENT_RATE_KEY_INVALID");
+      return key;
+    },
   });
 
   app.post("/v1/auth/teacher/magic-link", {
@@ -422,43 +480,67 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     });
   }
 
-  if (dependencies.agent && dependencies.sessions) {
-    const runRoute = async (request: any, reply: any, action: "request" | "cancel" | "current" | "settings") => {
-      const session = await dependencies.sessions!.get(request.cookies.lo_session);
-      const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
-      if (!session || !sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
-      const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      try {
-        if (action === "request") {
-          const input = agentContract.parseRequest(request.body);
-          const result = await dependencies.agent!.request(session, sessionId, roomId, input.triggerEventId);
-          return reply.code(202).type("application/json").send(JSON.parse(agentContract.encodeAccepted({ agentRunId: result.agentRunId, state: result.state })));
-        }
-        if (action === "cancel") {
-          const runId = (request.params as { agentRunId?: string }).agentRunId ?? "";
-          agentContract.parseCancel(request.body);
-          const result = await dependencies.agent!.cancel(session, sessionId, roomId, runId);
-          return reply.code(202).type("application/json").send(JSON.parse(agentContract.encodeCancelAccepted({ agentRunId: result.agentRunId, state: "cancelled" })));
-        }
-        if (action === "current") {
-          const result = await dependencies.agent!.current(session, sessionId, roomId);
-          reply.header("Cache-Control", "no-store");
-          return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeCurrent(result)));
-        }
-        const input = agentContract.parseSettings(request.body);
-        const result = await dependencies.agent!.settings(session, sessionId, roomId, input.enabled);
-        return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeSettingsResponse(result)));
-      } catch (error) {
-        const code = error instanceof AgentError ? error.code : error instanceof Error ? error.message : "INTERNAL";
-        const status = code === "FORBIDDEN" ? 403 : code === "ROOM_NOT_FOUND" || code === "TRIGGER_EVENT_NOT_FOUND" ? 404 : ["INVALID_AGENT_COMMAND", "AGENT_CANNOT_TRIGGER_AGENT", "TRIGGER_EVENT_NOT_ACTIVE"].includes(code) ? 422 : ["ROOM_NOT_OPEN", "AGENT_DISABLED", "AGENT_RUN_ALREADY_ACTIVE", "AGENT_RUN_NOT_ACTIVE"].includes(code) ? 409 : code === "INTERNAL" ? 500 : 400;
-        return reply.code(status).type("application/json").send({ code });
+  const runRoute = async (request: any, reply: any, action: "request" | "cancel" | "current" | "settings") => {
+    reply.header("Cache-Control", "no-store");
+    if (!dependencies.sessions) {
+      return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    }
+    let session;
+    let sessionId;
+    try {
+      session = await dependencies.sessions.get(request.cookies.lo_session);
+      sessionId = await dependencies.sessions.getSessionId(request.cookies.lo_session);
+    } catch {
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    }
+    if (!session || !sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    if (Object.keys(request.query as Record<string, unknown>).length !== 0) {
+      return reply.code(400).type("application/json").send({ code: "INVALID_QUERY" });
+    }
+    if (!dependencies.agent) return reply.code(503).type("application/json").send({ code: "AGENT_SERVICE_UNAVAILABLE" });
+    const roomId = (request.params as { roomId?: string }).roomId ?? "";
+    try {
+      if (action === "request") {
+        const input = agentContract.parseRequest(request.body);
+        const result = await dependencies.agent.request(session, sessionId, roomId, input.triggerEventId, {
+          admitCreate: async () => {
+            agentRateKeys.set(request, `${roomId.toLowerCase()}:${session.actorId.toLowerCase()}`);
+            let limit;
+            try {
+              limit = await agentTriggerLimit(request);
+            } finally {
+              agentRateKeys.delete(request);
+            }
+            if (agentRateDecision(limit) === "deny") throw new AgentError("RATE_LIMITED");
+          },
+        });
+        return reply.code(result.created ? 202 : 200).type("application/json").send(JSON.parse(agentContract.encodeAccepted({
+          agentRunId: result.run.agentRunId,
+          state: result.run.state,
+        })));
       }
-    };
-    app.post("/v1/rooms/:roomId/agent/runs", async (request, reply) => runRoute(request, reply, "request"));
-    app.post("/v1/rooms/:roomId/agent/runs/:agentRunId/cancel", async (request, reply) => runRoute(request, reply, "cancel"));
-    app.get("/v1/rooms/:roomId/agent/current", async (request, reply) => runRoute(request, reply, "current"));
-    app.put("/v1/rooms/:roomId/agent/settings", async (request, reply) => runRoute(request, reply, "settings"));
-  }
+      if (action === "cancel") {
+        const runId = (request.params as { agentRunId?: string }).agentRunId ?? "";
+        agentContract.parseCancel(request.body);
+        const result = await dependencies.agent.cancel(session, sessionId, roomId, runId);
+        return reply.code(202).type("application/json").send(JSON.parse(agentContract.encodeCancelAccepted({ agentRunId: result.agentRunId, state: "cancelled" })));
+      }
+      if (action === "current") {
+        const result = await dependencies.agent.current(session, sessionId, roomId);
+        return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeCurrent(result)));
+      }
+      const input = agentContract.parseSettings(request.body);
+      const result = await dependencies.agent.settings(session, sessionId, roomId, input.enabled);
+      return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeSettingsResponse(result)));
+    } catch (error) {
+      const result = agentRouteError(error);
+      return reply.code(result.status).type("application/json").send({ code: result.code });
+    }
+  };
+  app.post("/v1/rooms/:roomId/agent/runs", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "request"));
+  app.post("/v1/rooms/:roomId/agent/runs/:agentRunId/cancel", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "cancel"));
+  app.get("/v1/rooms/:roomId/agent/current", async (request, reply) => runRoute(request, reply, "current"));
+  app.put("/v1/rooms/:roomId/agent/settings", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "settings"));
 
   if (dependencies.agentProviderHealth) {
     app.post(routes.internal.agent.health(), async (request, reply) => {

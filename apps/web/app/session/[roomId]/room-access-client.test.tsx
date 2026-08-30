@@ -93,6 +93,13 @@ function gateway(session: AuthSession = student, overrides: Partial<SessionGatew
     completeMediaUpload: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getMedia: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getMediaDownloadGrant: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
+    getAgentCurrent: vi.fn(async (requestedRoomId: string) => ({
+      roomId: requestedRoomId,
+      run: null,
+      serviceHealth: "unavailable" as const,
+      agentEnabled: false,
+      updatedAt: "2026-08-31T01:00:00.000Z",
+    })),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -106,14 +113,63 @@ describe("room route access guard", () => {
   });
 
   it("hydrates a same-room student only after server room confirmation", async () => {
+    vi.stubGlobal("WebSocket", undefined);
     const api = gateway();
     render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
     expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
     expect(screen.getByText("探索者 A")).toBeInTheDocument();
     expect(api.getRoom).toHaveBeenCalledWith(roomId);
+    expect(api.getAgentCurrent).toHaveBeenCalledWith(roomId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(api.getRoomEvents).toHaveBeenCalledWith(roomId, 0, 500);
     expect(screen.getByText(/已按伺服器 roomSeq 同步 0 個 RoomEvent/)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/本地演示|模擬即時|太陽是生態系統/);
+  });
+
+  it("keeps text chat available while the Agent status endpoint fails closed", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    const api = gateway(student, {
+      getAgentCurrent: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+    });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Agent 狀態目前無法確認");
+    expect(screen.getByLabelText("輸入訊息")).toBeInTheDocument();
+  });
+
+  it("bounds a stalled Agent status request and aborts it without blocking text chat", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    let requestSignal: AbortSignal | undefined;
+    const api = gateway(student, {
+      getAgentCurrent: vi.fn(async (_requestedRoomId: string, options?: { signal?: AbortSignal }) => {
+        requestSignal = options?.signal;
+        return await new Promise<never>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        });
+      }),
+    });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} agentStatusTimeoutMs={100} />);
+    expect(await screen.findByRole("heading", { name: "生態系統探究" }, { timeout: 500 })).toBeInTheDocument();
+    expect(requestSignal?.aborted).toBe(false);
+    expect(screen.getByText(/正在向伺服器確認 Nova 狀態/u)).toBeInTheDocument();
+    expect(await screen.findByText(/Agent 狀態目前無法確認/u, {}, { timeout: 500 })).toBeInTheDocument();
+    expect(requestSignal?.aborted).toBe(true);
+    expect(screen.getByRole("alert")).toHaveTextContent("Agent 狀態目前無法確認");
+    expect(screen.getByLabelText("輸入訊息")).toBeInTheDocument();
+  });
+
+  it("aborts the Agent status request when the room route is disposed", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    let requestSignal: AbortSignal | undefined;
+    const api = gateway(student, {
+      getAgentCurrent: vi.fn(async (_requestedRoomId: string, options?: { signal?: AbortSignal }) => {
+        requestSignal = options?.signal;
+        return await new Promise<never>(() => undefined);
+      }),
+    });
+    const { unmount } = render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} agentStatusTimeoutMs={10_000} />);
+    await waitFor(() => expect(api.getAgentCurrent).toHaveBeenCalledOnce());
+    unmount();
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it("renders only confirmed chat events and keeps a newly sent command pending until server delivery", async () => {
@@ -177,6 +233,20 @@ describe("room route access guard", () => {
     rerender(<RoomAccessClient gateway={api} mode="teacher" roomId={otherRoomId} />);
     expect(screen.getByText("正在驗證 Session 與房間權限…")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "第二個課堂" })).toBeInTheDocument();
+  });
+
+  it("hides a same-room ready tree immediately while role authority is revalidated", async () => {
+    const never = new Promise<AuthSession>(() => undefined);
+    const getSession = vi.fn()
+      .mockResolvedValueOnce(teacher)
+      .mockImplementationOnce(async () => await never);
+    const api = gateway(teacher, { getSession });
+    const { rerender } = render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+    expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
+    rerender(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    expect(screen.getByText("正在驗證 Session 與房間權限…")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "生態系統探究" })).not.toBeInTheDocument();
+    expect(screen.queryByText("返回教師工作台")).not.toBeInTheDocument();
   });
 
   it("fails closed for a student URL naming another room without requesting its details", async () => {

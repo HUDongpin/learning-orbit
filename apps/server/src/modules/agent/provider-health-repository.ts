@@ -28,9 +28,15 @@ export class ProviderHealthRepository {
     return result.rowCount === 1 ? "accepted" : "ignored_stale";
   }
 
-  async current(providerId: string, manifestSha256: string): Promise<ProviderHealth> {
-    const result = await this.pool.query<{ health: ProviderHealth; checked_at: Date }>(
-      `SELECT health, checked_at FROM agent_provider_health WHERE provider_id = $1 AND manifest_sha256 = $2`,
+  async current(
+    providerId: string,
+    manifestSha256: string,
+    database: Pick<Pool, "query"> = this.pool,
+    lockForAdmission = false,
+  ): Promise<ProviderHealth> {
+    const result = await database.query<{ health: ProviderHealth; checked_at: Date }>(
+      `SELECT health, checked_at FROM agent_provider_health
+       WHERE provider_id = $1 AND manifest_sha256 = $2${lockForAdmission ? " FOR SHARE" : ""}`,
       [providerId, manifestSha256],
     );
     const row = result.rows[0];

@@ -23,16 +23,27 @@ function parse<T>(value: unknown, validator: ValidateFunction<T>, code: string):
   return value;
 }
 
+function requireAgentStatusIdentity(frame: RealtimeFrame | ServerFrame, code: string): void {
+  if (frame.type !== "agent_status") return;
+  const idle = frame.state === "idle";
+  if ((idle && (frame.agentRunId !== null || frame.failureCode !== null))
+    || (!idle && frame.agentRunId === null)) {
+    throw new Error(code);
+  }
+}
+
 export const realtimeContract = {
   parseRealtimeFrame(value: unknown): RealtimeFrame {
     const frame = parse(value, realtimeValidator, "INVALID_REALTIME_FRAME");
     // Generic realtime and HTTP-page transport validates envelopes and extension events; known core payload semantics live in the registry.
     if (frame.type === "event") parseCoreRoomEvent(frame.event);
+    requireAgentStatusIdentity(frame, "INVALID_REALTIME_FRAME");
     return frame;
   },
   parseServerFrame(value: unknown): ServerFrame {
     const frame = parse(value, serverValidator, "INVALID_SERVER_FRAME");
     if (frame.type === "event") parseCoreRoomEvent(frame.event);
+    requireAgentStatusIdentity(frame, "INVALID_SERVER_FRAME");
     return frame;
   },
   encodeClientFrame(value: unknown): string {

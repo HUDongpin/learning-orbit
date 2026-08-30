@@ -9,6 +9,8 @@ export class AgentError extends Error {
   constructor(readonly code: string) { super(code); }
 }
 
+export type AgentRequestOptions = Readonly<{ admitCreate?: () => Promise<void> }>;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class AgentService {
@@ -26,26 +28,31 @@ export class AgentService {
     this.manifestSha256 = options.manifestSha256 ?? "0".repeat(64);
   }
 
-  async request(principal: AuthSession, sessionId: string, roomId: string, triggerEventId: string) {
+  async request(principal: AuthSession, sessionId: string, roomId: string, triggerEventId: string, options: AgentRequestOptions = {}) {
     const owner = await this.authorizeMember(principal, sessionId, roomId);
-    const room = await this.pool.query<{ status: string; agent_enabled: boolean; nova_actor_id: string }>("SELECT status, agent_enabled, nova_actor_id FROM classroom_room WHERE room_id = $1", [roomId]);
-    const roomRow = room.rows[0];
-    if (!roomRow) throw new AgentError("ROOM_NOT_FOUND");
-    if (roomRow.status !== "open") throw new AgentError("ROOM_NOT_OPEN");
-    if (!roomRow.agent_enabled) throw new AgentError("AGENT_DISABLED");
-    const trigger = await this.pool.query<{ event_id: string; actor_kind: string; operation: string; payload: { mentions?: unknown }; correlation_id: string }>(
-      "SELECT event_id, actor_kind, operation, payload, correlation_id FROM room_event WHERE room_id = $1 AND event_id = $2", [roomId, triggerEventId],
-    );
-    const event = trigger.rows[0];
-    if (!event) throw new AgentError("TRIGGER_EVENT_NOT_FOUND");
-    if (event.actor_kind === "agent") throw new AgentError("AGENT_CANNOT_TRIGGER_AGENT");
-    if (event.operation === "retract") throw new AgentError("TRIGGER_EVENT_NOT_ACTIVE");
-    const mentions = Array.isArray(event.payload?.mentions) ? event.payload.mentions : [];
-    if (owner.role !== "teacher" && !mentions.includes(roomRow.nova_actor_id)) throw new AgentError("EXPLICIT_TRIGGER_REQUIRED");
     try {
-      return await this.repository.getOrCreateRunAndJob({ roomId, triggerEventId, correlationId: event.correlation_id, owner, sessionId });
+      return await this.repository.getOrCreateRunAndJob({
+        roomId,
+        triggerEventId,
+        owner,
+        sessionId,
+        beforeCreate: async (tx) => {
+          const providerHealth = await this.healthRepository.current(this.providerId, this.manifestSha256, tx, true);
+          if (providerHealth !== "healthy") throw new AgentError("AGENT_SERVICE_UNAVAILABLE");
+          await options.admitCreate?.();
+        },
+      });
     } catch (error) {
-      if (error instanceof Error && ["AGENT_RUN_ALREADY_ACTIVE", "TRIGGER_EVENT_NOT_FOUND"].includes(error.message)) throw new AgentError(error.message);
+      if (error instanceof Error && [
+        "ROOM_NOT_FOUND",
+        "ROOM_NOT_OPEN",
+        "AGENT_DISABLED",
+        "TRIGGER_EVENT_NOT_FOUND",
+        "AGENT_CANNOT_TRIGGER_AGENT",
+        "TRIGGER_EVENT_NOT_ACTIVE",
+        "EXPLICIT_TRIGGER_REQUIRED",
+        "AGENT_RUN_ALREADY_ACTIVE",
+      ].includes(error.message)) throw new AgentError(error.message);
       throw error;
     }
   }
