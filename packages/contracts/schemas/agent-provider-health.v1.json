@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://learning-orbit.local/schemas/agent-provider-health.v1.json", "title": "AgentProviderHealthContract", "x-learning-orbit-python-ingress": true, "type": "object", "additionalProperties": false, "maxProperties": 0,
+  "$defs": {
+    "Request": { "type": "object", "additionalProperties": false, "required": ["probeId", "providerId", "manifestSha256", "health", "checkedAt", "reasonCode"], "properties": { "probeId": { "type": "string", "format": "uuid" }, "providerId": { "type": "string", "pattern": "^[a-z0-9._-]{1,64}$" }, "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "health": { "enum": ["healthy", "degraded", "unavailable"] }, "checkedAt": { "type": "string", "format": "date-time" }, "reasonCode": { "type": ["string", "null"], "pattern": "^[A-Z0-9_]{1,64}$" } } },
+    "Response": { "oneOf": [{ "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "enum": ["accepted", "ignored_stale"] } } }, { "type": "object", "additionalProperties": false, "required": ["status", "code"], "properties": { "status": { "const": "rejected" }, "code": { "enum": ["PROBE_ASSERTION_INVALID", "PROVIDER_SCOPE_MISMATCH", "HEALTH_SAMPLE_TIME_INVALID"] } } }] }
+  }
+}

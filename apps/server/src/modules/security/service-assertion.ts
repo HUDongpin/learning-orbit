@@ -28,6 +28,19 @@ export type ServiceAssertionExpected = Readonly<{
   maxClockSkewMs?: number;
 }>;
 
+export type ProviderHealthAssertionExpected = Readonly<{
+  providerId: string;
+  manifestSha256: string;
+  audience?: string;
+  maxClockSkewMs?: number;
+}>;
+
+export type ProviderHealthAssertionIdentity = Readonly<{
+  issuer: string;
+  keyId: string;
+  providerId: string;
+}>;
+
 type TrustConfig = Readonly<{
   version: number;
   keys: ReadonlyArray<Readonly<{ issuer: string; keyId: string; publicKeyPem: string }>>;
@@ -179,6 +192,45 @@ export function authorizeServiceAssertion(
     if (!verify(null, canonicalJson(protectedFields(envelope)), record.publicKey, decodeBase64Url(envelope.signature, 128))) assertionInvalid();
     if (!hashMatches(body, envelope.bodySha256)) assertionInvalid();
     return assertClaim(body, expected);
+  } catch {
+    return assertionInvalid();
+  }
+}
+
+/**
+ * Authorize the one non-room internal mutation: a short-lived provider health
+ * probe.  It deliberately shares the closed envelope, canonical body hash,
+ * Ed25519 trust, and time checks above, but has no worker-job claim fields.
+ */
+export function authorizeProviderHealthAssertion(
+  raw: unknown,
+  body: unknown,
+  expected: ProviderHealthAssertionExpected,
+  trust: ServiceAssertionTrust,
+  now: Date,
+): ProviderHealthAssertionIdentity {
+  try {
+    if (!(now instanceof Date) || !Number.isSafeInteger(now.getTime()) || typeof trust?.resolve !== "function") assertionInvalid();
+    if (!boundedString(expected.providerId, 64) || !/^[a-z0-9._-]{1,64}$/.test(expected.providerId)
+      || !/^[a-f0-9]{64}$/.test(expected.manifestSha256)) assertionInvalid();
+    if (!isObject(body) || Object.keys(body).some((key) => [
+      "jobId", "jobType", "roomId", "sourceEventId", "dedupeKey", "correlationId", "claimGeneration", "claimToken", "workerId",
+    ].includes(key))) assertionInvalid();
+    const encoded = decodeBase64Url(raw);
+    const parsed = parseCanonicalJson(encoded);
+    const envelope = closedEnvelope(parsed);
+    if (!Buffer.from(canonicalJson(parsed)).equals(encoded)) assertionInvalid();
+    const record = trust.resolve(envelope.issuer, envelope.keyId);
+    const audience = expected.audience ?? "internal.agent.health";
+    if (!record || envelope.audience !== audience || envelope.subject !== `provider-health-probe:${expected.providerId}`) assertionInvalid();
+    const issuedAt = parseRfc3339Utc(envelope.issuedAt);
+    const expiresAt = parseRfc3339Utc(envelope.expiresAt);
+    const skew = expected.maxClockSkewMs ?? 0;
+    if (!Number.isSafeInteger(skew) || skew < 0 || skew > MAX_CLOCK_SKEW_MS || expiresAt - issuedAt < 1_000 || expiresAt - issuedAt > 30_000) assertionInvalid();
+    if (issuedAt - now.getTime() > skew || now.getTime() - expiresAt > skew) assertionInvalid();
+    if (!verify(null, canonicalJson(protectedFields(envelope)), record.publicKey, decodeBase64Url(envelope.signature, 128))) assertionInvalid();
+    if (!hashMatches(body, envelope.bodySha256)) assertionInvalid();
+    return { issuer: record.issuer, keyId: record.keyId, providerId: expected.providerId };
   } catch {
     return assertionInvalid();
   }

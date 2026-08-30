@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://learning-orbit.local/schemas/agent-command.v1.json", "title": "AgentCommandCatalog", "type": "object", "additionalProperties": false, "maxProperties": 0,
+  "$defs": {
+    "RequestAgentRunInput": { "type": "object", "additionalProperties": false, "required": ["triggerEventId"], "properties": { "triggerEventId": { "type": "string", "format": "uuid" } } },
+    "CancelAgentRunInput": { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+    "AgentRunAccepted": { "type": "object", "additionalProperties": false, "required": ["agentRunId", "state"], "properties": { "agentRunId": { "type": "string", "format": "uuid" }, "state": { "enum": ["queued", "running", "streaming", "completed", "blocked_by_policy", "cancelled", "failed"] } } },
+    "CancelAgentRunAccepted": { "type": "object", "additionalProperties": false, "required": ["agentRunId", "state"], "properties": { "agentRunId": { "type": "string", "format": "uuid" }, "state": { "const": "cancelled" } } },
+    "AgentSettingsInput": { "type": "object", "additionalProperties": false, "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } },
+    "AgentSettingsResponse": { "type": "object", "additionalProperties": false, "required": ["enabled", "cancelledRunId"], "properties": { "enabled": { "type": "boolean" }, "cancelledRunId": { "type": ["string", "null"], "format": "uuid" } } }
+  }
+}

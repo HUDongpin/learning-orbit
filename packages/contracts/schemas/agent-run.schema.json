@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/agent-run.schema.json",
+  "title": "AgentRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agentRunId", "roomId", "state", "triggerEventId", "requestedByActorId", "requestedByRole", "inputFromRoomSeq", "inputThroughRoomSeq", "modelProvider", "modelId", "promptVersion", "policyVersion", "failureCode", "createdAt", "updatedAt"],
+  "properties": {
+    "agentRunId": { "type": "string", "format": "uuid" }, "roomId": { "type": "string", "format": "uuid" },
+    "state": { "enum": ["queued", "running", "streaming", "completed", "blocked_by_policy", "cancelled", "failed"] },
+    "triggerEventId": { "type": "string", "format": "uuid" }, "requestedByActorId": { "type": "string", "format": "uuid" },
+    "requestedByRole": { "enum": ["student", "teacher"] }, "inputFromRoomSeq": { "type": "integer", "minimum": 1 }, "inputThroughRoomSeq": { "type": "integer", "minimum": 1 },
+    "modelProvider": { "type": "string", "minLength": 1, "maxLength": 128 }, "modelId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "promptVersion": { "type": "string", "minLength": 1, "maxLength": 128 }, "policyVersion": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "failureCode": { "type": ["string", "null"], "maxLength": 100 }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

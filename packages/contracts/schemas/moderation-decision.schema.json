@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://learning-orbit.local/schemas/moderation-decision.schema.json", "title": "ModerationDecision", "type": "object", "additionalProperties": false,
+  "required": ["decisionId", "roomId", "subjectKind", "subjectId", "action", "policyVersion", "reasonCodes", "decidedBy", "createdAt"],
+  "properties": { "decisionId": { "type": "string", "format": "uuid" }, "roomId": { "type": "string", "format": "uuid" }, "subjectKind": { "enum": ["agent_output", "derived_artifact", "media"] }, "subjectId": { "type": "string", "format": "uuid" }, "action": { "enum": ["allow", "warn", "hold", "redact"] }, "policyVersion": { "type": "string", "minLength": 1, "maxLength": 128 }, "reasonCodes": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z0-9_]{1,64}$" }, "maxItems": 32, "uniqueItems": true }, "decidedBy": { "enum": ["deterministic_policy", "approved_provider", "teacher"] }, "createdAt": { "type": "string", "format": "date-time" } }
+}

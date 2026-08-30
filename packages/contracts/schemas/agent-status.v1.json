@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://learning-orbit.local/schemas/agent-status.v1.json", "title": "AgentStatusFrame", "type": "object", "additionalProperties": false,
+  "required": ["type", "roomId", "agentRunId", "state", "serviceHealth", "agentEnabled", "updatedAt", "failureCode"],
+  "properties": { "type": { "const": "agent_status" }, "roomId": { "type": "string", "format": "uuid" }, "agentRunId": { "type": ["string", "null"], "format": "uuid" }, "state": { "enum": ["idle", "queued", "running", "streaming", "completed", "blocked_by_policy", "cancelled", "failed"] }, "serviceHealth": { "enum": ["healthy", "degraded", "unavailable"] }, "agentEnabled": { "type": "boolean" }, "updatedAt": { "type": "string", "format": "date-time" }, "failureCode": { "type": ["string", "null"], "maxLength": 100 } }
+}
