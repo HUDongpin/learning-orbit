@@ -6,6 +6,7 @@ export { realtimeContract } from "./realtime.js";
 export { makeSchemaAjv } from "./schema-ajv.js";
 export { authContract } from "./auth.js";
 export { roomHttpContract } from "./room.js";
+export { roomInternalAutoCloseContract } from "./room-internal-auto-close.js";
 export type { AuthSession } from "./generated/auth-session.v1.js";
 export type { TeacherMagicLinkAccepted, TeacherMagicLinkRequest } from "./generated/auth-http.v1.js";
 export type { CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomDetails, RoomEventPage } from "./generated/room-http.v1.js";
@@ -20,4 +21,8 @@ export type {
 } from "./generated/core-room-event-payloads.v1.js";
 export type { RoomCommand } from "./generated/room-command.v1.js";
 export type { RoomEventEnvelope } from "./generated/room-event-envelope.v1.js";
+export type {
+  Request as RoomInternalAutoCloseRequest,
+  Response as RoomInternalAutoCloseResponse,
+} from "./generated/room-internal-auto-close.v1.js";
 export type { ClientFrame, RealtimeFrame, ServerFrame } from "./generated/realtime-frame.v1.js";

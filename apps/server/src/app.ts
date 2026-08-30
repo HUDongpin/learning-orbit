@@ -13,6 +13,12 @@ import { createSmtpMailer, type MailTransport } from "./modules/auth/mailer.js";
 import { SessionService } from "./modules/auth/session-service.js";
 import { RoomService, type RoomCodeSource } from "./modules/rooms/room-service.js";
 import { CodeHasher } from "./modules/rooms/seat-codes.js";
+import { createCoreEventPayloadRegistry } from "@learning-orbit/contracts";
+import { RoomEventRepository } from "./modules/rooms/room-event-repository.js";
+import { RoomLifecycleService } from "./modules/rooms/lifecycle-service.js";
+import type { ServiceAssertionTrust } from "./modules/security/service-assertion.js";
+import { loadServiceAssertionTrust } from "./modules/security/service-assertion.js";
+import { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { registerRoutes } from "./routes.js";
 
@@ -27,6 +33,8 @@ export interface BuildAppOptions {
   createSmtpMailer?: typeof createSmtpMailer;
   codeHasher?: CodeHasher;
   roomCodeSource?: RoomCodeSource;
+  serviceAssertionTrust?: ServiceAssertionTrust;
+  jobClaims?: JobClaimAuthority;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -63,12 +71,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ? new CodeHasher(config.roomCodePepperCurrentVersion, config.roomCodePeppers)
     : undefined;
   const codeHasher = options.codeHasher ?? configuredHasher;
+  const lifecycle = pool ? new RoomLifecycleService(new RoomEventRepository(pool, createCoreEventPayloadRegistry(), clock), clock) : undefined;
+  const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
+    ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   await registerRoutes(app, {
     magicLinks: pool ? new MagicLinkService(pool, clock, config.publicBaseOrigin, sender) : undefined,
     sessions: pool ? new SessionService(pool) : undefined,
     rooms: pool && codeHasher
-      ? new RoomService(pool, codeHasher, clock, options.roomCodeSource)
+      ? new RoomService(pool, codeHasher, clock, options.roomCodeSource, lifecycle)
       : undefined,
+    lifecycle,
+    serviceAssertionTrust: assertionTrust,
+    jobClaims: options.jobClaims ?? new JobClaimAuthority(),
   });
   app.addHook("onClose", async () => {
     if (ownsPool) await pool?.end();

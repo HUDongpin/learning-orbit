@@ -8,6 +8,7 @@ import {
   parseCoreRoomEvent,
   parseRoomEventEnvelope,
   realtimeContract,
+  roomInternalAutoCloseContract,
   routes,
 } from "../src/index.js";
 
@@ -69,6 +70,44 @@ describe("strict schema compilation and command behavior", () => {
 });
 
 describe("envelope, HTTP catalog, and realtime behavior", () => {
+  it("closes the internal auto-close request and every bounded response branch", () => {
+    const request = {
+      jobId: uuid,
+      jobType: "room.auto-close.v1",
+      roomId: laterUuid,
+      sourceEventId: "33333333-3333-4333-8333-333333333333",
+      dedupeKey: `room.auto-close.v1:${laterUuid}`,
+      correlationId: "44444444-4444-4444-8444-444444444444",
+      claimGeneration: "1",
+      claimToken: "55555555-5555-4555-8555-555555555555",
+      workerId: "worker-room-clock-1",
+      closesAt: at,
+    };
+
+    expect(roomInternalAutoCloseContract.parseRequest(request)).toEqual(request);
+    expect(() => roomInternalAutoCloseContract.parseRequest({ ...request, extra: true }))
+      .toThrow("INVALID_ROOM_INTERNAL_AUTO_CLOSE_REQUEST");
+    expect(() => roomInternalAutoCloseContract.parseRequest({
+      ...request,
+      jobType: "other.job.v1",
+    })).toThrow("INVALID_ROOM_INTERNAL_AUTO_CLOSE_REQUEST");
+    for (const response of [
+      { status: "completed", code: "ROOM_CLOSED" },
+      { status: "completed", code: "ALREADY_CLOSED" },
+      { status: "retryable", code: "ROOM_CLOSE_NOT_DUE" },
+      { status: "rejected", code: "SERVICE_ASSERTION_INVALID" },
+      { status: "rejected", code: "JOB_CLAIM_STALE" },
+      { status: "rejected", code: "JOB_FAMILY_IDENTITY_INVALID" },
+      { status: "rejected", code: "ROOM_DELETION_IN_PROGRESS" },
+    ]) {
+      expect(JSON.parse(roomInternalAutoCloseContract.encodeResponse(response))).toEqual(response);
+    }
+    expect(() => roomInternalAutoCloseContract.encodeResponse({
+      status: "rejected",
+      code: "DATABASE_DETAIL",
+    })).toThrow("INVALID_ROOM_INTERNAL_AUTO_CLOSE_RESPONSE");
+  });
+
   it("parses strict extension envelopes without pretending they are core events", () => {
     const extension = {
       ...event("human", "teacher", { changeKind: "review" }),

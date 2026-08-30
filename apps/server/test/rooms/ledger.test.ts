@@ -227,6 +227,31 @@ describe("atomic RoomEvent ledger and outbox", () => {
     ]);
   });
 
+  it("finds causation only through the locked transaction and validates stored authority", async () => {
+    const room = await seedRoom();
+    const causationId = randomUUID();
+    const event = await append(room.roomId, openedDraft(room, causationId));
+    const ledger = repository();
+
+    await ledger.transact(room.roomId, async (context) => {
+      expect(await context.findByCausation(causationId)).toEqual(event);
+      expect(await context.findByCausation(randomUUID())).toBeNull();
+    });
+    await expect(ledger.transact(
+      room.roomId,
+      (context) => context.findByCausation("not-a-uuid"),
+    )).rejects.toEqual(new RoomError("INVALID_COMMAND"));
+
+    await pool.query(
+      "UPDATE outbox_event SET room_seq = 99 WHERE event_id = $1",
+      [event.eventId],
+    );
+    await expect(ledger.transact(
+      room.roomId,
+      (context) => context.findByCausation(causationId),
+    )).rejects.toThrow("INVALID_STORED_ROOM_EVENT");
+  });
+
   it("rejects a reused causation ID when any immutable draft field conflicts", async () => {
     const room = await seedRoom();
     const causationId = randomUUID();

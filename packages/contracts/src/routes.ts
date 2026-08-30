@@ -48,4 +48,9 @@ export const routes = {
     resume: (roomId: string) => room(roomId, "/resume"),
     close: (roomId: string) => room(roomId, "/close"),
   },
+  internal: {
+    rooms: {
+      autoClose: () => "/internal/rooms/auto-close",
+    },
+  },
 } as const;

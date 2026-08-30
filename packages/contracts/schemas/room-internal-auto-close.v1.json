@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/room-internal-auto-close.v1.json",
+  "title": "RoomInternalAutoCloseContract",
+  "x-learning-orbit-python-ingress": true,
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "jobType",
+        "roomId",
+        "sourceEventId",
+        "dedupeKey",
+        "correlationId",
+        "claimGeneration",
+        "claimToken",
+        "workerId",
+        "closesAt"
+      ],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid" },
+        "jobType": { "const": "room.auto-close.v1" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "sourceEventId": { "type": "string", "format": "uuid" },
+        "dedupeKey": {
+          "type": "string",
+          "pattern": "^room\\.auto-close\\.v1:[0-9a-f-]{36}$"
+        },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "claimGeneration": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$"
+        },
+        "claimToken": { "type": "string", "format": "uuid" },
+        "workerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "closesAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "completed" },
+            "code": { "enum": ["ROOM_CLOSED", "ALREADY_CLOSED"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "retryable" },
+            "code": { "const": "ROOM_CLOSE_NOT_DUE" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "rejected" },
+            "code": {
+              "enum": [
+                "SERVICE_ASSERTION_INVALID",
+                "JOB_CLAIM_STALE",
+                "JOB_FAMILY_IDENTITY_INVALID",
+                "ROOM_DELETION_IN_PROGRESS"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

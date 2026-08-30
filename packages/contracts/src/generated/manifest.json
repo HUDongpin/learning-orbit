@@ -35,6 +35,11 @@
       "file": "room-http.v1.json",
       "id": "https://learning-orbit.local/schemas/room-http.v1.json",
       "sha256": "556647d94f6c604c48df9d33da6b0f3ec1be9edc67c06954a2563668596a6a33"
+    },
+    {
+      "file": "room-internal-auto-close.v1.json",
+      "id": "https://learning-orbit.local/schemas/room-internal-auto-close.v1.json",
+      "sha256": "09cf63756b8c03c473e308c4d1cad87e09c85d5a580caaf1ceb0f0395df8ea15"
     }
   ],
   "generatedModules": [
@@ -71,6 +76,11 @@
     {
       "sourceFile": "room-http.v1.json",
       "moduleFile": "room-http.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "room-internal-auto-close.v1.json",
+      "moduleFile": "room-internal-auto-close.v1.ts",
       "language": "typescript"
     }
   ]

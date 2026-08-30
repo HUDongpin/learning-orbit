@@ -17,6 +17,8 @@ import {
   lockRoomInTransaction,
 } from "./room-lock.js";
 import { CodeHasher, makeRoomCode, makeSeatCode } from "./seat-codes.js";
+import type { RoomLifecycleService } from "./lifecycle-service.js";
+import { RoomError } from "./errors.js";
 
 const STUDENT_PSEUDONYMS = [
   "探索者 A",
@@ -105,6 +107,7 @@ export class RoomService {
     private readonly codeHasher: CodeHasher,
     private readonly clock: Clock,
     private readonly codeSource: RoomCodeSource = secureRoomCodeSource,
+    private readonly lifecycle?: RoomLifecycleService,
   ) {
     this.#dummySeatHashes = Array.from(
       { length: STUDENT_PSEUDONYMS.length },
@@ -226,6 +229,17 @@ export class RoomService {
     if (!UUID_PATTERN.test(roomId)) throw new RoomServiceError("ROOM_NOT_FOUND");
     if (identity.role === "student" && identity.roomId !== roomId) {
       throw new RoomServiceError("ROOM_NOT_FOUND");
+    }
+    const allowed = identity.role === "teacher"
+      ? await this.pool.query("SELECT 1 FROM classroom_room WHERE room_id = $1 AND teacher_id = $2", [roomId, identity.teacherId])
+      : await this.pool.query("SELECT 1 FROM classroom_room WHERE room_id = $1", [roomId]);
+    if (allowed.rowCount !== 1) throw new RoomServiceError("ROOM_NOT_FOUND");
+    try { await this.lifecycle?.closeIfDue(roomId); }
+    catch (error) {
+      if (error instanceof RoomError && error.code === "FORBIDDEN") {
+        throw new RoomServiceError("ROOM_NOT_FOUND");
+      }
+      throw error;
     }
     const accessSql = identity.role === "teacher"
       ? "r.teacher_id = $2"

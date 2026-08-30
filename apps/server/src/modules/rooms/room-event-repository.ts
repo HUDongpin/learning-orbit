@@ -60,6 +60,7 @@ export interface RoomEventTransactionContext {
   readonly client: PoolClient;
   readonly room: LockedRoomSnapshot;
   readonly append: (draft: unknown) => Promise<RoomEventEnvelope>;
+  readonly findByCausation: (causationId: string) => Promise<RoomEventEnvelope | null>;
 }
 
 interface LockedRoomRow {
@@ -328,21 +329,28 @@ export class RoomEventRepository {
       if (!locked) throw new RoomError("FORBIDDEN");
       const room = roomSnapshot(locked);
       let nextRoomSeq = room.next_room_seq;
-      let appendFailure: unknown;
-      let appendTail: Promise<void> = Promise.resolve();
-      let acceptingAppends = true;
+      let operationFailure: unknown;
+      let operationTail: Promise<void> = Promise.resolve();
+      let acceptingOperations = true;
 
-      const appendOne = async (draft: unknown): Promise<RoomEventEnvelope> => {
-        if (appendFailure !== undefined) throw appendFailure;
-        const candidate = this.#validateDraft(roomId, nextRoomSeq, draft);
+      const findOneByCausation = async (
+        causationId: string,
+      ): Promise<RoomEventEnvelope | null> => {
+        if (!UUID_PATTERN.test(causationId)) invalidCommand();
         const existing = await client.query<StoredEventRow>(
           `${storedEventSelect}
            WHERE e.room_id = $1 AND e.causation_id = $2`,
-          [roomId, candidate.causationId],
+          [roomId, causationId],
         );
-        const priorRow = existing.rows[0];
-        if (priorRow) {
-          const prior = parseStoredEvent(priorRow, this.payloads);
+        const row = existing.rows[0];
+        return row ? parseStoredEvent(row, this.payloads) : null;
+      };
+
+      const appendOne = async (draft: unknown): Promise<RoomEventEnvelope> => {
+        if (operationFailure !== undefined) throw operationFailure;
+        const candidate = this.#validateDraft(roomId, nextRoomSeq, draft);
+        const prior = await findOneByCausation(candidate.causationId);
+        if (prior) {
           if (!immutableDraftMatches(prior, candidate)) invalidCommand();
           return prior;
         }
@@ -394,28 +402,34 @@ export class RoomEventRepository {
         return candidate;
       };
 
-      const append = (draft: unknown): Promise<RoomEventEnvelope> => {
-        if (!acceptingAppends) {
+      const schedule = <Value>(operation: () => Promise<Value>): Promise<Value> => {
+        if (!acceptingOperations) {
           return Promise.reject(new Error("ROOM_EVENT_TRANSACTION_CLOSED"));
         }
-        const result = appendTail.then(() => appendOne(draft));
-        appendTail = result.then(
+        const result = operationTail.then(operation);
+        operationTail = result.then(
           () => undefined,
-          (error: unknown) => { appendFailure = error; },
+          (error: unknown) => { operationFailure = error; },
         );
         return result;
       };
+      const append = (draft: unknown): Promise<RoomEventEnvelope> => (
+        schedule(() => appendOne(draft))
+      );
+      const findByCausation = (causationId: string): Promise<RoomEventEnvelope | null> => (
+        schedule(() => findOneByCausation(causationId))
+      );
 
       const workOutcome = await Promise.resolve()
-        .then(() => work({ client, room, append }))
+        .then(() => work({ client, room, append, findByCausation }))
         .then(
           (value) => ({ ok: true as const, value }),
           (error: unknown) => ({ ok: false as const, error }),
         );
-      acceptingAppends = false;
-      await appendTail;
+      acceptingOperations = false;
+      await operationTail;
       if (!workOutcome.ok) throw workOutcome.error;
-      if (appendFailure !== undefined) throw appendFailure;
+      if (operationFailure !== undefined) throw operationFailure;
       return workOutcome.value;
     });
   }

@@ -5,11 +5,23 @@ import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
 import { RoomServiceError, type RoomService } from "./modules/rooms/room-service.js";
 import { normalizedRequestIp, ratePolicies } from "./modules/security/rate-policies.js";
+import type { RoomLifecycleService } from "./modules/rooms/lifecycle-service.js";
+import { InternalAutoCloseRoute } from "./modules/rooms/internal-auto-close-route.js";
+import type { ServiceAssertionTrust } from "./modules/security/service-assertion.js";
+import {
+  roomInternalAutoCloseContract,
+  routes,
+  type RoomInternalAutoCloseResponse,
+} from "@learning-orbit/contracts";
+import type { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
 
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
   sessions: SessionService | undefined;
   rooms: RoomService | undefined;
+  lifecycle: RoomLifecycleService | undefined;
+  serviceAssertionTrust: ServiceAssertionTrust | undefined;
+  jobClaims: JobClaimAuthority;
 }
 
 const genericAccepted = { accepted: true };
@@ -135,5 +147,29 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       throw error;
     }
   });
+
+  if (dependencies.lifecycle && dependencies.serviceAssertionTrust) {
+    const internal = new InternalAutoCloseRoute(
+      dependencies.lifecycle.events,
+      dependencies.lifecycle.clock,
+      dependencies.serviceAssertionTrust,
+      dependencies.jobClaims,
+    );
+    app.post(routes.internal.rooms.autoClose(), async (request, reply) => {
+      const assertion = request.headers["x-lo-service-assertion"];
+      let result: RoomInternalAutoCloseResponse;
+      try {
+        result = await internal.handle(assertion, request.body);
+      } catch {
+        // Internal failures are deliberately content-free at the HTTP boundary.
+        // Do not let Fastify serialize database/validation details from an
+        // assertion-bearing request; the worker can retry from its claim.
+        return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      }
+      const status = result.status === "completed" || result.status === "retryable" ? 200
+        : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      return reply.code(status).type("application/json").send(JSON.parse(roomInternalAutoCloseContract.encodeResponse(result)));
+    });
+  }
 
 }
