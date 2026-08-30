@@ -30,6 +30,7 @@ type ControlSink = (frame: ServerFrame) => void;
 type ConnectFactory = () => SocketLike;
 
 const OPEN = 1;
+const MAX_PENDING_COMMANDS = 100;
 
 export function roomWebSocketUrl(
   roomId: string,
@@ -68,7 +69,6 @@ export class RoomSocket {
   #sink: EventSink;
   #controlSink: ControlSink;
   #pending = new Map<string, RoomCommand>();
-  #seen = new Set<string>();
   #retryDelays: readonly number[];
   #retryIndex = 0;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -76,6 +76,7 @@ export class RoomSocket {
   #socket: SocketLike | undefined;
   #connectFactory: ConnectFactory | undefined;
   #closed = false;
+  #resumeReady = false;
   #now: () => number;
   #onSessionExpired: () => void;
   #onRoomUnavailable: (code: 4403 | 4410) => void;
@@ -128,9 +129,20 @@ export class RoomSocket {
   send(command: RoomCommand, socket: SocketLike = this.#socket ?? { send: () => undefined }): void {
     // Validate before storing so forged or malformed commands never become
     // automatic reconnect retries.
-    realtimeContract.encodeRoomCommand(command);
-    this.#pending.set(command.commandId, command);
-    if (isOpen(socket)) socket.send(realtimeContract.encodeClientFrame({ type: "command", command }));
+    const encoded = realtimeContract.encodeRoomCommand(command);
+    const existing = this.#pending.get(command.commandId);
+    if (existing && realtimeContract.encodeRoomCommand(existing) !== encoded) throw new Error("COMMAND_ID_CONFLICT");
+    if (!existing && this.#pending.size >= MAX_PENDING_COMMANDS) throw new Error("PENDING_COMMAND_LIMIT");
+    const stable = existing ?? command;
+    if (!existing) this.#pending.set(command.commandId, stable);
+    if (this.#resumeReady && isOpen(socket)) {
+      try {
+        socket.send(realtimeContract.encodeClientFrame({ type: "command", command: stable }));
+      } catch {
+        try { socket.close?.(1011, "command send failed"); } catch { /* reconnect below */ }
+        if (this.#socket === socket) this.onClose();
+      }
+    }
   }
 
   onFrame(value: unknown, socket: SocketLike = this.#socket ?? { send: () => undefined }): void {
@@ -147,6 +159,8 @@ export class RoomSocket {
         return;
       }
       this.#retryIndex = 0;
+      this.#resumeReady = true;
+      this.#onConnectionChange(true);
       this.#flushPending(socket);
       this.#controlSink(frame);
     } else if (frame.type === "snapshot_required") {
@@ -169,13 +183,14 @@ export class RoomSocket {
 
   connect(factory: ConnectFactory): SocketLike {
     this.#closed = false;
+    this.#resumeReady = false;
     this.#connectFactory = factory;
     this.#clearRetry();
+    this.#onConnectionChange(false);
     const socket = factory();
     this.#socket = socket;
     socket.addEventListener?.("open", () => {
       if (!this.#closed && this.#socket === socket) {
-        this.#onConnectionChange(true);
         this.#sendHello(socket);
       }
     });
@@ -192,14 +207,15 @@ export class RoomSocket {
       if (this.#socket === socket) this.onClose(event.code);
     });
     if (isOpen(socket)) {
-      this.#onConnectionChange(true);
       this.#sendHello(socket);
     }
     return socket;
   }
 
   onClose(code?: number): void {
+    if (this.#closed) return;
     this.#socket = undefined;
+    this.#resumeReady = false;
     this.#onConnectionChange(false);
     if (code === 4400) {
       this.#closed = true;
@@ -254,6 +270,7 @@ export class RoomSocket {
 
   close(): void {
     this.#closed = true;
+    this.#resumeReady = false;
     this.#clearRetry();
     this.#socket?.close?.(1000, "client closed");
     this.#socket = undefined;
@@ -263,7 +280,6 @@ export class RoomSocket {
   destroy(): void {
     this.close();
     this.#pending.clear();
-    this.#seen.clear();
     this.#storage.removeItem(this.#storageKey);
     this.#readonlyRoomId = "";
     this.#storageKey = "";
@@ -291,18 +307,13 @@ export class RoomSocket {
   }
 
   #acceptEvent(event: RoomEventEnvelope): void {
-    if (event.roomId !== this.#readonlyRoomId || this.#seen.has(event.eventId)) return;
-    if (event.roomSeq <= this.lastRoomSeq) {
-      this.#seen.add(event.eventId);
-      return;
-    }
+    if (event.roomId !== this.#readonlyRoomId || event.roomSeq <= this.lastRoomSeq) return;
     // A server replay must be monotonic. If a gap arrives, expose it to the
     // caller without jumping the cursor; the next resume will repair it.
     if (event.roomSeq !== this.lastRoomSeq + 1) {
       this.#controlSink({ type: "snapshot_required", afterSeq: this.lastRoomSeq, throughRoomSeq: event.roomSeq - 1 });
       return;
     }
-    this.#seen.add(event.eventId);
     this.#acceptCursor(event.roomSeq);
     this.#sink(event);
   }

@@ -11,6 +11,7 @@ import {
 } from "../../../src/lib/session/session-gateway";
 import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
 import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
+import { ChatPanel } from "../../../src/lib/chat/chat-panel";
 
 type AccessMode = "student" | "teacher";
 type AccessState =
@@ -46,6 +47,7 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   useEffect(() => {
     let active = true;
     let hydrated: HydratedSessionState | undefined;
+    let unsubscribeHydrated: (() => void) | undefined;
     void (async () => {
       if (!validRoomId) return;
       try {
@@ -79,7 +81,8 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
           room: details,
           gateway: api,
           onSessionExpired: () => {
-            if (active) setState({ kind: "checking" });
+            if (!active) return;
+            setState({ kind: "checking" });
             router.replace(mode === "teacher" ? "/login?role=teacher" : "/login");
           },
           onRoomUnavailable: () => {
@@ -90,6 +93,9 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
           hydrated.dispose();
           return;
         }
+        unsubscribeHydrated = hydrated.subscribe(() => {
+          if (active) renderHydratedUpdate();
+        });
         if (details.status !== "closed" && typeof globalThis.WebSocket === "function") hydrated.connectNative();
         setState(session.role === "teacher" ? { kind: "teacher-ready", hydrated } : { kind: "student-ready", hydrated });
       } catch (error) {
@@ -105,13 +111,12 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
         setState({ kind: "unavailable" });
       }
     })();
-    return () => { active = false; hydrated?.dispose(); };
+    return () => {
+      active = false;
+      unsubscribeHydrated?.();
+      hydrated?.dispose();
+    };
   }, [api, mode, roomId, router, validRoomId]);
-
-  useEffect(() => {
-    if (state.kind !== "student-ready" && state.kind !== "teacher-ready") return;
-    return state.hydrated.subscribe(() => renderHydratedUpdate());
-  }, [state]);
 
   async function logout() {
     setLoggingOut(true);
@@ -127,6 +132,11 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   }
 
   if (state.kind === "checking") {
+    return <main className="room-gate-shell room-gate-centered" aria-busy="true"><p role="status">正在驗證 Session 與房間權限…</p></main>;
+  }
+
+  if ((state.kind === "student-ready" || state.kind === "teacher-ready")
+    && state.hydrated.sessionState.roomId !== roomId) {
     return <main className="room-gate-shell room-gate-centered" aria-busy="true"><p role="status">正在驗證 Session 與房間權限…</p></main>;
   }
 
@@ -196,6 +206,7 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
   const liveState = hydrated.sessionState;
   return (
     <main className="room-gate-shell">
+      <a className="skip-link" href="#classroom-workspace">跳到共學工作區</a>
       <header className="room-gate-header">
         <div className="orbit-brand">
           <div className="orbit-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="4" /><ellipse cx="16" cy="16" rx="13" ry="6" /><ellipse cx="16" cy="16" rx="6" ry="13" /></svg></div>
@@ -221,6 +232,19 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
         <div className="room-hydration-notice" role="status">
           <h2>房間權限已確認</h2>
           <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。沒有使用 Seed Message、固定指標或 Fixture。</p>
+        </div>
+        <div className="orbit-grid room-workspace" id="classroom-workspace" tabIndex={-1}>
+          <ChatPanel runtime={hydrated} />
+          <div className="analysis-column" aria-label="伺服器分析區">
+            <section className="orbit-panel analysis-panel" aria-labelledby="echo-pending-title">
+              <header className="panel-head"><div><span className="panel-kicker">ECHO-CM</span><h2 className="panel-title" id="echo-pending-title">概念與論證</h2></div></header>
+              <div className="room-analysis-unavailable" role="status">尚未收到角色允許的伺服器 Projection；不顯示本地關鍵字圖或固定指標。</div>
+            </section>
+            <section className="orbit-panel analysis-panel" aria-labelledby="trace-pending-title">
+              <header className="panel-head"><div><span className="panel-kicker">TRACE-AI</span><h2 className="panel-title" id="trace-pending-title">互動網絡</h2></div></header>
+              <div className="room-analysis-unavailable" role="status">尚未收到角色允許的伺服器 Projection；不推算個人分數、排名或假 SNA 指標。</div>
+            </section>
+          </div>
         </div>
       </section>
     </main>

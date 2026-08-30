@@ -1,4 +1,4 @@
-import { realtimeContract, type RoomEventEnvelope } from "../contracts";
+import { parseCoreRoomEvent, realtimeContract, type RoomEventEnvelope } from "../contracts";
 
 export type LedgerAppendResult = "appended" | "duplicate" | "stale" | "gap";
 
@@ -9,6 +9,7 @@ export type LedgerMessage = {
   actorKind: RoomEventEnvelope["actorKind"];
   actorRole: RoomEventEnvelope["actorRole"];
   eventId: string;
+  causationId: string;
   revision: number;
   operation: RoomEventEnvelope["operation"];
   eventTime: string;
@@ -18,14 +19,6 @@ export type LedgerMessage = {
   mentions: string[];
   mediaIds: string[];
 };
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
 
 /** An at-least-once, revision-aware client ledger for durable room events. */
 export class EventLedger {
@@ -50,34 +43,35 @@ export class EventLedger {
     if (this.#events.has(event.eventId)) return "duplicate";
     if (event.roomSeq <= this.#lastSeq) return "stale";
     if (event.roomSeq !== this.#lastSeq + 1) return "gap";
-    this.#events.set(event.eventId, event);
-    this.#lastSeq = event.roomSeq;
-    const payload = event.payload;
-    const isMessageEvent = event.type === "message.added"
-      || event.type === "message.revised"
-      || event.type === "message.retracted";
-    const messageId = stringValue(payload.messageId);
-    if (isMessageEvent && messageId) {
+    const core = parseCoreRoomEvent(event);
+    let nextMessage: LedgerMessage | undefined;
+    if (core && (core.type === "message.added" || core.type === "message.revised" || core.type === "message.retracted")) {
+      const messageId = core.payload.messageId;
       const previous = this.#messages.get(messageId);
       if (!previous || event.revision >= previous.revision) {
-        this.#messages.set(messageId, {
+        const visible = core.type === "message.retracted" ? undefined : core.payload;
+        nextMessage = {
           messageId,
-          text: stringValue(payload.text) ?? "",
+          text: visible?.text ?? previous?.text ?? "",
           actorId: previous?.actorId ?? event.actorId,
           actorKind: previous?.actorKind ?? event.actorKind,
           actorRole: previous?.actorRole ?? event.actorRole,
           eventId: event.eventId,
+          causationId: event.causationId,
           revision: event.revision,
           operation: event.operation,
           eventTime: event.eventTime,
           firstRoomSeq: previous?.firstRoomSeq ?? event.roomSeq,
           roomSeq: event.roomSeq,
-          replyTo: stringValue(payload.replyTo),
-          mentions: stringArray(payload.mentions),
-          mediaIds: stringArray(payload.mediaIds),
-        });
+          replyTo: visible?.replyTo ?? previous?.replyTo ?? null,
+          mentions: visible ? [...visible.mentions] : previous?.mentions ?? [],
+          mediaIds: visible ? [...visible.mediaIds] : previous?.mediaIds ?? [],
+        };
       }
     }
+    this.#events.set(event.eventId, event);
+    this.#lastSeq = event.roomSeq;
+    if (nextMessage) this.#messages.set(nextMessage.messageId, nextMessage);
     return "appended";
   }
 

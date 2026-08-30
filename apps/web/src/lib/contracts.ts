@@ -14,4 +14,4 @@ export type {
   ServerTyping,
 } from "@learning-orbit/contracts";
 
-export { realtimeContract } from "@learning-orbit/contracts";
+export { parseCoreRoomEvent, realtimeContract } from "@learning-orbit/contracts";

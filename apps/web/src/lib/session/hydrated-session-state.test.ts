@@ -80,12 +80,21 @@ describe("HydratedSessionState", () => {
       room,
       gateway: { getRoomEvents },
       pageLimit: 2,
+      commandClock: () => new Date(AT),
+      commandUuid: () => "00000000-0000-4000-8000-000000000201",
     });
     expect(getRoomEvents.mock.calls.map(([, after]) => after)).toEqual([0, 2]);
     expect(hydrated.ledger.lastRoomSeq).toBe(3);
     expect(hydrated.ledger.messages()).toHaveLength(2);
     expect(hydrated.sessionState).toMatchObject({ status: "open", startsAt: AT, closesAt: CLOSES, lastRoomSeq: 3 });
     expect(hydrated.progress(new Date("2026-08-30T09:22:30.000Z").getTime())).toEqual({ elapsedSeconds: 1350, ratio: 0.5 });
+    const commandId = hydrated.sendIntent({ type: "message.add", text: "只在伺服器確認後顯示", replyTo: null, mentions: [], mediaIds: [] });
+    expect(commandId).toBe("00000000-0000-4000-8000-000000000201");
+    expect(hydrated.pendingCommandIds()).toEqual([commandId]);
+    expect(hydrated.messages()).toHaveLength(2);
+    hydrated.receiveFrame({ type: "ack", commandId, roomSeq: 4, revision: 1 });
+    expect(hydrated.pendingCommandIds()).toEqual([]);
+    expect(hydrated.sessionState.lastRoomSeq).toBe(3);
     hydrated.receiveFrame({
       type: "event",
       event: {
@@ -99,6 +108,8 @@ describe("HydratedSessionState", () => {
     });
     expect(hydrated.sessionState).toMatchObject({ status: "paused", closesAt: CLOSES, lastRoomSeq: 4 });
     expect(hydrated.progress(new Date("2026-08-30T09:30:00.000Z").getTime()).elapsedSeconds).toBe(1800);
+    expect(() => hydrated.sendIntent({ type: "message.add", text: "暫停時不可送出", replyTo: null, mentions: [], mediaIds: [] }))
+      .toThrow("ROOM_NOT_OPEN");
   });
 
   it("recovers a live gap through authenticated event pages without skipping the missing event", async () => {
@@ -178,6 +189,7 @@ describe("HydratedSessionState", () => {
     const commandId = "00000000-0000-4000-8000-000000000201";
     const actorId = "00000000-0000-4000-8000-000000000301";
     hydrated.receiveFrame({ type: "welcome", serverTime: AT, roomId: ROOM_ID, cursor: 0, status: "paused" });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
     hydrated.receiveFrame({ type: "ack", commandId, roomSeq: 1, revision: 1 });
     hydrated.receiveFrame({ type: "presence", actorId, state: "active", expiresAt: CLOSES });
     hydrated.receiveFrame({ type: "typing", actorId, active: true, expiresAt: CLOSES });
@@ -200,6 +212,19 @@ describe("HydratedSessionState", () => {
   });
 
   it("fails closed on a malformed page sequence and clears all state on session expiry", async () => {
+    const identityGateway = { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) };
+    await expect(HydratedSessionState.create({
+      session: student,
+      room: { ...room, nova: { ...room.nova, actorId: "00000000-0000-4000-8000-000000000099" } },
+      gateway: identityGateway,
+    })).rejects.toThrow("HYDRATED_SESSION_IDENTITY_MISMATCH");
+    expect(identityGateway.getRoomEvents).not.toHaveBeenCalled();
+    await expect(HydratedSessionState.create({
+      session: student,
+      room: { ...room, participants: [room.participants[0], room.participants[0], room.participants[2], room.participants[3]] },
+      gateway: identityGateway,
+    })).rejects.toThrow("HYDRATED_ROOM_ROSTER_INVALID");
+
     await expect(HydratedSessionState.create({
       session: student,
       room,

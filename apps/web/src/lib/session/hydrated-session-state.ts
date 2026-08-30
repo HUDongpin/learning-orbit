@@ -10,8 +10,9 @@ import type {
 } from "@learning-orbit/contracts";
 
 import { RoomSocket, roomWebSocketUrl, type SocketLike } from "../realtime/room-socket";
-import { EventLedger } from "./event-ledger";
+import { EventLedger, type LedgerMessage } from "./event-ledger";
 import { ProjectionSync, type ProjectionAcceptResult } from "./projection-sync";
+import { makeSessionCommandBus, type RoomCommandIntent, type SessionCommandBus } from "./session-command-bus";
 import { SessionGatewayError, type SessionGateway } from "./session-gateway";
 import { createSessionState, sessionReducer, type SessionState } from "./session-store";
 
@@ -19,6 +20,8 @@ type EventGateway = Pick<SessionGateway, "getRoomEvents">;
 type AckFrame = Extract<ServerFrame, { type: "ack" }>;
 type RejectFrame = Extract<ServerFrame, { type: "reject" }>;
 type DegradedFrame = Extract<ServerFrame, { type: "degraded" }>;
+const MAX_ACK_HISTORY = 500;
+const MAX_REJECT_HISTORY = 100;
 
 export type HydratedSessionOptions = Readonly<{
   session: AuthSession;
@@ -28,6 +31,8 @@ export type HydratedSessionOptions = Readonly<{
   retryDelaysMs?: readonly number[];
   onSessionExpired?: () => void;
   onRoomUnavailable?: () => void;
+  commandClock?: () => Date;
+  commandUuid?: () => string;
 }>;
 
 class VolatileCursorStorage implements Storage {
@@ -78,15 +83,27 @@ export class HydratedSessionState {
   readonly #listeners = new Set<() => void>();
   #session: AuthSession | undefined;
   #room: RoomDetails | undefined;
+  readonly #commands: SessionCommandBus;
 
   private constructor(
     session: AuthSession,
     room: RoomDetails,
     private readonly gateway: EventGateway,
-    options: Pick<HydratedSessionOptions, "pageLimit" | "retryDelaysMs" | "onSessionExpired" | "onRoomUnavailable">,
+    options: Pick<HydratedSessionOptions, "pageLimit" | "retryDelaysMs" | "onSessionExpired" | "onRoomUnavailable" | "commandClock" | "commandUuid">,
   ) {
+    const participantActorIds = room.participants.map(({ actorId }) => actorId);
+    if (new Set(participantActorIds).size !== room.participants.length
+      || participantActorIds.includes(room.nova.actorId)) {
+      throw new Error("HYDRATED_ROOM_ROSTER_INVALID");
+    }
     if (room.roomId !== (session.role === "student" ? session.roomId : room.roomId)) {
       throw new Error("HYDRATED_SESSION_ROOM_MISMATCH");
+    }
+    if (session.role === "student") {
+      const self = room.participants.find(({ actorId }) => actorId === session.actorId);
+      if (session.nova.actorId !== room.nova.actorId || self?.pseudonym !== session.pseudonym) {
+        throw new Error("HYDRATED_SESSION_IDENTITY_MISMATCH");
+      }
     }
     this.#session = session;
     this.#room = room;
@@ -115,6 +132,20 @@ export class HydratedSessionState {
       },
       (frame) => this.#acceptControl(frame),
     );
+    this.#commands = makeSessionCommandBus({
+      roomId: room.roomId,
+      clock: options.commandClock ?? (() => new Date()),
+      uuid: options.commandUuid ?? (() => {
+        if (!globalThis.crypto?.randomUUID) throw new Error("COMMAND_UUID_UNAVAILABLE");
+        return globalThis.crypto.randomUUID();
+      }),
+      transport: {
+        send: (command) => {
+          this.socket.send(command);
+          return command.commandId;
+        },
+      },
+    });
   }
 
   static async create(options: HydratedSessionOptions): Promise<HydratedSessionState> {
@@ -133,6 +164,25 @@ export class HydratedSessionState {
   get room(): RoomDetails {
     if (!this.#room) throw new Error("SESSION_STATE_CLEARED");
     return this.#room;
+  }
+
+  messages(): LedgerMessage[] { return this.ledger.messages(); }
+  pendingCommandIds(): string[] { return this.socket.pendingCommandIds(); }
+
+  sendIntent(intent: RoomCommandIntent): string {
+    if (this.#expired) throw new Error("SESSION_EXPIRED");
+    if (this.#roomUnavailable) throw new Error("ROOM_UNAVAILABLE");
+    if (this.recoveryError) throw new Error("SESSION_SYNC_FAILED");
+    const session = this.session;
+    const isMessage = intent.type.startsWith("message.");
+    if (isMessage && this.#state.status !== "open") throw new Error("ROOM_NOT_OPEN");
+    if (session.role === "student" && !isMessage) throw new Error("COMMAND_ROLE_FORBIDDEN");
+    if (session.role === "teacher" && (intent.type === "message.add" || intent.type === "message.revise")) {
+      throw new Error("COMMAND_ROLE_FORBIDDEN");
+    }
+    const commandId = this.#commands.send(intent);
+    this.#notify();
+    return commandId;
   }
 
   subscribe(listener: () => void): () => void {
@@ -273,7 +323,6 @@ export class HydratedSessionState {
       if (frame.type === "welcome") {
         if (frame.roomId !== this.room.roomId) throw new Error("WELCOME_ROOM_MISMATCH");
         this.lastServerTime = frame.serverTime;
-        this.#state = sessionReducer(this.#state, { type: "connection", connected: true });
         this.#state = sessionReducer(this.#state, { type: "status", status: frame.status });
         return;
       }
@@ -286,8 +335,16 @@ export class HydratedSessionState {
         void recovery.catch(() => this.#failRecovery("ROOM_EVENT_RECOVERY_FAILED"));
         return;
       }
-      if (frame.type === "ack") { this.acks.set(frame.commandId, frame); return; }
-      if (frame.type === "reject") { this.rejects.push(frame); return; }
+      if (frame.type === "ack") {
+        this.acks.set(frame.commandId, frame);
+        if (this.acks.size > MAX_ACK_HISTORY) this.acks.delete(this.acks.keys().next().value!);
+        return;
+      }
+      if (frame.type === "reject") {
+        this.rejects.push(frame);
+        if (this.rejects.length > MAX_REJECT_HISTORY) this.rejects.splice(0, this.rejects.length - MAX_REJECT_HISTORY);
+        return;
+      }
       if (frame.type === "presence" && "actorId" in frame) { this.presence.set(frame.actorId, frame); return; }
       if (frame.type === "typing" && "actorId" in frame) { this.typing.set(frame.actorId, frame); return; }
       if (frame.type === "media_status") { this.mediaStatuses.set(frame.mediaId, frame); return; }

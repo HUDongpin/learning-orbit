@@ -112,6 +112,69 @@ describe("room route access guard", () => {
     expect(document.body.textContent).not.toMatch(/本地演示|模擬即時|太陽是生態系統/);
   });
 
+  it("renders only confirmed chat events and keeps a newly sent command pending until server delivery", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => "00000000-0000-4000-8000-000000000202" });
+    const confirmed = messageEventFrame(1).event;
+    const api = gateway(student, {
+      getRoom: vi.fn(async () => ({ ...room, status: "open" as const, startsAt: "2026-08-30T09:00:00.000Z", closesAt: "2026-08-30T09:45:00.000Z" })),
+      getRoomEvents: vi.fn(async () => ({ events: [confirmed], throughRoomSeq: 1 })),
+    });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    expect(await screen.findByText("真實訊息")).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(confirmed.eventId);
+    expect(document.body.innerHTML).not.toContain(confirmed.payload.messageId);
+    expect(document.body.innerHTML).not.toContain(student.actorId);
+    await userEvent.type(screen.getByLabelText("輸入訊息"), "待確認的新訊息");
+    await userEvent.click(screen.getByRole("button", { name: "發送訊息" }));
+    expect(screen.queryByText("待確認的新訊息")).not.toBeInTheDocument();
+    expect(screen.getByText(/1 個指令正在等待伺服器 ACK/)).toBeInTheDocument();
+  });
+
+  it("subscribes before native connect so an immediate confirmed frame is rendered", async () => {
+    class ImmediateWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+        if (type === "message") listener({ data: JSON.stringify(messageEventFrame(1)) });
+      }
+    }
+    vi.stubGlobal("WebSocket", ImmediateWebSocket);
+    render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+    expect(await screen.findByText("真實訊息")).toBeInTheDocument();
+    expect(screen.getByText(/同步 1 個 RoomEvent/)).toBeInTheDocument();
+  });
+
+  it("does not let a disposed socket navigate after unmount", async () => {
+    let closeListener: ((event: { code?: number }) => void) | undefined;
+    class TestWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { code?: number }) => void) {
+        if (type === "close") closeListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    const { unmount } = render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    unmount();
+    closeListener?.({ code: 4401 });
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("shows a checking boundary instead of reading disposed state while changing rooms", async () => {
+    const secondRoom = { ...room, roomId: otherRoomId, topic: "第二個課堂" };
+    const api = gateway(teacher, {
+      getRoom: vi.fn(async (requestedRoomId: string) => requestedRoomId === roomId ? room : secondRoom),
+    });
+    const { rerender } = render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    rerender(<RoomAccessClient gateway={api} mode="teacher" roomId={otherRoomId} />);
+    expect(screen.getByText("正在驗證 Session 與房間權限…")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "第二個課堂" })).toBeInTheDocument();
+  });
+
   it("fails closed for a student URL naming another room without requesting its details", async () => {
     const api = gateway();
     render(<RoomAccessClient gateway={api} mode="student" roomId={otherRoomId} />);

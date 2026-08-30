@@ -71,9 +71,9 @@ describe("RoomSocket", () => {
 
     expect(socket.hello()).toEqual({ type: "hello", clientId: expect.any(String), resumeFrom: 0 });
     socket.send(command(), ws);
-    expect(ws.sent).toHaveLength(1);
+    expect(ws.sent).toHaveLength(0);
     socket.onFrame({ type: "resume_complete", throughRoomSeq: 0 }, ws);
-    expect(ws.sent).toHaveLength(2);
+    expect(ws.sent).toHaveLength(1);
     socket.onFrame(event(1), ws);
     socket.onFrame(event(1), ws);
     expect(sink).toHaveBeenCalledTimes(1);
@@ -108,6 +108,25 @@ describe("RoomSocket", () => {
     expect(controls).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps one immutable command per id and bounds the disconnected retry queue", () => {
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn());
+    const disconnected: SocketLike = { readyState: 0, send: vi.fn() };
+    socket.send(command(), disconnected);
+    expect(() => socket.send({ ...command(), payload: { ...command().payload, text: "changed" } }, disconnected))
+      .toThrow("COMMAND_ID_CONFLICT");
+    for (let index = 1; index < 100; index += 1) {
+      socket.send({
+        ...command(),
+        commandId: `00000000-0000-4000-8005-${String(index).padStart(12, "0")}`,
+      }, disconnected);
+    }
+    expect(socket.pendingCommandIds()).toHaveLength(100);
+    expect(() => socket.send({
+      ...command(),
+      commandId: "00000000-0000-4000-8005-000000000100",
+    }, disconnected)).toThrow("PENDING_COMMAND_LIMIT");
+  });
+
   it("routes non-event frames without mutating the durable cursor", () => {
     const controls = vi.fn();
     const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {}, controls);
@@ -140,10 +159,53 @@ describe("RoomSocket", () => {
     socket.connect(() => native);
     expect(sent).toEqual([]);
     listeners.get("open")?.({});
-    expect(connectionChange).toHaveBeenLastCalledWith(true);
+    expect(connectionChange).toHaveBeenLastCalledWith(false);
     expect(JSON.parse(sent[0]!)).toEqual({ type: "hello", clientId: "00000000-0000-4000-8000-000000000777", resumeFrom: 0 });
+    listeners.get("message")?.({ data: JSON.stringify({ type: "resume_complete", throughRoomSeq: 0 }) });
+    expect(connectionChange).toHaveBeenLastCalledWith(true);
     listeners.get("message")?.({ data: JSON.stringify(event(1)) });
     expect(sink).toHaveBeenCalledWith(event(1).event);
+  });
+
+  it("queues commands until resume completes and recovers a synchronous transport send failure", () => {
+    vi.useFakeTimers();
+    try {
+      const firstSent: string[] = [];
+      let failCommands = false;
+      const first: SocketLike = {
+        readyState: 1,
+        send(value) {
+          const type = JSON.parse(value).type;
+          if (type === "command" && failCommands) throw new Error("transport failed");
+          firstSent.push(value);
+        },
+        close: vi.fn(),
+      };
+      const second = fakeSocket();
+      const connect = vi.fn()
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(second);
+      const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), { retryDelaysMs: [10] });
+      socket.connect(connect);
+      socket.send(command());
+      expect(firstSent.map((value) => JSON.parse(value).type)).toEqual(["hello"]);
+      socket.onFrame({ type: "resume_complete", throughRoomSeq: 0 }, first);
+      expect(firstSent.map((value) => JSON.parse(value).type)).toEqual(["hello", "command"]);
+
+      failCommands = true;
+      const secondCommand = { ...command(), commandId: "00000000-0000-4000-8000-000000000202" };
+      expect(() => socket.send(secondCommand)).not.toThrow();
+      expect(socket.pendingCommandIds()).toContain(secondCommand.commandId);
+      vi.advanceTimersByTime(10);
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(second.sent.map((value) => JSON.parse(value).type)).toEqual(["hello"]);
+      socket.onFrame({ type: "resume_complete", throughRoomSeq: 0 }, second);
+      const resent = second.sent.map((value) => JSON.parse(value));
+      expect(resent.filter(({ type }) => type === "command").map(({ command: value }) => value.commandId))
+        .toEqual([COMMAND_ID, secondCommand.commandId]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries reconnect with bounded exponential delays", () => {
