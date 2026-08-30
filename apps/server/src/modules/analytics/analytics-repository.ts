@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { analyticsContract } from "@learning-orbit/contracts";
+import { analyticsContract, routes } from "@learning-orbit/contracts";
 
 export type ProjectionKey =
   | "echo.teacher_shadow" | "echo.student_approved"
@@ -126,7 +126,8 @@ function mapProjection(row: any): ProjectionRow {
   if (baseVersion !== version - 1) throw new AnalyticsRepositoryError();
   const completeThroughRoomSeq = numberField(row.complete_through_seq, "complete_through_seq");
   const requiresReplay = row.requires_replay;
-  const reviewStatus = key === "trace.student_bundle" ? "approved" as const : "unreviewed" as const;
+  const reviewStatus = key === "trace.student_bundle" || key === "echo.student_approved"
+    ? "approved" as const : "unreviewed" as const;
   const displayStatus = key === "echo.student_approved" ? "student_approved"
     : key === "trace.student_bundle" ? "student_aggregate" : "teacher_shadow";
   // Wire contracts use projectionVersion/baseVersion and do not expose the
@@ -309,6 +310,9 @@ export class AnalyticsRepository {
     if (!Number.isSafeInteger(afterProjectionVersion) || afterProjectionVersion < 0) {
       throw new AnalyticsRepositoryError();
     }
+    // TRACE is an atomic bundle. It never exposes an empty or synthetic patch
+    // window, even when the caller already names the current version.
+    if (projectionKey.startsWith("trace.")) return { kind: "resync", snapshotUrl };
     const headResult = await this.pool.query(
       `SELECT analysis_epoch,version,algorithm_version,parameter_hash
        FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2`,
@@ -318,10 +322,6 @@ export class AnalyticsRepository {
     if (!head) return { kind: "resync", snapshotUrl };
     const headVersion = numberField(head.version, "version");
     if (head.analysis_epoch !== analysisEpoch || afterProjectionVersion > headVersion) {
-      return { kind: "resync", snapshotUrl };
-    }
-    // TRACE bundles are atomic snapshots, never patch chains.
-    if (projectionKey.startsWith("trace.") && afterProjectionVersion < headVersion) {
       return { kind: "resync", snapshotUrl };
     }
     const result = await this.pool.query(
@@ -415,7 +415,8 @@ export class AnalyticsRepository {
     if (!TEACHER_PROJECTION_KEYS.has(snapshot.projectionKey)
       || !Number.isSafeInteger(snapshot.version) || snapshot.version < 1
       || !Number.isSafeInteger(snapshot.baseVersion) || snapshot.baseVersion !== snapshot.version - 1
-      || !/^[a-f0-9]{64}$/.test(snapshot.parameterHash)) {
+      || !/^[a-f0-9]{64}$/.test(snapshot.parameterHash)
+      || snapshotUrl !== routes.analytics.latest(snapshot.roomId, snapshot.projectionKey)) {
       throw new AnalyticsRepositoryError();
     }
     const wire = projectionWire(snapshot);

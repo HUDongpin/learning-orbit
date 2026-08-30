@@ -1,6 +1,6 @@
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { authContract, analyticsContract, roomHttpContract, teacherRoomListContract } from "@learning-orbit/contracts";
+import { authContract, analyticsContract, analyticsHttpContract, roomHttpContract, teacherRoomListContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
 import { TeacherRoomListError, type TeacherRoomListService } from "./modules/teacher/teacher-room-list-service.js";
@@ -29,7 +29,7 @@ import type { AgentService } from "./modules/agent/agent-service.js";
 import { AgentError } from "./modules/agent/agent-service.js";
 import type { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
 import { agentContract } from "@learning-orbit/contracts";
-import { AnalyticsPolicy, AnalyticsPolicyError, type AnalyticsGrant } from "./modules/analytics/analytics-policy.js";
+import { AnalyticsPolicy, AnalyticsPolicyError, type AnalyticsCapability, type AnalyticsGrant } from "./modules/analytics/analytics-policy.js";
 import { AnalyticsRepository, AnalyticsRepositoryError, patchWire, projectionWire, type ProjectionKey } from "./modules/analytics/analytics-repository.js";
 import { AnalyticsTeacherError, AnalyticsTeacherService } from "./modules/analytics/analytics-teacher-service.js";
 import type { GovernanceService } from "./modules/governance/governance-service.js";
@@ -49,7 +49,10 @@ interface AuthRouteDependencies {
   mediaInternalReconcile: MediaInternalReconcileRoute | undefined;
   agent: AgentService | undefined;
   agentProviderHealth: InternalProviderHealthRoute | undefined;
-  analytics?: { policy: AnalyticsPolicy; repository: AnalyticsRepository } | undefined;
+  analytics?: {
+    policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
+    repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
+  } | undefined;
   analyticsTeacher?: AnalyticsTeacherService | undefined;
   governance?: GovernanceService | undefined;
 }
@@ -357,15 +360,11 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
         "trace.teacher_bundle", "trace.student_bundle",
       ].includes(value) ? value as ProjectionKey : null
     );
-    const access = async (request: any, roomId: string, key: string): Promise<AnalyticsGrant> => {
+    const access = async (request: any, roomId: string, capability: AnalyticsCapability): Promise<AnalyticsGrant> => {
       const token = request.cookies.lo_session;
       const principal = await dependencies.sessions!.get(token);
       const sessionId = await dependencies.sessions!.getSessionId(token);
-      const grant = await dependencies.analytics!.policy.requireRoomAccess(
-        principal, roomId, "latest", sessionId ?? undefined,
-      );
-      dependencies.analytics!.policy.assertProjection(grant, key);
-      return grant;
+      return dependencies.analytics!.policy.requireRoomAccess(principal, roomId, capability, sessionId ?? undefined);
     };
     const errorResponse = (reply: any, error: unknown) => {
       if (error instanceof AnalyticsPolicyError) return reply.code(error.statusCode).type("application/json").send({ code: error.code });
@@ -373,58 +372,68 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     };
     app.get("/v1/rooms/:roomId/analytics/:projectionKey/latest", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
-      if (Object.keys(request.query as Record<string, unknown>).length > 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      if (!key) return reply.code(404).send({ code: "PROJECTION_NOT_FOUND" });
       try {
-        await access(request, roomId, key);
+        const grant = await access(request, roomId, "latest");
+        const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
+        if (Object.keys(request.query as Record<string, unknown>).length > 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        if (!key) return reply.code(404).send({ code: "PROJECTION_NOT_FOUND" });
+        dependencies.analytics!.policy.assertProjection(grant, key);
         const latest = await dependencies.analytics!.repository.latest(roomId, key);
         if (!latest) return reply.code(404).send({ code: "ANALYTICS_NOT_READY" });
-        return reply.type("application/json").send(projectionWire(latest));
+        const wire = projectionWire(latest);
+        const body = key.startsWith("echo.")
+          ? analyticsContract.encodeEchoSnapshot(wire)
+          : analyticsContract.encodeTrace(wire);
+        return reply.type("application/json").send(JSON.parse(body));
       } catch (error) { return errorResponse(reply, error); }
     });
     app.get("/v1/rooms/:roomId/analytics/:projectionKey/patches", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
-      const query = request.query as { analysisEpoch?: unknown; afterProjectionVersion?: unknown };
-      if (!key || Object.keys(query).some((name) => !["analysisEpoch", "afterProjectionVersion"].includes(name))
-        || (query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
-        || (query.afterProjectionVersion !== undefined && typeof query.afterProjectionVersion !== "string")
-        || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch)) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const after = query.afterProjectionVersion === undefined ? 0 : Number(query.afterProjectionVersion);
-      if (!Number.isSafeInteger(after) || after < 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       try {
-        await access(request, roomId, key);
-        const snapshotUrl = `/v1/rooms/${encodeURIComponent(roomId)}/analytics/${encodeURIComponent(key)}/latest`;
+        const grant = await access(request, roomId, "patches");
+        const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
+        const query = request.query as { analysisEpoch?: unknown; afterProjectionVersion?: unknown };
+        if (!key || Object.keys(query).some((name) => !["analysisEpoch", "afterProjectionVersion"].includes(name))
+          || (query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
+          || (query.afterProjectionVersion !== undefined && typeof query.afterProjectionVersion !== "string")
+          || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch)) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        const after = query.afterProjectionVersion === undefined ? 0 : Number(query.afterProjectionVersion);
+        if (!Number.isSafeInteger(after) || after < 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        dependencies.analytics!.policy.assertProjection(grant, key);
+        const snapshotUrl = routes.analytics.latest(roomId, key);
         const result = await dependencies.analytics!.repository.patchesAfter(roomId, key, query.analysisEpoch, after, snapshotUrl);
-        if (result.kind === "resync") return reply.code(409).send({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl });
-        return reply.type("application/json").send({ patches: result.patches?.map(patchWire) ?? [] });
+        if (result.kind === "resync") return reply.code(409).type("application/json").send(JSON.parse(analyticsHttpContract.encodeResync({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl })));
+        return reply.type("application/json").send(JSON.parse(analyticsHttpContract.encodePatchPage({ patches: result.patches?.map(patchWire) ?? [] })));
       } catch (error) { return errorResponse(reply, error); }
     });
     app.get("/v1/rooms/:roomId/analytics/:projectionKey/timeline", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      const key = (request.params as { projectionKey?: unknown }).projectionKey;
-      if (key !== "echo.teacher_shadow" && key !== "echo.student_approved") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const query = request.query as { analysisEpoch?: unknown; limit?: unknown };
-      if ((query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
-        || (query.limit !== undefined && typeof query.limit !== "string")) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const limit = query.limit === undefined ? 50 : Number(query.limit);
-      if (Object.keys(query).some((name) => !["analysisEpoch", "limit"].includes(name))
-        || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch) || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       try {
-        await access(request, roomId, key);
+        const grant = await access(request, roomId, "timeline");
+        const key = (request.params as { projectionKey?: unknown }).projectionKey;
+        if (key !== "echo.teacher_shadow" && key !== "echo.student_approved") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        const query = request.query as { analysisEpoch?: unknown; limit?: unknown };
+        if ((query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
+          || (query.limit !== undefined && typeof query.limit !== "string")) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        const limit = query.limit === undefined ? 50 : Number(query.limit);
+        if (Object.keys(query).some((name) => !["analysisEpoch", "limit"].includes(name))
+          || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch) || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+        dependencies.analytics!.policy.assertProjection(grant, key);
         const result = await dependencies.analytics!.repository.timeline(roomId, key, query.analysisEpoch, limit);
         if (result.kind === "resync") {
-          const snapshotUrl = `/v1/rooms/${encodeURIComponent(roomId)}/analytics/${encodeURIComponent(key)}/latest`;
-          return reply.code(409).send({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl });
+          const snapshotUrl = routes.analytics.latest(roomId, key);
+          return reply.code(409).type("application/json").send(JSON.parse(analyticsHttpContract.encodeResync({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl })));
         }
-        return reply.type("application/json").send({
+        return reply.type("application/json").send(JSON.parse(analyticsHttpContract.encodeTimeline({
           baseSnapshot: result.baseSnapshot ? projectionWire(result.baseSnapshot) : null,
           patches: result.patches.map(patchWire),
           truncatedBeforeVersion: result.truncatedBeforeVersion,
           headVersion: result.headVersion,
-        });
+        })));
       } catch (error) { return errorResponse(reply, error); }
     });
   }

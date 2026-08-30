@@ -83,4 +83,25 @@ describe("AnalyticsRepository projection chain", () => {
     expect(window.kind).toBe("patches");
     expect(window.patches?.[0]?.requiresReplay).toBe(true);
   });
+
+  it("restores student ECHO as approved and treats every TRACE patch request as snapshot-only", async () => {
+    const studentRow = {
+      ...baseSnapshotRow(),
+      projection_key: "echo.student_approved",
+    };
+    const studentRepository = new AnalyticsRepository(fakePool([{ rows: [studentRow] }]));
+    await expect(studentRepository.latest(roomId, "echo.student_approved"))
+      .resolves.toMatchObject({ reviewStatus: "approved", displayStatus: "student_approved" });
+
+    const traceRepository = new AnalyticsRepository(fakePool([{
+      rows: [{ analysis_epoch: epoch, version: "1", algorithm_version: "trace-v1", parameter_hash: hash }],
+    }]));
+    await expect(traceRepository.patchesAfter(
+      roomId,
+      "trace.student_bundle",
+      epoch,
+      1,
+      `/v1/rooms/${roomId}/analytics/trace.student_bundle/latest`,
+    )).resolves.toMatchObject({ kind: "resync" });
+  });
 });

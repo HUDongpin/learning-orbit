@@ -31,6 +31,17 @@ describe("analytics projection outbox", () => {
       .rejects.toThrow("ANALYTICS_OUTBOX_CORRUPT");
   });
 
+  it("rejects a pointer whose URL is not the exact room-and-key latest route", async () => {
+    const pool = { query: vi.fn().mockResolvedValue({ rows: [{
+      projection_outbox_id: "7", room_id: roomId,
+      projection_key: "trace.student_bundle", analysis_epoch: epoch,
+      projection_version: "5", complete_through_room_seq: "12",
+      snapshot_url: `/v1/rooms/${roomId}/analytics/echo.teacher_shadow/latest?leak=1`,
+    }] }) } as any;
+    await expect(new ProjectionOutboxRepository(pool).claim(1, "publisher-1"))
+      .rejects.toThrow("ANALYTICS_OUTBOX_CORRUPT");
+  });
+
   it("requires the claim owner when marking a pointer published", async () => {
     const pool = { query: vi.fn().mockResolvedValue({ rowCount: 0 }) } as any;
     await expect(new ProjectionOutboxRepository(pool).markPublished(7, "publisher-1"))

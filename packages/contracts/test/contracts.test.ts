@@ -188,6 +188,9 @@ describe("envelope, HTTP catalog, and realtime behavior", () => {
     for (const frame of frames) expect(realtimeContract.parseRealtimeFrame(frame)).toEqual(frame);
     expect(() => realtimeContract.parseRealtimeFrame({ type: "presence", state: "active", clientSeq: 0, actorId: uuid })).toThrow("INVALID_REALTIME_FRAME");
     expect(() => realtimeContract.parseRealtimeFrame({ type: "projection", roomId: uuid, projectionKey: "trace.student_bundle", analysisEpoch: laterUuid, projectionVersion: 5, completeThroughRoomSeq: 12, snapshotUrl: "https://external.invalid/latest" })).toThrow("INVALID_REALTIME_FRAME");
+    expect(() => realtimeContract.parseServerFrame({ type: "projection", roomId: uuid, projectionKey: "trace.student_bundle", analysisEpoch: laterUuid, projectionVersion: 5, completeThroughRoomSeq: 12, snapshotUrl: `/v1/rooms/${laterUuid}/analytics/trace.student_bundle/latest` })).toThrow("INVALID_SERVER_FRAME");
+    expect(() => realtimeContract.parseServerFrame({ type: "projection", roomId: uuid, projectionKey: "trace.student_bundle", analysisEpoch: laterUuid, projectionVersion: 5, completeThroughRoomSeq: 12, snapshotUrl: `/v1/rooms/${uuid}/analytics/echo.teacher_shadow/latest` })).toThrow("INVALID_SERVER_FRAME");
+    expect(() => realtimeContract.parseServerFrame({ type: "projection", roomId: uuid, projectionKey: "trace.student_bundle", analysisEpoch: laterUuid, projectionVersion: 5, completeThroughRoomSeq: 12, snapshotUrl: `/v1/rooms/${uuid}/analytics/trace.student_bundle/latest?leak=1` })).toThrow("INVALID_SERVER_FRAME");
     expect(() => realtimeContract.encodeRoomCommand({ ...commandFrame, type: "message.retract", payload: { messageId: uuid } })).toThrow("INVALID_ROOM_COMMAND");
   });
 

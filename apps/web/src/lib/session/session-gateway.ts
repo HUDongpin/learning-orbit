@@ -1,6 +1,8 @@
 import {
   apiErrorContract,
   agentContract,
+  analyticsContract,
+  analyticsHttpContract,
   authContract,
   mediaAttachmentContract,
   mediaCommandContract,
@@ -9,7 +11,11 @@ import {
   teacherRoomListContract,
   type ApiError,
   type AgentCurrentState,
+  type AnalyticsPatchPage,
+  type AnalyticsResyncResponse,
+  type AnalyticsTimelineResponse,
   type AuthSession,
+  type ConceptMapSnapshot,
   type CreateRoomRequest,
   type CreateRoomResponse,
   type CompleteMediaUploadResponse,
@@ -20,12 +26,18 @@ import {
   type MediaUploadGrant,
   type RoomDetails,
   type RoomEventPage,
+  type SnaProjectionBundle,
   type TeacherMagicLinkAccepted,
   type TeacherMagicLinkRequest,
   type TeacherRoomListResponse,
 } from "@learning-orbit/contracts";
+import type { ProjectionFrame } from "@learning-orbit/contracts";
 
 type FetchLike = typeof globalThis.fetch;
+export type ProjectionKey = ProjectionFrame["projectionKey"];
+export type EchoProjectionKey = Extract<ProjectionKey, `echo.${string}`>;
+export type ProjectionSnapshot = ConceptMapSnapshot | SnaProjectionBundle;
+type AnalyticsRequestOptions = Readonly<{ signal?: AbortSignal }>;
 
 export interface SessionGateway {
   getSession(): Promise<AuthSession>;
@@ -40,15 +52,28 @@ export interface SessionGateway {
   getMedia(roomId: string, mediaId: string): Promise<MediaAttachmentView>;
   getMediaDownloadGrant(roomId: string, mediaId: string): Promise<MediaDownloadGrant>;
   getAgentCurrent(roomId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AgentCurrentState>;
+  getProjectionLatest(roomId: string, projectionKey: ProjectionKey, options?: AnalyticsRequestOptions): Promise<ProjectionSnapshot>;
+  getProjectionPatches(roomId: string, projectionKey: EchoProjectionKey, query: Readonly<{ analysisEpoch: string; afterProjectionVersion?: number }>, options?: AnalyticsRequestOptions): Promise<AnalyticsPatchPage>;
+  getConceptTimeline(roomId: string, projectionKey: EchoProjectionKey, query: Readonly<{ analysisEpoch: string; limit?: number }>, options?: AnalyticsRequestOptions): Promise<AnalyticsTimelineResponse>;
   logout(): Promise<void>;
 }
 
 export class SessionGatewayError extends Error {
-  constructor(readonly code: ApiError["code"] | "SESSION_NETWORK_FAILURE" | "SESSION_RESPONSE_INVALID" | "SESSION_IDENTITY_MISMATCH") {
+  constructor(readonly code: ApiError["code"] | AnalyticsResyncResponse["code"] | "SESSION_NETWORK_FAILURE" | "SESSION_RESPONSE_INVALID" | "SESSION_IDENTITY_MISMATCH") {
     super(code);
     this.name = "SessionGatewayError";
   }
 }
+
+const ANALYTICS_ERROR_ALLOWLIST = {
+  400: ["INVALID_ANALYTICS_QUERY"],
+  401: ["AUTH_REQUIRED"],
+  403: ["PROJECTION_FORBIDDEN", "STUDENT_ANALYTICS_NOT_PROMOTED"],
+  404: ["ROOM_NOT_FOUND", "PROJECTION_NOT_FOUND", "ANALYTICS_NOT_READY"],
+  410: ["ROOM_DELETION_IN_PROGRESS", "RETENTION_POLICY_EXPIRED"],
+  500: ["INTERNAL"],
+  503: ["ANALYTICS_CORRUPT"],
+} as const satisfies Readonly<Record<number, readonly ApiError["code"][]>>;
 
 export function normalizeClassroomCode(value: string): string {
   return value.replace(/\s+/gu, "").toUpperCase();
@@ -324,6 +349,103 @@ export class FetchSessionGateway implements SessionGateway {
       return current;
     }
     catch { return responseInvalid(); }
+  }
+
+  async getProjectionLatest(
+    roomId: string,
+    projectionKey: ProjectionKey,
+    options: AnalyticsRequestOptions = {},
+  ): Promise<ProjectionSnapshot> {
+    const response = await this.#request(routes.analytics.latest(roomId, projectionKey), {
+      method: "GET",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
+    try {
+      const body = await jsonBody(response);
+      const snapshot = projectionKey.startsWith("echo.")
+        ? analyticsContract.parseEchoSnapshot(body)
+        : analyticsContract.parseTrace(body);
+      if (snapshot.roomId !== roomId || snapshot.projectionKey !== projectionKey) responseInvalid();
+      return snapshot;
+    } catch (error) {
+      if (error instanceof SessionGatewayError) throw error;
+      return responseInvalid();
+    }
+  }
+
+  async getProjectionPatches(
+    roomId: string,
+    projectionKey: EchoProjectionKey,
+    query: Readonly<{ analysisEpoch: string; afterProjectionVersion?: number }>,
+    options: AnalyticsRequestOptions = {},
+  ): Promise<AnalyticsPatchPage> {
+    const response = await this.#request(routes.analytics.patches(roomId, projectionKey, query), {
+      method: "GET",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status === 409) {
+      let result: AnalyticsResyncResponse;
+      try { result = analyticsHttpContract.parseResync(await jsonBody(response)); }
+      catch { return responseInvalid(); }
+      if (result.snapshotUrl !== routes.analytics.latest(roomId, projectionKey)) responseInvalid();
+      throw new SessionGatewayError("SNAPSHOT_RESYNC_REQUIRED");
+    }
+    if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
+    try {
+      const page = analyticsHttpContract.parsePatchPage(await jsonBody(response));
+      for (const patch of page.patches) {
+        analyticsContract.parseEchoPatch(patch);
+        if (patch.analysisEpoch !== query.analysisEpoch) responseInvalid();
+        if (projectionKey === "echo.student_approved"
+          && [...patch.nodesAdded, ...patch.nodesUpdated, ...patch.edgesAdded, ...patch.edgesUpdated]
+            .some(({ reviewStatus }) => reviewStatus !== "approved")) responseInvalid();
+      }
+      const first = page.patches[0];
+      if (first && first.baseVersion !== (query.afterProjectionVersion ?? 0)) responseInvalid();
+      return page;
+    } catch (error) {
+      if (error instanceof SessionGatewayError) throw error;
+      return responseInvalid();
+    }
+  }
+
+  async getConceptTimeline(
+    roomId: string,
+    projectionKey: EchoProjectionKey,
+    query: Readonly<{ analysisEpoch: string; limit?: number }>,
+    options: AnalyticsRequestOptions = {},
+  ): Promise<AnalyticsTimelineResponse> {
+    const response = await this.#request(routes.analytics.timeline(roomId, projectionKey, query), {
+      method: "GET",
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status === 409) {
+      let result: AnalyticsResyncResponse;
+      try { result = analyticsHttpContract.parseResync(await jsonBody(response)); }
+      catch { return responseInvalid(); }
+      if (result.snapshotUrl !== routes.analytics.latest(roomId, projectionKey)) responseInvalid();
+      throw new SessionGatewayError("SNAPSHOT_RESYNC_REQUIRED");
+    }
+    if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
+    try {
+      const timeline = analyticsHttpContract.parseTimeline(await jsonBody(response));
+      if (timeline.baseSnapshot
+        && (timeline.baseSnapshot.roomId !== roomId
+          || timeline.baseSnapshot.projectionKey !== projectionKey
+          || timeline.baseSnapshot.analysisEpoch !== query.analysisEpoch)) responseInvalid();
+      for (const patch of timeline.patches) {
+        analyticsContract.parseEchoPatch(patch);
+        if (patch.analysisEpoch !== query.analysisEpoch) responseInvalid();
+        if (projectionKey === "echo.student_approved"
+          && [...patch.nodesAdded, ...patch.nodesUpdated, ...patch.edgesAdded, ...patch.edgesUpdated]
+            .some(({ reviewStatus }) => reviewStatus !== "approved")) responseInvalid();
+      }
+      return timeline;
+    } catch (error) {
+      if (error instanceof SessionGatewayError) throw error;
+      return responseInvalid();
+    }
   }
 
   async logout(): Promise<void> {

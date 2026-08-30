@@ -6,6 +6,7 @@ import type { RoomCommand } from "./generated/room-command.v1.js";
 import type { ClientFrame, RealtimeFrame, ServerFrame } from "./generated/realtime-frame.v1.js";
 import { parseCoreRoomEvent } from "./core-room-event.js";
 import { makeSchemaAjv } from "./schema-ajv.js";
+import { routes } from "./routes.js";
 
 const ajv = makeSchemaAjv();
 ajv.addSchema(commandSchema);
@@ -32,18 +33,27 @@ function requireAgentStatusIdentity(frame: RealtimeFrame | ServerFrame, code: st
   }
 }
 
+function requireProjectionSnapshotUrl(frame: RealtimeFrame | ServerFrame, code: string): void {
+  if (frame.type !== "projection") return;
+  if (frame.snapshotUrl !== routes.analytics.latest(frame.roomId, frame.projectionKey)) {
+    throw new Error(code);
+  }
+}
+
 export const realtimeContract = {
   parseRealtimeFrame(value: unknown): RealtimeFrame {
     const frame = parse(value, realtimeValidator, "INVALID_REALTIME_FRAME");
     // Generic realtime and HTTP-page transport validates envelopes and extension events; known core payload semantics live in the registry.
     if (frame.type === "event") parseCoreRoomEvent(frame.event);
     requireAgentStatusIdentity(frame, "INVALID_REALTIME_FRAME");
+    requireProjectionSnapshotUrl(frame, "INVALID_REALTIME_FRAME");
     return frame;
   },
   parseServerFrame(value: unknown): ServerFrame {
     const frame = parse(value, serverValidator, "INVALID_SERVER_FRAME");
     if (frame.type === "event") parseCoreRoomEvent(frame.event);
     requireAgentStatusIdentity(frame, "INVALID_SERVER_FRAME");
+    requireProjectionSnapshotUrl(frame, "INVALID_SERVER_FRAME");
     return frame;
   },
   encodeClientFrame(value: unknown): string {

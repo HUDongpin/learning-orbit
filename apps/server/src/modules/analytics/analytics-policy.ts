@@ -8,7 +8,6 @@ export const STUDENT_PROJECTIONS = new Set([
 export const TEACHER_PROJECTIONS = new Set([
   "echo.teacher_shadow",
   "trace.teacher_bundle",
-  ...STUDENT_PROJECTIONS,
 ]);
 export type AnalyticsCapability = "latest" | "patches" | "timeline" | "projection_frame";
 
@@ -43,10 +42,15 @@ export class AnalyticsPolicy {
       throw new AnalyticsPolicyError(401, "AUTH_REQUIRED");
     }
     if (principal.role === "teacher") {
-      const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean }>(
+      const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean; deletion_active: boolean }>(
         `SELECT r.room_id,r.status,
                 (p.policy_id IS NOT NULL AND p.approved_at <= transaction_timestamp()
-                 AND p.expires_at > transaction_timestamp()) AS policy_current
+                 AND p.expires_at > transaction_timestamp()) AS policy_current,
+                EXISTS (
+                  SELECT 1 FROM deletion_job d
+                  WHERE d.room_id=r.room_id
+                    AND d.status IN ('queued','running','retryable','dead')
+                ) AS deletion_active
          FROM classroom_room r
          LEFT JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
          WHERE r.room_id=$1 AND r.teacher_id=$2
@@ -59,16 +63,21 @@ export class AnalyticsPolicy {
       );
       const row = result.rows[0];
       if (!row) throw new AnalyticsPolicyError(404, "ROOM_NOT_FOUND");
-      if (row.status === "closed") throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
+      if (row.deletion_active === true) throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
       if (row.policy_current !== true) {
         throw new AnalyticsPolicyError(410, "RETENTION_POLICY_EXPIRED");
       }
       return { roomId, role: "teacher", studentProjectionAllowlist: new Set() };
     }
-    const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean }>(
+    const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean; deletion_active: boolean }>(
       `SELECT r.room_id,r.status,
               (p.policy_id IS NOT NULL AND p.approved_at <= transaction_timestamp()
-               AND p.expires_at > transaction_timestamp()) AS policy_current
+               AND p.expires_at > transaction_timestamp()) AS policy_current,
+              EXISTS (
+                SELECT 1 FROM deletion_job d
+                WHERE d.room_id=r.room_id
+                  AND d.status IN ('queued','running','retryable','dead')
+              ) AS deletion_active
        FROM room_member m JOIN classroom_room r ON r.room_id=m.room_id
        LEFT JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
        WHERE r.room_id=$1 AND m.room_member_id=$2 AND m.actor_id=$3
@@ -81,7 +90,7 @@ export class AnalyticsPolicy {
     );
     const row = result.rows[0];
     if (!row) throw new AnalyticsPolicyError(404, "ROOM_NOT_FOUND");
-    if (row.status === "closed") throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
+    if (row.deletion_active === true) throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
     if (row.policy_current !== true) {
       throw new AnalyticsPolicyError(410, "RETENTION_POLICY_EXPIRED");
     }
@@ -109,13 +118,19 @@ export class AnalyticsPolicy {
   }
 
   assertProjection(grant: AnalyticsGrant, projectionKey: string): void {
-    if (!TEACHER_PROJECTIONS.has(projectionKey)) {
+    if (grant.role === "teacher") {
+      if (!TEACHER_PROJECTIONS.has(projectionKey)) {
+        throw new AnalyticsPolicyError(404, "PROJECTION_NOT_FOUND");
+      }
+      return;
+    }
+    if (!TEACHER_PROJECTIONS.has(projectionKey) && !STUDENT_PROJECTIONS.has(projectionKey)) {
       throw new AnalyticsPolicyError(404, "PROJECTION_NOT_FOUND");
     }
-    if (grant.role === "student" && !STUDENT_PROJECTIONS.has(projectionKey)) {
+    if (!STUDENT_PROJECTIONS.has(projectionKey)) {
       throw new AnalyticsPolicyError(403, "PROJECTION_FORBIDDEN");
     }
-    if (grant.role === "student" && !grant.studentProjectionAllowlist.has(projectionKey)) {
+    if (!grant.studentProjectionAllowlist.has(projectionKey)) {
       throw new AnalyticsPolicyError(403, "STUDENT_ANALYTICS_NOT_PROMOTED");
     }
   }

@@ -64,6 +64,24 @@
         "kind": { "const": "learner" }
       }
     },
+    "StudentNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "label", "kind"],
+      "properties": {
+        "nodeId": { "type": "string", "pattern": "^p-[a-f0-9]{16}$" },
+        "label": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D"] },
+        "kind": { "const": "learner" }
+      }
+    },
+    "StudentWarning": {
+      "enum": [
+        "small_group_interpretation_warning",
+        "recent_group_interaction_only",
+        "requires_replay",
+        "insufficient_window"
+      ]
+    },
     "TeacherEdge": {
       "type": "object",
       "additionalProperties": false,
@@ -129,10 +147,10 @@
       "additionalProperties": false,
       "required": ["nodes", "edges", "metrics", "warnings"],
       "properties": {
-        "nodes": { "type": "array", "items": { "$ref": "#/$defs/HumanNode" } },
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/StudentNode" } },
         "edges": { "type": "array", "items": { "$ref": "#/$defs/StudentEdge" } },
         "metrics": { "$ref": "#/$defs/Metrics" },
-        "warnings": { "type": "array", "items": { "type": "string", "maxLength": 160 } }
+        "warnings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/StudentWarning" } }
       }
     },
     "TeacherWindow": {
@@ -233,6 +251,7 @@
             "projectionKey": { "const": "trace.student_bundle" },
             "reviewStatus": { "const": "approved" },
             "displayStatus": { "const": "student_aggregate" },
+            "warnings": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/StudentWarning" } },
             "payload": {
               "type": "object",
               "additionalProperties": false,

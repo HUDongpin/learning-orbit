@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { routes } from "@learning-orbit/contracts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROJECTIONS = new Set([
@@ -42,7 +43,8 @@ export class ProjectionOutboxRepository {
         || typeof row.analysis_epoch !== "string" || !UUID.test(row.analysis_epoch)
         || !Number.isSafeInteger(projectionVersion) || projectionVersion < 1
         || !Number.isSafeInteger(completeThrough) || completeThrough < 0
-        || typeof row.snapshot_url !== "string" || !/^\/v1\/rooms\//.test(row.snapshot_url)) {
+        || typeof row.snapshot_url !== "string"
+        || row.snapshot_url !== routes.analytics.latest(row.room_id, row.projection_key)) {
         throw new Error("ANALYTICS_OUTBOX_CORRUPT");
       }
       return {

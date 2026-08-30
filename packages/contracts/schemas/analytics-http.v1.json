@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/analytics-http.v1.json",
+  "title": "AnalyticsHttpResponse",
+  "oneOf": [
+    { "$ref": "#/$defs/PatchPage" },
+    { "$ref": "#/$defs/TimelineResponse" },
+    { "$ref": "#/$defs/ResyncResponse" }
+  ],
+  "$defs": {
+    "PatchPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patches"],
+      "properties": {
+        "patches": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapPatch"
+          }
+        }
+      }
+    },
+    "TimelineResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseSnapshot", "patches", "truncatedBeforeVersion", "headVersion"],
+      "properties": {
+        "baseSnapshot": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapSnapshot" }
+          ]
+        },
+        "patches": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapPatch"
+          }
+        },
+        "truncatedBeforeVersion": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 1 }
+          ]
+        },
+        "headVersion": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ResyncResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "snapshotUrl"],
+      "properties": {
+        "code": { "const": "SNAPSHOT_RESYNC_REQUIRED" },
+        "snapshotUrl": {
+          "type": "string",
+          "pattern": "^/v1/rooms/[^/?#]+/analytics/(echo\\.(teacher_shadow|student_approved)|trace\\.(teacher_bundle|student_bundle))/latest$"
+        }
+      }
+    }
+  }
+}

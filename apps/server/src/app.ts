@@ -74,6 +74,10 @@ export interface BuildAppOptions {
   agent?: AgentService;
   /** Explicitly injected in tests/pilot; production requires LO_AUDIT_SALT. */
   governance?: GovernanceService;
+  analytics?: {
+    policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
+    repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
+  };
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -121,10 +125,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   const jobClaims = options.jobClaims ?? new JobClaimAuthority();
-  const analytics = pool ? {
+  const analytics = options.analytics ?? (pool ? {
     policy: new AnalyticsPolicy(pool),
     repository: new AnalyticsRepository(pool),
-  } : undefined;
+  } : undefined);
   const realtime = options.realtime ?? (pool ? (() => {
     const authorizer = new RealtimeDeliveryAuthorizer(pool);
     const hub = new RoomHub(pool, authorizer);
@@ -180,7 +184,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       jobClaims,
     )
     : undefined;
-  const analyticsTeacher = pool && lifecycle && analytics
+  const analyticsTeacher = pool && lifecycle && analytics?.policy instanceof AnalyticsPolicy
     ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined;
   const agent = options.agent ?? (pool ? new AgentService(pool, clock) : undefined);
   const agentProviderHealth = pool && assertionTrust ? new InternalProviderHealthRoute(

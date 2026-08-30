@@ -112,7 +112,7 @@ def project_echo_snapshot(internal: Mapping[str, Any], metadata: Mapping[str, An
         if node_id in student_ids:
             student_nodes.append(projected)
     common = {"schemaVersion": 1, "roomId": metadata["roomId"], "analysisEpoch": metadata["analysisEpoch"], "algorithmVersion": metadata.get("algorithmVersion", ADAPTER_VERSION), "parameterHash": metadata["parameterHash"], "projectionVersion": int(metadata["projectionVersion"]), "baseVersion": int(metadata.get("baseVersion", 0)), "completeThroughRoomSeq": int(metadata.get("completeThroughRoomSeq", 0)), "watermarkEventTime": metadata["watermarkEventTime"], "requiresReplay": bool(metadata.get("requiresReplay", False)), "evidenceStatus": "requires_replay" if metadata.get("requiresReplay") else "active", "warnings": list(metadata.get("warnings", ())) }
-    return {"teacher": {**common, "projectionKey": "echo.teacher_shadow", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow", "payload": {"nodes": teacher_nodes, "edges": teacher_edges}}, "student": {**common, "projectionKey": "echo.student_approved", "reviewStatus": "approved" if student_nodes else "unreviewed", "displayStatus": "student_approved", "payload": {"nodes": student_nodes, "edges": student_edges}}}
+    return {"teacher": {**common, "projectionKey": "echo.teacher_shadow", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow", "payload": {"nodes": teacher_nodes, "edges": teacher_edges}}, "student": {**common, "projectionKey": "echo.student_approved", "reviewStatus": "approved", "displayStatus": "student_approved", "payload": {"nodes": student_nodes, "edges": student_edges}}}
 
 
 def diff_echo_snapshots(previous: Mapping[str, Any], current: Mapping[str, Any], metadata: Mapping[str, Any]) -> dict[str, Any]:

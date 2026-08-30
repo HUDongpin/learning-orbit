@@ -100,6 +100,9 @@ function gateway(session: AuthSession = student, overrides: Partial<SessionGatew
       agentEnabled: false,
       updatedAt: "2026-08-31T01:00:00.000Z",
     })),
+    getProjectionLatest: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    getProjectionPatches: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    getConceptTimeline: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };

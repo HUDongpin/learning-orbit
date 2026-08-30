@@ -93,6 +93,75 @@ const agentCurrent = {
   agentEnabled: false,
   updatedAt: "2026-08-31T01:01:00.000Z",
 };
+const analyticsEpoch = "00000000-0000-4000-8000-000000000901";
+const analyticsParameterHash = "b".repeat(64);
+const echoLatest = {
+  schemaVersion: 1 as const,
+  projectionKey: "echo.student_approved" as const,
+  roomId: createdRoom.room.roomId,
+  analysisEpoch: analyticsEpoch,
+  algorithmVersion: "echo-v1",
+  parameterHash: analyticsParameterHash,
+  projectionVersion: 1,
+  baseVersion: 0,
+  completeThroughRoomSeq: 4,
+  watermarkEventTime: "2026-08-31T01:00:00.000Z",
+  requiresReplay: false,
+  evidenceStatus: "active" as const,
+  reviewStatus: "approved" as const,
+  displayStatus: "student_approved" as const,
+  warnings: [],
+  payload: { nodes: [], edges: [] },
+};
+const echoPatch = {
+  analysisEpoch: analyticsEpoch,
+  algorithmVersion: "echo-v1",
+  parameterHash: analyticsParameterHash,
+  projectionVersion: 2,
+  baseVersion: 1,
+  completeThroughRoomSeq: 5,
+  requiresReplay: false,
+  warnings: [],
+  nodesAdded: [],
+  nodesUpdated: [],
+  nodesHidden: [],
+  edgesAdded: [],
+  edgesUpdated: [],
+  edgesHidden: [],
+  positionUpdates: [],
+  changeScore: 0,
+  reasonCodes: [],
+  evidenceRefs: [],
+};
+const traceView = {
+  nodes: [],
+  edges: [],
+  metrics: { participationBalance: 0, reciprocity: 0, agentShare: 0, semanticCoverage: 0 },
+  warnings: ["small_group_interpretation_warning"],
+};
+const traceLatest = {
+  ...echoLatest,
+  projectionKey: "trace.student_bundle" as const,
+  algorithmVersion: "trace-v1",
+  parameterHash: "c".repeat(64),
+  displayStatus: "student_aggregate" as const,
+  warnings: ["small_group_interpretation_warning"],
+  payload: {
+    windows: {
+      recent_10m: {
+        windowStartEventTime: "2026-08-31T00:50:00.000Z",
+        windowEndEventTime: "2026-08-31T01:00:00.000Z",
+        views: { observed: traceView, human_only: traceView, lineage_adjusted: traceView },
+      },
+      session_45m: {
+        windowStartEventTime: "2026-08-31T00:15:00.000Z",
+        windowEndEventTime: "2026-08-31T01:00:00.000Z",
+        views: { observed: traceView, human_only: traceView, lineage_adjusted: traceView },
+      },
+    },
+    interpretation: "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。" as const,
+  },
+};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -299,5 +368,84 @@ describe("typed SessionGateway", () => {
       .rejects.toEqual(new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"));
     const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...agentCurrent, provider: "fixture" })) });
     await expect(leaked.getAgentCurrent(createdRoom.room.roomId)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("loads only room-and-key-correlated generated ECHO and TRACE snapshots", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json(echoLatest))
+      .mockResolvedValueOnce(json(traceLatest));
+    const gateway = new FetchSessionGateway({ fetch });
+    await expect(gateway.getProjectionLatest(createdRoom.room.roomId, "echo.student_approved"))
+      .resolves.toEqual(echoLatest);
+    await expect(gateway.getProjectionLatest(createdRoom.room.roomId, "trace.student_bundle"))
+      .resolves.toEqual(traceLatest);
+    expect(fetch).toHaveBeenNthCalledWith(1,
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/echo.student_approved/latest`,
+      expect.objectContaining({ method: "GET", credentials: "include", cache: "no-store", redirect: "error" }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(2,
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/trace.student_bundle/latest`,
+      expect.objectContaining({ method: "GET", credentials: "include", cache: "no-store", redirect: "error" }),
+    );
+
+    const wrongRoom = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...echoLatest, roomId: "00000000-0000-4000-8000-000000000099" })) });
+    await expect(wrongRoom.getProjectionLatest(createdRoom.room.roomId, "echo.student_approved"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+    const wrongBranch = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json(traceLatest)) });
+    await expect(wrongBranch.getProjectionLatest(createdRoom.room.roomId, "echo.student_approved"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("parses generated ECHO patch pages and validates a 409 resync URL exactly", async () => {
+    const fetch = vi.fn().mockResolvedValue(json({ patches: [echoPatch] }));
+    await expect(new FetchSessionGateway({ fetch }).getProjectionPatches(
+      createdRoom.room.roomId,
+      "echo.student_approved",
+      { analysisEpoch: analyticsEpoch, afterProjectionVersion: 1 },
+    )).resolves.toEqual({ patches: [echoPatch] });
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/echo.student_approved/patches?analysisEpoch=${analyticsEpoch}&afterProjectionVersion=1`,
+      expect.objectContaining({ method: "GET", credentials: "include" }),
+    );
+
+    const canonical = `/v1/rooms/${createdRoom.room.roomId}/analytics/echo.student_approved/latest`;
+    const resync = new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(json({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl: canonical }, 409)),
+    });
+    await expect(resync.getProjectionPatches(createdRoom.room.roomId, "echo.student_approved", {
+      analysisEpoch: analyticsEpoch,
+      afterProjectionVersion: 1,
+    })).rejects.toEqual(new SessionGatewayError("SNAPSHOT_RESYNC_REQUIRED"));
+
+    const hostile = new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(json({
+        code: "SNAPSHOT_RESYNC_REQUIRED",
+        snapshotUrl: `${canonical}?leak=1`,
+      }, 409)),
+    });
+    await expect(hostile.getProjectionPatches(createdRoom.room.roomId, "echo.student_approved", {
+      analysisEpoch: analyticsEpoch,
+      afterProjectionVersion: 1,
+    })).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("keeps per-key policy denial distinct and parses a generated ECHO timeline", async () => {
+    const notPromoted = new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(json({ code: "STUDENT_ANALYTICS_NOT_PROMOTED" }, 403)),
+    });
+    await expect(notPromoted.getProjectionLatest(createdRoom.room.roomId, "trace.student_bundle"))
+      .rejects.toEqual(new SessionGatewayError("STUDENT_ANALYTICS_NOT_PROMOTED"));
+
+    const timeline = { baseSnapshot: echoLatest, patches: [echoPatch], truncatedBeforeVersion: 1, headVersion: 2 };
+    const fetch = vi.fn().mockResolvedValue(json(timeline));
+    await expect(new FetchSessionGateway({ fetch }).getConceptTimeline(
+      createdRoom.room.roomId,
+      "echo.student_approved",
+      { analysisEpoch: analyticsEpoch, limit: 200 },
+    )).resolves.toEqual(timeline);
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/echo.student_approved/timeline?analysisEpoch=${analyticsEpoch}&limit=200`,
+      expect.objectContaining({ method: "GET", credentials: "include", cache: "no-store" }),
+    );
   });
 });

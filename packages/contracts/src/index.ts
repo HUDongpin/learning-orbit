@@ -14,7 +14,7 @@ export { mediaCommandContract } from "./media-command.js";
 export { mediaStatusContract } from "./media-status.js";
 export { mediaInternalReconcileContract } from "./media-internal-reconcile.js";
 export { agentContract } from "./agent.js";
-export { analyticsContract, analyticsReviewRoomEventPayloadSchema } from "./analytics.js";
+export { analyticsContract, analyticsHttpContract, analyticsReviewRoomEventPayloadSchema } from "./analytics.js";
 export type {
   DerivedTextArtifact,
   DerivedTextArtifactPage,
@@ -22,6 +22,9 @@ export type {
   ConceptMapPatch,
   ConceptMapSnapshot,
   SnaProjectionBundle,
+  AnalyticsPatchPage,
+  AnalyticsTimelineResponse,
+  AnalyticsResyncResponse,
 } from "./analytics.js";
 export {
   deletionLifecycleContract,

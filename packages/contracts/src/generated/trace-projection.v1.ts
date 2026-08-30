@@ -52,6 +52,7 @@ export type StudentBundle = Meta & {
   projectionKey: "trace.student_bundle";
   reviewStatus: "approved";
   displayStatus: "student_aggregate";
+  warnings?: StudentWarning[];
   payload: {
     windows: {
       recent_10m: StudentWindow;
@@ -61,6 +62,8 @@ export type StudentBundle = Meta & {
   };
   [k: string]: unknown;
 };
+export type StudentWarning =
+  "small_group_interpretation_warning" | "recent_group_interaction_only" | "requires_replay" | "insufficient_window";
 
 export interface Meta {
   schemaVersion: 1;
@@ -155,10 +158,15 @@ export interface StudentWindow {
   };
 }
 export interface StudentView {
-  nodes: HumanNode[];
+  nodes: StudentNode[];
   edges: StudentEdge[];
   metrics: Metrics;
-  warnings: string[];
+  warnings: StudentWarning[];
+}
+export interface StudentNode {
+  nodeId: string;
+  label: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D";
+  kind: "learner";
 }
 export interface StudentEdge {
   sourceNodeId: string;
