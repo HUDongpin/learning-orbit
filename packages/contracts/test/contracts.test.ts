@@ -127,8 +127,10 @@ describe("envelope, HTTP catalog, and realtime behavior", () => {
   });
 
   it("builds encoded bounded event routes", () => {
-    expect(routes.rooms.events("a/b", { afterSeq: 0, limit: 500 })).toBe("/rooms/a%2Fb/events?afterSeq=0&limit=500");
-    expect(() => routes.rooms.events("x", { afterSeq: -1 })).toThrow("INVALID_CURSOR");
-    expect(() => routes.rooms.events("x", { limit: 501 })).toThrow("INVALID_LIMIT");
+    expect(routes.rooms.events("a/b", { afterSeq: 0, limit: 500 })).toBe("/v1/rooms/a%2Fb/events?afterSeq=0&limit=500");
+    expect(() => routes.rooms.events("x", { afterSeq: -1 })).toThrow(new RangeError("afterSeq"));
+    expect(() => routes.rooms.events("x", { afterSeq: Number.MAX_SAFE_INTEGER + 1 })).toThrow(new RangeError("afterSeq"));
+    expect(() => routes.rooms.events("x", { limit: 501 })).toThrow(new RangeError("limit"));
+    expect(() => routes.rooms.events("x", { limit: 1.5 })).toThrow(new RangeError("limit"));
   });
 });

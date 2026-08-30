@@ -4,6 +4,9 @@ export type { CoreRoomEvent } from "./core-room-event.js";
 export { routes } from "./routes.js";
 export { realtimeContract } from "./realtime.js";
 export { makeSchemaAjv } from "./schema-ajv.js";
+export { authContract } from "./auth.js";
+export type { AuthSession } from "./generated/auth-session.v1.js";
+export type { TeacherMagicLinkAccepted, TeacherMagicLinkRequest } from "./generated/auth-http.v1.js";
 export type { CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomDetails, RoomEventPage } from "./generated/room-http.v1.js";
 export type {
   MessageAddedPayload,

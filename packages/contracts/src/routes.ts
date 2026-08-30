@@ -1,15 +1,19 @@
 type RoomEventQuery = { afterSeq?: number; limit?: number };
 
 function assertCursor(value: number | undefined) {
-  if (value !== undefined && (!Number.isInteger(value) || value < 0)) {
-    throw new Error("INVALID_CURSOR");
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+    throw new RangeError("afterSeq");
   }
 }
 
 function assertLimit(value: number | undefined) {
-  if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 500)) {
-    throw new Error("INVALID_LIMIT");
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 500)) {
+    throw new RangeError("limit");
   }
+}
+
+function room(roomId: string, suffix = "") {
+  return `/v1/rooms/${encodeURIComponent(roomId)}${suffix}`;
 }
 
 function roomEvents(roomId: string, query: RoomEventQuery = {}) {
@@ -20,7 +24,28 @@ function roomEvents(roomId: string, query: RoomEventQuery = {}) {
   if (query.afterSeq !== undefined) parameters.set("afterSeq", String(query.afterSeq));
   if (query.limit !== undefined) parameters.set("limit", String(query.limit));
   const suffix = parameters.size ? `?${parameters}` : "";
-  return `/rooms/${encodeURIComponent(roomId)}/events${suffix}`;
+  return room(roomId, `/events${suffix}`);
 }
 
-export const routes = { rooms: { events: roomEvents } };
+function teacherMagicLinkConsume(token: string) {
+  return `/v1/auth/teacher/magic-link/consume?token=${encodeURIComponent(token)}`;
+}
+
+export const routes = {
+  auth: {
+    session: () => "/v1/auth/session",
+    teacherMagicLink: () => "/v1/auth/teacher/magic-link",
+    teacherMagicLinkConsume,
+  },
+  rooms: {
+    create: () => "/v1/rooms",
+    join: () => "/v1/rooms/join",
+    get: (roomId: string) => room(roomId),
+    events: roomEvents,
+    websocket: (roomId: string) => room(roomId, "/realtime"),
+    open: (roomId: string) => room(roomId, "/open"),
+    pause: (roomId: string) => room(roomId, "/pause"),
+    resume: (roomId: string) => room(roomId, "/resume"),
+    close: (roomId: string) => room(roomId, "/close"),
+  },
+} as const;

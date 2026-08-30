@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/auth-session.v1.json",
+  "title": "AuthSession",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "roomId", "roomMemberId", "actorId", "pseudonym", "nova"],
+      "properties": {
+        "role": { "const": "student" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "roomMemberId": { "type": "string", "format": "uuid" },
+        "actorId": { "type": "string", "format": "uuid" },
+        "pseudonym": { "type": "string" },
+        "nova": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actorId", "actorKind", "actorRole", "displayName"],
+          "properties": {
+            "actorId": { "type": "string", "format": "uuid" },
+            "actorKind": { "const": "agent" },
+            "actorRole": { "const": "socratic_facilitator" },
+            "displayName": { "const": "Nova Agent" }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "teacherId", "actorId"],
+      "properties": {
+        "role": { "const": "teacher" },
+        "teacherId": { "type": "string", "format": "uuid" },
+        "actorId": { "type": "string", "format": "uuid" }
+      }
+    }
+  ]
+}

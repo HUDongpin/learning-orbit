@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/auth-http.v1.json",
+  "title": "AuthHttpCatalog",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "TeacherMagicLinkRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["email"],
+      "properties": {
+        "email": { "type": "string", "format": "email", "maxLength": 254 }
+      }
+    },
+    "TeacherMagicLinkAccepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted"],
+      "properties": {
+        "accepted": { "const": true }
+      }
+    }
+  }
+}

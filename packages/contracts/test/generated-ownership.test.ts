@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  AuthSession,
   CreateRoomRequest,
   CreateRoomResponse,
   JoinRoomRequest,
@@ -18,6 +19,8 @@ import type {
   RoomOpenedPayload,
   RoomPausedPayload,
   RoomResumedPayload,
+  TeacherMagicLinkAccepted,
+  TeacherMagicLinkRequest,
 } from "../src/index.js";
 import { parseCoreRoomEvent, realtimeContract, routes } from "../src/index.js";
 
@@ -31,6 +34,7 @@ const generator = join(root, "scripts/generate-types.mjs");
 const generatorRunner = "const { generateTypes } = await import(process.argv[1]); await generateTypes({ schemasDir: process.argv[2], outDir: process.argv[3] });";
 
 type PublicGeneratedWires = [
+  AuthSession, TeacherMagicLinkAccepted, TeacherMagicLinkRequest,
   JoinRoomRequest, JoinRoomResponse, CreateRoomRequest, CreateRoomResponse,
   RoomDetails, RoomEventPage, MessageAddedPayload, RoomOpenedPayload,
   RoomPausedPayload, RoomResumedPayload, RoomClosedPayload,
@@ -133,7 +137,7 @@ describe("generated contract ownership", () => {
 
   it("exports generated public wires and narrows only known core events", () => {
     expectTypeOf<PublicGeneratedWires>().not.toEqualTypeOf<never>();
-    expect(routes.rooms.events("a/b", { afterSeq: 4, limit: 500 })).toBe("/rooms/a%2Fb/events?afterSeq=4&limit=500");
+    expect(routes.rooms.events("a/b", { afterSeq: 4, limit: 500 })).toBe("/v1/rooms/a%2Fb/events?afterSeq=4&limit=500");
     const envelope = { eventId: uuid, schemaVersion: 1 as const, roomId: uuid, roomSeq: 1, type: "message.added", actorId: uuid, actorKind: "human" as const, actorRole: "student" as const, revision: 1, operation: "add" as const, eventTime: at, ingestTime: at, causationId: uuid, correlationId: uuid, payload: { messageId: uuid, text: "hello", replyTo: null, mentions: [], mediaIds: [] } };
     expect(parseCoreRoomEvent(envelope)?.type).toBe("message.added");
     expect(parseCoreRoomEvent({ ...envelope, type: "extension.sampled" })).toBeNull();

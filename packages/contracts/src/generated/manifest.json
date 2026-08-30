@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "sourceSchemas": [
     {
+      "file": "auth-http.v1.json",
+      "id": "https://learning-orbit.local/schemas/auth-http.v1.json",
+      "sha256": "3e91353f2447862a9470f75e21a2bd3a14adb4d7bf04f62624fe9a71432752d7"
+    },
+    {
+      "file": "auth-session.v1.json",
+      "id": "https://learning-orbit.local/schemas/auth-session.v1.json",
+      "sha256": "d9d16e9bad460483dc3859b6751c2b497f177727ccf7eec6244ddea90219234f"
+    },
+    {
       "file": "core-room-event-payloads.v1.json",
       "id": "https://learning-orbit.local/schemas/core-room-event-payloads.v1.json",
       "sha256": "9a5197c0208ccd8b158ce7618fb14b73a346b0b45dbf8254eead1ac7e4040f1c"
@@ -28,6 +38,16 @@
     }
   ],
   "generatedModules": [
+    {
+      "sourceFile": "auth-http.v1.json",
+      "moduleFile": "auth-http.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "auth-session.v1.json",
+      "moduleFile": "auth-session.v1.ts",
+      "language": "typescript"
+    },
     {
       "sourceFile": "core-room-event-payloads.v1.json",
       "moduleFile": "core-room-event-payloads.v1.ts",
