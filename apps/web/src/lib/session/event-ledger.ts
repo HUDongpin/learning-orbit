@@ -34,7 +34,9 @@ export class EventLedger {
   }
 
   append(event: RoomEventEnvelope): boolean {
-    if (this.#events.has(event.eventId) || event.roomSeq <= this.#lastSeq) return false;
+    // Transport replay can arrive out of order; only the event id is an
+    // idempotency key. The cursor remains the highest sequence observed.
+    if (this.#events.has(event.eventId)) return false;
     this.#events.set(event.eventId, event);
     this.#lastSeq = Math.max(this.#lastSeq, event.roomSeq);
     const payload = event.payload;
