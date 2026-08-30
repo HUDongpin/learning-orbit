@@ -8,6 +8,8 @@ or outbox_event.  psycopg connections and lightweight test doubles exposing
 from __future__ import annotations
 
 from typing import Any, Mapping
+from uuid import UUID
+from datetime import datetime
 
 
 class ProjectionStore:
@@ -44,6 +46,27 @@ class ProjectionStore:
                     "watermarkEventTime", "requiresReplay", "payload")
         if any(key not in snapshot for key in required):
             raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        if not isinstance(snapshot["roomId"], str) or not isinstance(snapshot["analysisEpoch"], str):
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        try:
+            UUID(snapshot["roomId"]); UUID(snapshot["analysisEpoch"])
+        except (ValueError, AttributeError):
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT") from None
+        int_fields = ("projectionVersion", "completeThroughRoomSeq")
+        if any(isinstance(snapshot[key], bool) or not isinstance(snapshot[key], int) or snapshot[key] < (1 if key == "projectionVersion" else 0) for key in int_fields):
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        if not isinstance(snapshot["requiresReplay"], bool) or not isinstance(snapshot["payload"], Mapping):
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        try:
+            datetime.fromisoformat(str(snapshot["watermarkEventTime"]).replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT") from None
+        for key in ("algorithmVersion", "projectionKey", "parameterHash"):
+            if not isinstance(snapshot[key], str) or not snapshot[key]:
+                raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        if patch is not None:
+            if not isinstance(patch, Mapping) or patch.get("projectionVersion") != snapshot["projectionVersion"] or patch.get("baseVersion") != snapshot.get("baseVersion", 0):
+                raise ValueError("INVALID_PROJECTION_PATCH")
         algorithm = "ECHO-CM" if str(snapshot["projectionKey"]).startswith("echo.") else "TRACE-AI"
         self.connection.execute(
             """INSERT INTO analysis_projection_snapshots

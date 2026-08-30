@@ -15,6 +15,7 @@ from .analytics_handlers import register_analytics_handlers
 from .handler_registry import HandlerOutcome, HandlerRegistry, WorkerDeps, run_with_lease
 from .jobs import JobStore
 from .projection_store import ProjectionStore
+from .pipeline_handlers import register_pipeline_handlers
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +44,7 @@ class WorkerConfig:
 
 class WorkerSupervisor:
     def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0) -> None:
-        self.registry = registry or register_analytics_handlers(register_core_handlers(HandlerRegistry()))
+        self.registry = registry or register_pipeline_handlers(register_analytics_handlers(register_core_handlers(HandlerRegistry())))
         self.jobs = JobStore(connection, worker_id)
         self.deps = deps or WorkerDeps(connection, self.jobs, projection_store=ProjectionStore(connection))
         self.poll_seconds = poll_seconds

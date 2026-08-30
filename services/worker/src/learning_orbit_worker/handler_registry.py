@@ -70,6 +70,10 @@ class WorkerDeps:
     stop_heartbeat: Event | None = None
     job_claims: JobClaims | None = None
     projection_store: Any = None
+    # Optional capability seams.  The composition root must inject reviewed
+    # implementations; absent capabilities are never treated as success.
+    media_processor: Any = None
+    agent_executor: Any = None
 
     def __post_init__(self) -> None:
         if self.job_claims is None:
