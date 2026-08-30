@@ -16,6 +16,13 @@ import {
 } from "@learning-orbit/contracts";
 import type { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
 import type { CommandService } from "./modules/rooms/command-service.js";
+import type { RoomHub } from "./modules/realtime/room-hub.js";
+import type { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery-authorizer.js";
+import type { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
+import type { SocketLike } from "./modules/realtime/connection.js";
+import { registerMediaRoutes } from "./modules/media/media-routes.js";
+import type { MediaDeps } from "./modules/media/media-service.js";
+import type { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
 
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
@@ -25,6 +32,9 @@ interface AuthRouteDependencies {
   serviceAssertionTrust: ServiceAssertionTrust | undefined;
   jobClaims: JobClaimAuthority;
   commands: CommandService | undefined;
+  realtime: { hub: RoomHub; authorizer: RealtimeDeliveryAuthorizer; publisher: OutboxPublisher } | undefined;
+  media: MediaDeps | undefined;
+  mediaInternalReconcile: MediaInternalReconcileRoute | undefined;
 }
 
 const genericAccepted = { accepted: true };
@@ -139,7 +149,9 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     const pathRoomId = (request.params as { roomId?: string }).roomId;
     if (typeof pathRoomId !== "string" || (request.body as { roomId?: string })?.roomId !== pathRoomId) return reply.code(409).send({ code: "INVALID_COMMAND" });
     try {
-      const result = await dependencies.commands.dispatch(identity, request.body);
+      const sessionId = await dependencies.sessions?.getSessionId(request.cookies.lo_session);
+      if (!sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+      const result = await dependencies.commands.dispatch(identity, request.body, sessionId);
       return reply.code(200).send(result);
     } catch (error) {
       if (error instanceof RoomError) {
@@ -172,6 +184,34 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     }
   });
 
+  app.get("/v1/rooms/:roomId/events", async (request, reply) => {
+    const roomId = (request.params as { roomId?: string }).roomId ?? "";
+    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
+    if (!identity) return reply.code(401).send({ code: "AUTH_REQUIRED" });
+    const token = request.cookies.lo_session;
+    const auth = await dependencies.realtime?.authorizer.authenticateToken(token, roomId);
+    if (!auth?.ok) return reply.code(auth?.closeCode === 4403 ? 403 : 401).send({ code: auth?.closeCode === 4403 ? "FORBIDDEN" : "AUTH_REQUIRED" });
+    if (!dependencies.lifecycle) return reply.code(503).send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+    const query = request.query as { afterSeq?: string; limit?: string };
+    const afterSeq = query.afterSeq === undefined ? 0 : Number(query.afterSeq);
+    const limit = query.limit === undefined ? 500 : Number(query.limit);
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) return reply.code(400).send({ code: "INVALID_QUERY" });
+    const events = await dependencies.lifecycle.events.eventsAfter(roomId, afterSeq, limit);
+    const throughRoomSeq = events.length ? events[events.length - 1]!.roomSeq : afterSeq;
+    return reply.type("application/json").send(roomHttpContract.encodeRoomEventPage({ events, throughRoomSeq, ...(events.length === limit ? { nextAfterSeq: throughRoomSeq } : {}) }));
+  });
+
+  if (dependencies.realtime && dependencies.sessions && dependencies.commands) {
+    const websocketHandler = async (socket: any, request: any) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const auth = await dependencies.realtime!.authorizer.authenticateToken(request.cookies.lo_session, roomId);
+      if (!auth.ok || !auth.sessionId) { socket.close(auth.ok ? 4401 : auth.closeCode, "authorization required"); return; }
+      dependencies.realtime!.hub.connect(socket as unknown as SocketLike, { sessionId: auth.sessionId, roomId, principal: auth.principal, actorId: auth.actorId }, dependencies.commands!);
+    };
+    app.get("/v1/rooms/:roomId/realtime", { websocket: true }, websocketHandler);
+    app.get("/v1/rooms/:roomId/ws", { websocket: true }, websocketHandler);
+  }
+
   if (dependencies.lifecycle && dependencies.serviceAssertionTrust) {
     const internal = new InternalAutoCloseRoute(
       dependencies.lifecycle.events,
@@ -193,6 +233,14 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       const status = result.status === "completed" || result.status === "retryable" ? 200
         : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
       return reply.code(status).type("application/json").send(JSON.parse(roomInternalAutoCloseContract.encodeResponse(result)));
+    });
+  }
+
+  if (dependencies.media) {
+    await registerMediaRoutes(app, {
+      media: dependencies.media,
+      sessions: dependencies.sessions,
+      internalReconcile: dependencies.mediaInternalReconcile,
     });
   }
 

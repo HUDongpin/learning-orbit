@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/media-command.schema.json",
+  "title": "MediaCommandCatalog",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "CreateMediaUploadInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "originalFileName", "mime", "sizeBytes", "sha256", "altText", "caption"],
+      "properties": {
+        "kind": { "enum": ["image", "audio"] },
+        "originalFileName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "mime": { "type": "string", "minLength": 1, "maxLength": 127 },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 26214400 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "altText": { "type": ["string", "null"], "maxLength": 500 },
+        "caption": { "type": ["string", "null"], "maxLength": 1000 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "image" } }, "required": ["kind"] },
+          "then": { "properties": { "altText": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "MediaUploadGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaId", "uploadUrl", "requiredHeaders", "expiresAt"],
+      "properties": {
+        "mediaId": { "type": "string", "format": "uuid" },
+        "uploadUrl": { "type": "string", "format": "uri" },
+        "requiredHeaders": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x-amz-checksum-sha256"],
+          "properties": {
+            "x-amz-checksum-sha256": { "type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$" }
+          }
+        },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "MediaDownloadGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["downloadUrl", "expiresAt"],
+      "properties": {
+        "downloadUrl": { "type": "string", "format": "uri" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CompleteMediaUploadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaId", "state", "enqueued"],
+      "properties": {
+        "mediaId": { "type": "string", "format": "uuid" },
+        "state": { "enum": ["uploaded", "processing", "ready"] },
+        "enqueued": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/media-attachment-view.v1.json",
+  "title": "MediaAttachmentView",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mediaId", "kind", "state", "detectedMime", "sizeBytes", "altText", "caption", "failureCode", "createdAt", "updatedAt"],
+  "properties": {
+    "mediaId": { "type": "string", "format": "uuid" },
+    "kind": { "enum": ["image", "audio"] },
+    "state": { "enum": ["upload_pending", "uploaded", "processing", "ready", "quarantined", "failed", "deleted"] },
+    "detectedMime": { "type": ["string", "null"], "maxLength": 127 },
+    "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 26214400 },
+    "altText": { "type": ["string", "null"], "maxLength": 500 },
+    "caption": { "type": ["string", "null"], "maxLength": 1000 },
+    "failureCode": { "type": ["string", "null"], "maxLength": 100 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "image" } }, "required": ["kind"] },
+      "then": { "properties": { "altText": { "type": "string", "minLength": 1 } } }
+    }
+  ]
+}

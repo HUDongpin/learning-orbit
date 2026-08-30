@@ -48,9 +48,18 @@ export const routes = {
     resume: (roomId: string) => room(roomId, "/resume"),
     close: (roomId: string) => room(roomId, "/close"),
   },
+  media: {
+    upload: (roomId: string) => room(roomId, "/media/uploads"),
+    get: (roomId: string, mediaId: string) => room(roomId, `/media/${encodeURIComponent(mediaId)}`),
+    complete: (roomId: string, mediaId: string) => room(roomId, `/media/${encodeURIComponent(mediaId)}/complete`),
+    download: (roomId: string, mediaId: string) => room(roomId, `/media/${encodeURIComponent(mediaId)}/download`),
+  },
   internal: {
     rooms: {
       autoClose: () => "/internal/rooms/auto-close",
+    },
+    media: {
+      reconcileUpload: () => "/internal/media/reconcile-upload",
     },
   },
 } as const;

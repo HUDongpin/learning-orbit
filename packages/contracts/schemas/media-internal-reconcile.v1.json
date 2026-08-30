@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/media-internal-reconcile.v1.json",
+  "title": "MediaInternalReconcileContract",
+  "x-learning-orbit-python-ingress": true,
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "jobType", "roomId", "sourceEventId", "dedupeKey", "mediaId", "correlationId", "claimGeneration", "claimToken", "workerId"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid" },
+        "jobType": { "const": "media.reconcile-upload.v1" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "sourceEventId": { "type": "null" },
+        "dedupeKey": { "type": "string", "pattern": "^media\\.reconcile-upload\\.v1:[0-9a-f-]{36}$" },
+        "mediaId": { "type": "string", "format": "uuid" },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "claimGeneration": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+        "claimToken": { "type": "string", "format": "uuid" },
+        "workerId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "completed" },
+            "code": { "enum": ["PROMOTION_COMMITTED", "ALREADY_PROMOTED", "PROMOTION_ABANDONED", "PROMOTION_IDENTITY_MISMATCH"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code", "notBefore"],
+          "properties": {
+            "status": { "const": "retryable" },
+            "code": { "const": "PROMOTION_NOT_SETTLED" },
+            "notBefore": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "rejected" },
+            "code": { "enum": ["SERVICE_ASSERTION_INVALID", "JOB_CLAIM_STALE", "MEDIA_JOB_IDENTITY_MISMATCH", "ROOM_DELETION_IN_PROGRESS"] }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -8,5 +8,8 @@ export function requiresAllowedOrigin(request: FastifyRequest): boolean {
   return !(
     request.method === "GET"
     && request.routeOptions.url === "/v1/auth/teacher/magic-link/consume"
-  ) && !(request.method === "POST" && request.routeOptions.url === "/internal/rooms/auto-close");
+  ) && !(request.method === "POST" && [
+    "/internal/rooms/auto-close",
+    "/internal/media/reconcile-upload",
+  ].includes(request.routeOptions.url ?? ""));
 }

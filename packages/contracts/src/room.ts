@@ -8,6 +8,7 @@ import type {
   JoinRoomRequest,
   JoinRoomResponse,
   RoomDetails,
+  RoomEventPage,
 } from "./generated/room-http.v1.js";
 import { makeSchemaAjv } from "./schema-ajv.js";
 
@@ -28,6 +29,7 @@ const createResponseValidator = validator<CreateRoomResponse>("CreateRoomRespons
 const joinRequestValidator = validator<JoinRoomRequest>("JoinRoomRequest");
 const joinResponseValidator = validator<JoinRoomResponse>("JoinRoomResponse");
 const detailsValidator = validator<RoomDetails>("RoomDetails");
+const eventsValidator = validator<RoomEventPage>("RoomEventPage");
 
 function parse<T>(value: unknown, validate: ValidateFunction<T>, code: string): T {
   if (!validate(value)) throw new Error(code);
@@ -86,4 +88,6 @@ export const roomHttpContract = {
   encodeRoomDetails(value: unknown): string {
     return encode(value, detailsValidator, "INVALID_ROOM_DETAILS");
   },
+  parseRoomEventPage(value: unknown): RoomEventPage { return parse(value, eventsValidator, "INVALID_ROOM_EVENT_PAGE"); },
+  encodeRoomEventPage(value: unknown): string { return encode(value, eventsValidator, "INVALID_ROOM_EVENT_PAGE"); },
 };

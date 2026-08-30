@@ -6,6 +6,17 @@ import { tokenHash } from "./crypto.js";
 export class SessionService {
   constructor(private readonly pool: Pool) {}
 
+  /** Return the durable session id only after the opaque cookie is verified. */
+  async getSessionId(rawToken: string | undefined): Promise<string | null> {
+    if (!rawToken || rawToken.length > 512) return null;
+    const result = await this.pool.query<{ session_id: string }>(
+      `SELECT session_id FROM auth_session
+       WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()`,
+      [tokenHash(rawToken)],
+    );
+    return result.rows[0]?.session_id ?? null;
+  }
+
   async get(rawToken: string | undefined): Promise<AuthSession | null> {
     if (!rawToken || rawToken.length > 512) return null;
     const result = await this.pool.query<{

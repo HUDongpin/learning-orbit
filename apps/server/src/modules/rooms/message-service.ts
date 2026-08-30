@@ -54,23 +54,52 @@ export class MessageService {
   async #authorizeStudent(
     ctx: Parameters<Parameters<RoomEventRepository["transact"]>[1]>[0],
     principal: AuthSession,
+    sessionId?: string,
   ): Promise<void> {
     if (principal.role !== "student" || principal.roomId !== ctx.room.room_id) throw new RoomError("FORBIDDEN");
-    const result = await ctx.client.query<{ actor_id: string }>(
-      `SELECT actor_id FROM room_member
-       WHERE room_id = $1 AND room_member_id = $2 AND actor_id = $3`,
-      [ctx.room.room_id, principal.roomMemberId, principal.actorId],
-    );
+    const result = sessionId
+      ? await ctx.client.query<{ actor_id: string }>(
+        `SELECT m.actor_id FROM auth_session s
+         JOIN room_member m ON m.room_member_id = s.room_member_id
+         WHERE s.session_id = $1 AND s.principal_kind = 'student'
+           AND s.revoked_at IS NULL AND s.expires_at > transaction_timestamp()
+           AND m.room_id = $2 AND m.room_member_id = $3 AND m.actor_id = $4`,
+        [sessionId, ctx.room.room_id, principal.roomMemberId, principal.actorId],
+      )
+      : await ctx.client.query<{ actor_id: string }>(
+        `SELECT actor_id FROM room_member
+         WHERE room_id = $1 AND room_member_id = $2 AND actor_id = $3`,
+        [ctx.room.room_id, principal.roomMemberId, principal.actorId],
+      );
     if (result.rowCount !== 1) throw new RoomError("FORBIDDEN");
   }
 
   #authorizeTeacher(
     ctx: Parameters<Parameters<RoomEventRepository["transact"]>[1]>[0],
     principal: AuthSession,
+    sessionId?: string,
   ): void {
     if (principal.role !== "teacher" || principal.teacherId !== ctx.room.teacher_id || principal.actorId !== ctx.room.teacher_id) {
       throw new RoomError("FORBIDDEN");
     }
+  }
+
+  async #assertTeacherSession(
+    ctx: Parameters<Parameters<RoomEventRepository["transact"]>[1]>[0],
+    principal: AuthSession,
+    sessionId?: string,
+  ): Promise<void> {
+    this.#authorizeTeacher(ctx, principal, sessionId);
+    if (!sessionId) return;
+    if (principal.role !== "teacher") throw new RoomError("FORBIDDEN");
+    const result = await ctx.client.query(
+      `SELECT 1 FROM auth_session
+       WHERE session_id = $1 AND principal_kind = 'teacher'
+         AND teacher_id = $2 AND revoked_at IS NULL
+         AND expires_at > transaction_timestamp()`,
+      [sessionId, principal.teacherId],
+    );
+    if (result.rowCount !== 1) throw new RoomError("FORBIDDEN");
   }
 
   async #latestMessage(
@@ -129,11 +158,11 @@ export class MessageService {
     if (!target || target.operation === "retract") throw new RoomError("INVALID_COMMAND");
   }
 
-  async add(principal: AuthSession, command: RoomCommand): Promise<RoomEventEnvelope> {
+  async add(principal: AuthSession, command: RoomCommand, sessionId?: string): Promise<RoomEventEnvelope> {
     commandType(command, "message.add");
     if (principal.role !== "student" || principal.roomId !== command.roomId) throw new RoomError("FORBIDDEN");
     return this.ledger.transact(command.roomId, async (ctx) => {
-      await this.#authorizeStudent(ctx, principal);
+      await this.#authorizeStudent(ctx, principal, sessionId);
       const existing = await ctx.findByCausation(command.commandId);
       const retry = this.#retry(existing, "message.added", principal.actorId);
       if (retry) return retry;
@@ -147,15 +176,18 @@ export class MessageService {
       const replyTo = p.replyTo === undefined ? null : p.replyTo;
       await this.#assertMentionsAndReply(ctx, mentions, replyTo as string | null);
       await this.attachments.assertAttachable(ctx.client, principal, command.roomId, mediaIds);
-      return ctx.append({ type: "message.added", actorId: principal.actorId, actorKind: "human", actorRole: "student", revision: 1, operation: "add", eventTime: new Date(command.clientTime), causationId: command.commandId, correlationId: randomUUID(), payload: { messageId: randomUUID(), text, replyTo, mentions, mediaIds } });
+      const messageId = randomUUID();
+      const event = await ctx.append({ type: "message.added", actorId: principal.actorId, actorKind: "human", actorRole: "student", revision: 1, operation: "add", eventTime: new Date(command.clientTime), causationId: command.commandId, correlationId: randomUUID(), payload: { messageId, text, replyTo, mentions, mediaIds } });
+      await this.attachments.bind?.(ctx.client, command.roomId, messageId, event.eventId, mediaIds);
+      return event;
     });
   }
 
-  async revise(principal: AuthSession, command: RoomCommand): Promise<RoomEventEnvelope> {
+  async revise(principal: AuthSession, command: RoomCommand, sessionId?: string): Promise<RoomEventEnvelope> {
     commandType(command, "message.revise");
     return this.ledger.transact(command.roomId, async (ctx) => {
-      if (principal.role === "student") await this.#authorizeStudent(ctx, principal);
-      else this.#authorizeTeacher(ctx, principal);
+      if (principal.role === "student") await this.#authorizeStudent(ctx, principal, sessionId);
+      else await this.#assertTeacherSession(ctx, principal, sessionId);
       const existing = this.#retry(await ctx.findByCausation(command.commandId), "message.revised", principal.actorId);
       if (existing) return existing;
       this.#assertWritable(ctx);
@@ -177,11 +209,11 @@ export class MessageService {
     });
   }
 
-  async retract(principal: AuthSession, command: RoomCommand): Promise<RoomEventEnvelope> {
+  async retract(principal: AuthSession, command: RoomCommand, sessionId?: string): Promise<RoomEventEnvelope> {
     commandType(command, "message.retract");
     return this.ledger.transact(command.roomId, async (ctx) => {
-      if (principal.role === "student") await this.#authorizeStudent(ctx, principal);
-      else this.#authorizeTeacher(ctx, principal);
+      if (principal.role === "student") await this.#authorizeStudent(ctx, principal, sessionId);
+      else await this.#assertTeacherSession(ctx, principal, sessionId);
       const existing = this.#retry(await ctx.findByCausation(command.commandId), "message.retracted", principal.actorId);
       if (existing) return existing;
       this.#assertWritable(ctx);

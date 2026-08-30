@@ -26,7 +26,8 @@ export type ServerFrame =
   | ServerResumeComplete
   | ServerSnapshotRequired
   | ServerDegraded
-  | ServerHeartbeat;
+  | ServerHeartbeat
+  | MediaStatusFrame;
 export type T = string;
 export type Status = "scheduled" | "open" | "paused" | "closed";
 export type RoomEventEnvelope = {
@@ -152,4 +153,11 @@ export interface ServerSnapshotRequired {
 export interface ServerHeartbeat {
   type: "heartbeat";
   serverTime: T;
+}
+export interface MediaStatusFrame {
+  type: "media_status";
+  mediaId: string;
+  state: "uploaded" | "processing" | "ready" | "quarantined" | "failed" | "deleted";
+  failureCode: string | null;
+  updatedAt: string;
 }

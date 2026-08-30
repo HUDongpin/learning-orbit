@@ -128,9 +128,11 @@ export class RoomLifecycleService {
     roomId: string,
     teacherId: string,
     causationId: string,
+    sessionId?: string,
   ): Promise<RoomEventEnvelope> {
     return this.events.transact(roomId, async (context) => {
       this.#requireOwner(context, teacherId);
+      await this.#assertTeacherSession(context, teacherId, sessionId);
       const retry = await existingManualRetry(
         context,
         causationId,
@@ -191,10 +193,11 @@ export class RoomLifecycleService {
     roomId: string,
     teacherId: string,
     causationId: string,
+    sessionId?: string,
   ): Promise<RoomEventEnvelope> {
-    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.paused");
+    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.paused", sessionId);
     if (retry) return retry;
-    if (await this.closeIfDueForOwner(roomId, teacherId)) throw new RoomError("ROOM_NOT_OPEN");
+    if (await this.closeIfDueForOwner(roomId, teacherId, sessionId)) throw new RoomError("ROOM_NOT_OPEN");
     return this.#simpleTransition(
       roomId,
       teacherId,
@@ -203,6 +206,7 @@ export class RoomLifecycleService {
       "open",
       "paused",
       "pausedAt",
+      sessionId,
     );
   }
 
@@ -210,10 +214,11 @@ export class RoomLifecycleService {
     roomId: string,
     teacherId: string,
     causationId: string,
+    sessionId?: string,
   ): Promise<RoomEventEnvelope> {
-    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.resumed");
+    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.resumed", sessionId);
     if (retry) return retry;
-    if (await this.closeIfDueForOwner(roomId, teacherId)) throw new RoomError("ROOM_NOT_OPEN");
+    if (await this.closeIfDueForOwner(roomId, teacherId, sessionId)) throw new RoomError("ROOM_NOT_OPEN");
     return this.#simpleTransition(
       roomId,
       teacherId,
@@ -222,6 +227,7 @@ export class RoomLifecycleService {
       "paused",
       "open",
       "resumedAt",
+      sessionId,
     );
   }
 
@@ -229,12 +235,14 @@ export class RoomLifecycleService {
     roomId: string,
     teacherId: string,
     causationId: string,
+    sessionId?: string,
   ): Promise<RoomEventEnvelope> {
-    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.closed");
+    const retry = await this.#ownerRetry(roomId, teacherId, causationId, "room.closed", sessionId);
     if (retry) return retry;
-    if (await this.closeIfDueForOwner(roomId, teacherId)) throw new RoomError("ROOM_NOT_OPEN");
+    if (await this.closeIfDueForOwner(roomId, teacherId, sessionId)) throw new RoomError("ROOM_NOT_OPEN");
     return this.events.transact(roomId, async (context) => {
       this.#requireOwner(context, teacherId);
+      await this.#assertTeacherSession(context, teacherId, sessionId);
       const retry = await existingManualRetry(
         context,
         causationId,
@@ -276,12 +284,12 @@ export class RoomLifecycleService {
     return this.events.transact(roomId, async (context) => this.#closeDueInContext(context));
   }
 
-  async closeIfDueForOwner(roomId: string, teacherId: string): Promise<RoomEventEnvelope | null> {
-    return this.events.transact(roomId, async (context) => { this.#requireOwner(context, teacherId); return this.#closeDueInContext(context); });
+  async closeIfDueForOwner(roomId: string, teacherId: string, sessionId?: string): Promise<RoomEventEnvelope | null> {
+    return this.events.transact(roomId, async (context) => { this.#requireOwner(context, teacherId); await this.#assertTeacherSession(context, teacherId, sessionId); return this.#closeDueInContext(context); });
   }
 
-  async #ownerRetry(roomId: string, teacherId: string, causationId: string, type: ManualEventType): Promise<RoomEventEnvelope | null> {
-    return this.events.transact(roomId, async (context) => { this.#requireOwner(context, teacherId); return existingManualRetry(context, causationId, type, roomId, teacherId); });
+  async #ownerRetry(roomId: string, teacherId: string, causationId: string, type: ManualEventType, sessionId?: string): Promise<RoomEventEnvelope | null> {
+    return this.events.transact(roomId, async (context) => { this.#requireOwner(context, teacherId); await this.#assertTeacherSession(context, teacherId, sessionId); return existingManualRetry(context, causationId, type, roomId, teacherId); });
   }
 
   async #closeDueInContext(
@@ -328,9 +336,11 @@ export class RoomLifecycleService {
     requiredStatus: "open" | "paused",
     nextStatus: "open" | "paused",
     payloadKey: "pausedAt" | "resumedAt",
+    sessionId?: string,
   ): Promise<RoomEventEnvelope> {
     return this.events.transact(roomId, async (context) => {
       this.#requireOwner(context, teacherId);
+      await this.#assertTeacherSession(context, teacherId, sessionId);
       const retry = await existingManualRetry(
         context,
         causationId,
@@ -363,5 +373,21 @@ export class RoomLifecycleService {
 
   #requireOwner(context: RoomEventTransactionContext, teacherId: string): void {
     if (context.room.teacher_id !== teacherId) throw new RoomError("FORBIDDEN");
+  }
+
+  async #assertTeacherSession(
+    context: RoomEventTransactionContext,
+    teacherId: string,
+    sessionId?: string,
+  ): Promise<void> {
+    if (!sessionId) return;
+    const result = await context.client.query(
+      `SELECT 1 FROM auth_session
+       WHERE session_id = $1 AND principal_kind = 'teacher'
+         AND teacher_id = $2 AND revoked_at IS NULL
+         AND expires_at > transaction_timestamp()`,
+      [sessionId, teacherId],
+    );
+    if (result.rowCount !== 1) throw new RoomError("FORBIDDEN");
   }
 }

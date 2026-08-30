@@ -1,6 +1,7 @@
 import fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
+import websocket from "@fastify/websocket";
 import type { Pool } from "pg";
 
 import type { Clock } from "./clock.js";
@@ -24,6 +25,15 @@ import { CommandService } from "./modules/rooms/command-service.js";
 import { noAttachments } from "./modules/rooms/attachment-validator.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { registerRoutes } from "./routes.js";
+import { RoomHub } from "./modules/realtime/room-hub.js";
+import { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery-authorizer.js";
+import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
+import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
+import { MediaRepository } from "./modules/media/media-repository.js";
+import { S3MediaStore } from "./modules/media/s3-media-store.js";
+import type { MediaDeps } from "./modules/media/media-service.js";
+import type { MediaStore } from "./modules/media/media-store.js";
+import { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
 
 export interface BuildAppOptions {
   databaseUrl?: string;
@@ -38,6 +48,8 @@ export interface BuildAppOptions {
   roomCodeSource?: RoomCodeSource;
   serviceAssertionTrust?: ServiceAssertionTrust;
   jobClaims?: JobClaimAuthority;
+  media?: MediaDeps;
+  mediaStore?: MediaStore;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -60,6 +72,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     global: false, skipOnError: false,
     errorResponseBuilder: () => ({ statusCode: 429, code: "RATE_LIMITED" }),
   });
+  await app.register(websocket);
   app.addHook("onRequest", async (request, reply) => {
     const requestOrigin = request.headers.origin;
     if (requiresAllowedOrigin(request)) {
@@ -77,6 +90,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const lifecycle = pool ? new RoomLifecycleService(new RoomEventRepository(pool, createCoreEventPayloadRegistry(), clock), clock) : undefined;
   const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
+  const jobClaims = options.jobClaims ?? new JobClaimAuthority();
+  const realtime = pool ? (() => { const authorizer = new RealtimeDeliveryAuthorizer(pool); const hub = new RoomHub(pool, authorizer); return { authorizer, hub, publisher: new OutboxPublisher(pool, hub) }; })() : undefined;
+  const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
+  const media: MediaDeps | undefined = options.media ?? (pool ? {
+    pool,
+    store: options.mediaStore ?? new S3MediaStore(),
+    repo: new MediaRepository(pool, clock),
+    clock,
+    config: { storageBrowserOrigins: [config.publicBaseOrigin] },
+  } : undefined);
+  const mediaInternalReconcile = pool && media && assertionTrust
+    ? new MediaInternalReconcileRoute(
+      lifecycle?.events ?? new RoomEventRepository(pool, createCoreEventPayloadRegistry(), clock),
+      media.repo ?? new MediaRepository(pool, clock),
+      media.store,
+      clock,
+      assertionTrust,
+      jobClaims,
+    )
+    : undefined;
   await registerRoutes(app, {
     magicLinks: pool ? new MagicLinkService(pool, clock, config.publicBaseOrigin, sender) : undefined,
     sessions: pool ? new SessionService(pool) : undefined,
@@ -85,10 +118,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       : undefined,
     lifecycle,
     serviceAssertionTrust: assertionTrust,
-    jobClaims: options.jobClaims ?? new JobClaimAuthority(),
-    commands: pool && lifecycle ? new CommandService(new MessageService(lifecycle.events, noAttachments, clock), lifecycle) : undefined,
+    jobClaims,
+    commands: pool && lifecycle ? new CommandService(new MessageService(lifecycle.events, media ? new MediaAttachmentValidator() : noAttachments, clock), lifecycle) : undefined,
+    realtime,
+    media,
+    mediaInternalReconcile,
   });
   app.addHook("onClose", async () => {
+    if (publisherTimer) clearInterval(publisherTimer);
     if (ownsPool) await pool?.end();
     if (smtp) await smtp.transport.close();
   });

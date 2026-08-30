@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/media-status.v1.json",
+  "title": "MediaStatusFrame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "mediaId", "state", "failureCode", "updatedAt"],
+  "properties": {
+    "type": { "const": "media_status" },
+    "mediaId": { "type": "string", "format": "uuid" },
+    "state": { "enum": ["uploaded", "processing", "ready", "quarantined", "failed", "deleted"] },
+    "failureCode": { "type": ["string", "null"], "maxLength": 100 },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}
