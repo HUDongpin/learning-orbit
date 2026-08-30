@@ -10,7 +10,7 @@ export interface ConnectionIdentity { readonly sessionId: string; readonly roomI
 export class RealtimeConnection {
   readonly signals = new EphemeralSignals();
   #hello = false; #closed = false; #replaying = true; #resumeFrom = 0; #replayThrough = 0;
-  #liveBuffer: RealtimeFrame[] = [];
+  #liveBuffer: Array<Extract<RealtimeFrame, { type: "event" }>> = [];
   #lastPresence = 0; #lastTyping = 0; #lastClientSeq = -1;
   #helloTimer!: ReturnType<typeof setTimeout>; #heartbeatTimer!: ReturnType<typeof setInterval>;
   constructor(readonly socket: SocketLike, readonly identity: ConnectionIdentity, private readonly authorizer: RealtimeDeliveryAuthorizer, private readonly commands: CommandService, private readonly hub: RoomHub, private readonly now: () => Date = () => new Date()) {

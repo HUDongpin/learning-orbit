@@ -58,7 +58,7 @@ describe("room auto-close enqueue", () => {
     }>(
       `SELECT job_type, room_id, source_event_id, dedupe_key, correlation_id,
               payload, status, run_after, claim_token, locked_at, locked_by
-       FROM worker_job WHERE room_id = $1`,
+       FROM worker_job WHERE room_id = $1 AND job_type = 'room.auto-close.v1'`,
       [room.roomId],
     );
     expect(result.rows).toHaveLength(1);
@@ -75,6 +75,11 @@ describe("room auto-close enqueue", () => {
       locked_by: null,
     });
     expect(result.rows[0]?.run_after.toISOString()).toBe("2026-08-30T08:45:00.000Z");
+    const analytics = await pool.query<{ job_type: string; source_event_id: string; analytics_order_kind: number }>(
+      "SELECT job_type, source_event_id, analytics_order_kind FROM worker_job WHERE room_id = $1 AND job_type = 'analytics.consume.v1'",
+      [room.roomId],
+    );
+    expect(analytics.rows).toEqual([{ job_type: "analytics.consume.v1", source_event_id: opened.eventId, analytics_order_kind: 0 }]);
   });
 
   it("serializes concurrent opens and creates only one event, outbox, and job", async () => {
@@ -94,7 +99,7 @@ describe("room auto-close enqueue", () => {
       `SELECT
          (SELECT count(*)::int FROM room_event WHERE room_id = $1) AS events,
          (SELECT count(*)::int FROM outbox_event WHERE room_id = $1) AS outbox,
-         (SELECT count(*)::int FROM worker_job WHERE room_id = $1) AS jobs,
+         (SELECT count(*)::int FROM worker_job WHERE room_id = $1 AND job_type = 'room.auto-close.v1') AS jobs,
          next_room_seq
        FROM classroom_room WHERE room_id = $1`,
       [room.roomId],

@@ -104,7 +104,7 @@ export async function appendAutomaticClose(
   );
   await revokeStudentSessions(context, roomId, now);
   await cancelRoomJobs(context, roomId, now, preserveJobId);
-  return context.append({
+  const closed = await context.append({
     type: "room.closed",
     actorId: jobId,
     actorKind: "system",
@@ -116,6 +116,12 @@ export async function appendAutomaticClose(
     correlationId,
     payload: { closedAt: closesAt.toISOString() },
   });
+  // Appending the close event also fan-outs an analytics job.  Re-run the
+  // cancellation fence after the append so a closed room cannot leave that
+  // newly-created job queued while preserving only the currently claimed
+  // auto-close job for its completion marker.
+  await cancelRoomJobs(context, roomId, now, preserveJobId);
+  return closed;
 }
 
 export class RoomLifecycleService {
@@ -264,7 +270,7 @@ export class RoomLifecycleService {
       );
       await revokeStudentSessions(context, roomId, now);
       await cancelRoomJobs(context, roomId, now);
-      return context.append({
+      const closed = await context.append({
         type: "room.closed",
         actorId: teacherId,
         actorKind: "human",
@@ -276,6 +282,8 @@ export class RoomLifecycleService {
         correlationId: randomUUID(),
         payload: { closedAt: now.toISOString() },
       });
+      await cancelRoomJobs(context, roomId, now);
+      return closed;
     });
   }
 
