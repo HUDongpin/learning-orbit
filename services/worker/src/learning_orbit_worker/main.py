@@ -7,40 +7,80 @@ import os
 import signal
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 from .core_handlers import register_core_handlers
 from .analytics_handlers import register_analytics_handlers
 from .handler_registry import HandlerOutcome, HandlerRegistry, WorkerDeps, run_with_lease
+from .internal_http import InternalServiceClient
 from .jobs import JobStore
 from .projection_store import ProjectionStore
 from .pipeline_handlers import register_pipeline_handlers
 from .lifecycle import register_lifecycle_handlers
+from .service_assertion import ServiceAssertionSigner
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerConfig:
     database_url: str
     worker_id: str
+    private_key_file: Path
+    assertion_issuer: str
+    assertion_key_id: str
+    internal_base_origin: str
     poll_seconds: float = 1.0
     claim_size: int = 1
 
     @classmethod
-    def from_env(cls) -> "WorkerConfig":
-        database_url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
-        worker_id = os.environ.get("LO_WORKER_ID")
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "WorkerConfig":
+        env = os.environ if env is None else env
+        database_url = env.get("TEST_DATABASE_URL") or env.get("DATABASE_URL")
+        worker_id = env.get("LO_WORKER_ID")
         if not database_url:
             raise ValueError("WORKER_DATABASE_URL_REQUIRED")
         if not worker_id:
             raise ValueError("WORKER_ID_REQUIRED")
-        claim_size = int(os.environ.get("LO_WORKER_CLAIM_SIZE", "1"))
+        private_key_text = env.get("LO_WORKER_ASSERTION_PRIVATE_KEY_FILE")
+        if not private_key_text:
+            raise ValueError("WORKER_ASSERTION_PRIVATE_KEY_FILE_REQUIRED")
+        private_key_file = Path(private_key_text)
+        if not private_key_file.is_absolute():
+            raise ValueError("WORKER_ASSERTION_PRIVATE_KEY_FILE_INVALID")
+        assertion_issuer = env.get("LO_SERVICE_ASSERTION_ISSUER")
+        if not assertion_issuer:
+            raise ValueError("WORKER_ASSERTION_ISSUER_REQUIRED")
+        assertion_key_id = env.get("LO_SERVICE_ASSERTION_KEY_ID")
+        if not assertion_key_id:
+            raise ValueError("WORKER_ASSERTION_KEY_ID_REQUIRED")
+        internal_base_origin = env.get("LO_INTERNAL_BASE_ORIGIN")
+        if not internal_base_origin:
+            raise ValueError("WORKER_INTERNAL_BASE_ORIGIN_REQUIRED")
+        parsed_origin = urlparse(internal_base_origin)
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.params
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or (parsed_origin.scheme == "http" and parsed_origin.hostname not in {"127.0.0.1", "localhost", "::1"})
+        ):
+            raise ValueError("INTERNAL_HTTP_ORIGIN_INVALID")
+        claim_size = int(env.get("LO_WORKER_CLAIM_SIZE", "1"))
         if claim_size != 1:
             raise ValueError("WORKER_CLAIM_SIZE_MUST_BE_ONE")
-        poll = float(os.environ.get("LO_WORKER_POLL_SECONDS", "1"))
+        poll = float(env.get("LO_WORKER_POLL_SECONDS", "1"))
         if poll <= 0 or poll > 60:
             raise ValueError("WORKER_POLL_INTERVAL_INVALID")
-        return cls(database_url, worker_id, poll, claim_size)
+        return cls(
+            database_url, worker_id, private_key_file, assertion_issuer,
+            assertion_key_id, internal_base_origin, poll, claim_size,
+        )
 
 
 class WorkerSupervisor:
@@ -65,14 +105,47 @@ class WorkerSupervisor:
                 stop.wait(self.poll_seconds)
 
 
-def build_supervisor(config: WorkerConfig | None = None) -> WorkerSupervisor:
+def build_supervisor(
+    config: WorkerConfig | None = None,
+    *,
+    connect: Callable[..., Any] | None = None,
+    signer_factory: Callable[..., Any] = ServiceAssertionSigner,
+    client_factory: Callable[..., Any] = InternalServiceClient,
+) -> WorkerSupervisor:
     config = config or WorkerConfig.from_env()
+    if connect is None:
+        try:
+            import psycopg
+        except ImportError as error:
+            raise RuntimeError("WORKER_PSYCOPG_MISSING") from error
+        connect = psycopg.connect
+    connection = connect(config.database_url, autocommit=True)
     try:
-        import psycopg
-    except ImportError as error:
-        raise RuntimeError("WORKER_PSYCOPG_MISSING") from error
-    connection = psycopg.connect(config.database_url, autocommit=True)
-    return WorkerSupervisor(connection, config.worker_id, poll_seconds=config.poll_seconds)
+        signer = signer_factory(
+            config.assertion_issuer,
+            config.assertion_key_id,
+            config.private_key_file,
+        )
+        internal_http = client_factory(config.internal_base_origin, signer)
+        jobs = JobStore(connection, config.worker_id)
+        deps = WorkerDeps(
+            connection,
+            jobs,
+            service_assertion=signer,
+            internal_http=internal_http,
+            projection_store=ProjectionStore(connection),
+        )
+        return WorkerSupervisor(
+            connection,
+            config.worker_id,
+            deps=deps,
+            poll_seconds=config.poll_seconds,
+        )
+    except BaseException:
+        close = getattr(connection, "close", None)
+        if callable(close):
+            close()
+        raise
 
 
 def main() -> int:

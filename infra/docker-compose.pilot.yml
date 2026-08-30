@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+    environment:
+      POSTGRES_DB: ${LO_PILOT_POSTGRES_DB:?LO_PILOT_POSTGRES_DB is required}
+      POSTGRES_USER: learning_orbit
+      POSTGRES_PASSWORD: ${LO_POSTGRES_PASSWORD:?LO_POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:55432:5432"
+    labels:
+      io.learning-orbit.local-pilot.run-id: ${LO_PILOT_RUN_ID:?LO_PILOT_RUN_ID is required}
+      io.learning-orbit.local-pilot.database-name: ${LO_PILOT_POSTGRES_DB:?LO_PILOT_POSTGRES_DB is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+    volumes:
+      - pilot_postgres_data:/var/lib/postgresql
+
+  mailpit:
+    image: axllent/mailpit:v1.31.0@sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+    labels:
+      io.learning-orbit.local-pilot.run-id: ${LO_PILOT_RUN_ID:?LO_PILOT_RUN_ID is required}
+      io.learning-orbit.local-pilot.database-name: ${LO_PILOT_POSTGRES_DB:?LO_PILOT_POSTGRES_DB is required}
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s
+
+volumes:
+  pilot_postgres_data:
+    labels:
+      io.learning-orbit.local-pilot.run-id: ${LO_PILOT_RUN_ID:?LO_PILOT_RUN_ID is required}
+      io.learning-orbit.local-pilot.database-name: ${LO_PILOT_POSTGRES_DB:?LO_PILOT_POSTGRES_DB is required}
+
+networks:
+  default:
+    labels:
+      io.learning-orbit.local-pilot.run-id: ${LO_PILOT_RUN_ID:?LO_PILOT_RUN_ID is required}
+      io.learning-orbit.local-pilot.database-name: ${LO_PILOT_POSTGRES_DB:?LO_PILOT_POSTGRES_DB is required}

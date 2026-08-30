@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "gates": [
+    {
+      "id": "contracts-vitest",
+      "runner": "vitest",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@learning-orbit/contracts",
+        "exec",
+        "vitest",
+        "run",
+        "--allowOnly=false",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/contracts-vitest.summary.json",
+      "expectedTests": 45
+    },
+    {
+      "id": "server-vitest",
+      "runner": "vitest",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@learning-orbit/server",
+        "exec",
+        "vitest",
+        "run",
+        "--allowOnly=false",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
+      "expectedTests": 185
+    },
+    {
+      "id": "web-vitest",
+      "runner": "vitest",
+      "argv": [
+        "pnpm",
+        "--filter",
+        "@learning-orbit/web",
+        "exec",
+        "vitest",
+        "run",
+        "--allowOnly=false",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/web-vitest.summary.json",
+      "expectedTests": 36
+    },
+    {
+      "id": "pilot-harness-vitest",
+      "runner": "vitest",
+      "argv": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "tests/pilot",
+        "--project",
+        "cross-node",
+        "--allowOnly=false",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/pilot-harness-vitest.summary.json",
+      "expectedTests": 47
+    },
+    {
+      "id": "worker-python",
+      "runner": "python-unittest",
+      "argv": [
+        ".venv/bin/python",
+        "scripts/local-pilot/python-unittest-report.py",
+        "--start-directory",
+        "services/worker/tests"
+      ],
+      "report": "test-results/local-pilot/summaries/worker-python.summary.json",
+      "expectedTests": 66
+    },
+    {
+      "id": "browser-playwright",
+      "runner": "playwright",
+      "argv": [
+        "pnpm",
+        "exec",
+        "playwright",
+        "test",
+        "--config",
+        "apps/web/playwright.config.ts",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/browser-playwright.summary.json",
+      "expectedTests": 1
+    },
+    {
+      "id": "pilot-load",
+      "runner": "load",
+      "argv": [
+        "pnpm",
+        "load:pilot"
+      ],
+      "report": "test-results/local-pilot/summaries/pilot-load.summary.json",
+      "expectedTests": 1
+    }
+  ]
+}

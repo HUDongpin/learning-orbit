@@ -11,3 +11,11 @@ Analytics Worker 另需要 deployment-controlled 的 `LO_ANALYTICS_PSEUDONYM_KEY
 16 個 UTF-8 字節時，Worker 會 fail closed，不會退回公開常量或可逆的 actor ID。
 該值不可寫入 Git、日誌、報告、測試 fixture 或瀏覽器 payload，輪換時應建立新的
 analysis epoch 並按資料治理流程處理舊投影。
+
+Worker composition root 需要同時設定 `LO_WORKER_ASSERTION_PRIVATE_KEY_FILE`、
+`LO_SERVICE_ASSERTION_ISSUER`、`LO_SERVICE_ASSERTION_KEY_ID` 與
+`LO_INTERNAL_BASE_ORIGIN`。前者必須指向目前 process owner 所有、非 symlink、
+mode `0600` 的 Ed25519 私鑰；issuer 與 key ID 必須對應 Fastify trust file 中的
+公開 key record。`LO_INTERNAL_BASE_ORIGIN` 必須是經審查的 HTTPS Origin，或僅在
+同機受控環境使用 loopback HTTP Origin；它不能包含 user info、path、query 或
+fragment。Fastify 只接收公開 trust file，不能取得 Worker 私鑰路徑。
