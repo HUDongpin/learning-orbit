@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/provider-copy-authority-record.v1.json",
+  "title": "ProviderCopyAuthorityRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recordKind", "authorityId", "issuerId", "keyId", "providerId", "providerManifestSha256", "lifecycleMode", "region", "purpose", "scopeHash", "startsAt", "expiresAt", "recordSha256"],
+  "properties": {
+    "recordKind": { "const": "provider_copy_authority" },
+    "authorityId": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9._:-]+$" },
+    "issuerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
+    "keyId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
+    "providerId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9._-]+$" },
+    "providerManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "lifecycleMode": { "const": "no_persistent_copy_attested" },
+    "region": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
+    "scopeHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "startsAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "recordSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

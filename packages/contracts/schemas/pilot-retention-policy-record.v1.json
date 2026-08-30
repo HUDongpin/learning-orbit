@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/pilot-retention-policy-record.v1.json",
+  "title": "PilotRetentionPolicyRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recordKind", "policyId", "policyVersion", "roomEventsDays", "rawMediaDays", "derivedArtifactsDays", "projectionsDays", "agentRunsDays", "providerCopiesDays", "backupsDays", "auditMetadataDays", "approvalReference", "approvedAt", "expiresAt"],
+  "properties": {
+    "recordKind": { "const": "pilot_retention_policy" },
+    "policyId": { "type": "string", "format": "uuid" },
+    "policyVersion": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9._-]+$" },
+    "roomEventsDays": { "type": "integer", "minimum": 1 },
+    "rawMediaDays": { "type": "integer", "minimum": 1 },
+    "derivedArtifactsDays": { "type": "integer", "minimum": 1 },
+    "projectionsDays": { "type": "integer", "minimum": 1 },
+    "agentRunsDays": { "type": "integer", "minimum": 1 },
+    "providerCopiesDays": { "type": "integer", "minimum": 1 },
+    "backupsDays": { "type": "integer", "minimum": 1 },
+    "auditMetadataDays": { "type": "integer", "minimum": 1 },
+    "approvalReference": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "approvedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  }
+}

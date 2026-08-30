@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/deletion-lifecycle.v1.json",
+  "title": "DeletionLifecycle",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "DeleteRoomRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["confirmation"],
+      "properties": { "confirmation": { "type": "string", "minLength": 1, "maxLength": 256 } }
+    },
+    "DeleteRoomAccepted": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deletionJobId", "status"],
+      "properties": { "deletionJobId": { "type": "string", "format": "uuid" }, "status": { "const": "queued" } }
+    },
+    "DeletionReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["receiptVersion", "surfacesVerified", "completedAt"],
+      "properties": {
+        "receiptVersion": { "const": 1 },
+        "surfacesVerified": { "type": "array", "minItems": 8, "uniqueItems": true, "items": { "enum": ["agent_runs", "artifacts", "caches", "derivatives", "events", "media", "projections", "provider_copies"] } },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "DeletionStatus": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["deletionJobId", "status", "nextPollAfterMs", "failureCode"],
+          "properties": {
+            "deletionJobId": { "type": "string", "format": "uuid" },
+            "status": { "enum": ["queued", "running", "retryable", "dead"] },
+            "nextPollAfterMs": { "type": ["integer", "null"], "minimum": 250, "maximum": 30000 },
+            "failureCode": { "type": ["string", "null"], "maxLength": 100, "pattern": "^[A-Z0-9_]+$" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["deletionJobId", "status", "receipt"],
+          "properties": { "deletionJobId": { "type": "string", "format": "uuid" }, "status": { "const": "completed" }, "receipt": { "$ref": "#/$defs/DeletionReceipt" } }
+        }
+      ]
+    }
+  }
+}
