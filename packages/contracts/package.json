@@ -1,0 +1,23 @@
+{
+  "name": "@learning-orbit/contracts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit false",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "generate": "node scripts/generate.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "15.0.4",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}
