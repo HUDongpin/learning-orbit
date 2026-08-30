@@ -1,13 +1,15 @@
 import type { FastifyInstance } from "fastify";
 
-import { authContract } from "@learning-orbit/contracts";
+import { authContract, roomHttpContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
+import { RoomServiceError, type RoomService } from "./modules/rooms/room-service.js";
 import { normalizedRequestIp, ratePolicies } from "./modules/security/rate-policies.js";
 
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
   sessions: SessionService | undefined;
+  rooms: RoomService | undefined;
 }
 
 const genericAccepted = { accepted: true };
@@ -18,6 +20,11 @@ function sessionCookie(token: string): { value: string; options: { httpOnly: tru
 }
 
 export async function registerRoutes(app: FastifyInstance, dependencies: AuthRouteDependencies): Promise<void> {
+  const failedJoinLimit = app.createRateLimit({
+    ...ratePolicies.failedJoin,
+    keyGenerator: normalizedRequestIp,
+  });
+
   app.post("/v1/auth/teacher/magic-link", {
     config: { rateLimit: { ...ratePolicies.magicLink, keyGenerator: normalizedRequestIp } },
   }, async (request, reply) => {
@@ -51,6 +58,82 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     await dependencies.sessions?.revoke(request.cookies.lo_session);
     reply.clearCookie("lo_session", { httpOnly: true, secure: true, sameSite: "lax", path: "/" });
     return reply.code(204).send();
+  });
+
+  app.post("/v1/rooms", async (request, reply) => {
+    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
+    if (!identity) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    if (!dependencies.rooms) {
+      return reply.code(503).type("application/json").send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+    }
+    try {
+      const result = await dependencies.rooms.createRoom(identity, request.body);
+      return reply.code(201).type("application/json")
+        .send(roomHttpContract.encodeCreateRoomResponse(result));
+    } catch (error) {
+      if (error instanceof RoomServiceError && error.code === "ROOM_FORBIDDEN") {
+        return reply.code(403).type("application/json").send({ code: "ROOM_FORBIDDEN" });
+      }
+      if (error instanceof RoomServiceError && error.code === "ROOM_CODE_UNAVAILABLE") {
+        return reply.code(503).type("application/json").send({ code: "ROOM_CODE_UNAVAILABLE" });
+      }
+      if (error instanceof Error && error.message === "INVALID_CREATE_ROOM_REQUEST") {
+        return reply.code(400).type("application/json").send({ code: "INVALID_ROOM_REQUEST" });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/v1/rooms/join", async (request, reply) => {
+    if (!dependencies.rooms) {
+      return reply.code(503).type("application/json").send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+    }
+    const limit = await failedJoinLimit(request, { increment: false });
+    if (!limit.isAllowed && limit.isExceeded) {
+      return reply.code(429).type("application/json").send({ code: "RATE_LIMITED" });
+    }
+    try {
+      const joined = await dependencies.rooms.joinRoom(request.body);
+      const cookie = sessionCookie(joined.sessionToken);
+      reply.setCookie("lo_session", cookie.value, cookie.options);
+      return reply.type("application/json")
+        .send(roomHttpContract.encodeJoinRoomResponse(joined.response));
+    } catch (error) {
+      const isInvalid = error instanceof Error && error.message === "INVALID_JOIN_ROOM_REQUEST";
+      const isForbidden = error instanceof RoomServiceError && error.code === "JOIN_FORBIDDEN";
+      if (isInvalid || isForbidden) {
+        const consumed = await failedJoinLimit(request);
+        if (!consumed.isAllowed && consumed.isExceeded) {
+          return reply.code(429).type("application/json").send({ code: "RATE_LIMITED" });
+        }
+      }
+      if (isInvalid) {
+        return reply.code(400).type("application/json").send({ code: "INVALID_JOIN_REQUEST" });
+      }
+      if (isForbidden) {
+        return reply.code(403).type("application/json").send({ code: "JOIN_FORBIDDEN" });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/v1/rooms/:roomId", async (request, reply) => {
+    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
+    if (!identity) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    if (!dependencies.rooms) {
+      return reply.code(503).type("application/json").send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+    }
+    const params = request.params as { roomId?: unknown };
+    const roomId = typeof params.roomId === "string" ? params.roomId : "";
+    try {
+      const details = await dependencies.rooms.getRoom(identity, roomId);
+      return reply.type("application/json").send(roomHttpContract.encodeRoomDetails(details));
+    } catch (error) {
+      if (error instanceof RoomServiceError && error.code === "ROOM_NOT_FOUND") {
+        return reply.code(404).type("application/json").send({ code: "ROOM_NOT_FOUND" });
+      }
+      throw error;
+    }
   });
 
 }

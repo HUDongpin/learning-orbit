@@ -34,7 +34,7 @@
     {
       "file": "room-http.v1.json",
       "id": "https://learning-orbit.local/schemas/room-http.v1.json",
-      "sha256": "ae5c1c2d36773640be66b3dc3d44439e259e816e0718edac0dd1195c77723455"
+      "sha256": "556647d94f6c604c48df9d33da6b0f3ec1be9edc67c06954a2563668596a6a33"
     }
   ],
   "generatedModules": [

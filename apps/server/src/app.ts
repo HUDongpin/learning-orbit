@@ -11,6 +11,8 @@ import { createDatabasePool } from "./db/pool.js";
 import { MagicLinkService, type SendMagicLink } from "./modules/auth/magic-link-service.js";
 import { createSmtpMailer, type MailTransport } from "./modules/auth/mailer.js";
 import { SessionService } from "./modules/auth/session-service.js";
+import { RoomService, type RoomCodeSource } from "./modules/rooms/room-service.js";
+import { CodeHasher } from "./modules/rooms/seat-codes.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { registerRoutes } from "./routes.js";
 
@@ -23,6 +25,8 @@ export interface BuildAppOptions {
   sendMagicLink?: SendMagicLink;
   mailTransport?: MailTransport;
   createSmtpMailer?: typeof createSmtpMailer;
+  codeHasher?: CodeHasher;
+  roomCodeSource?: RoomCodeSource;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -54,9 +58,17 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   });
   const clock = options.clock ?? systemClock;
+  const configuredHasher = config.roomCodePepperCurrentVersion !== undefined
+    && config.roomCodePeppers !== undefined
+    ? new CodeHasher(config.roomCodePepperCurrentVersion, config.roomCodePeppers)
+    : undefined;
+  const codeHasher = options.codeHasher ?? configuredHasher;
   await registerRoutes(app, {
     magicLinks: pool ? new MagicLinkService(pool, clock, config.publicBaseOrigin, sender) : undefined,
     sessions: pool ? new SessionService(pool) : undefined,
+    rooms: pool && codeHasher
+      ? new RoomService(pool, codeHasher, clock, options.roomCodeSource)
+      : undefined,
   });
   app.addHook("onClose", async () => {
     if (ownsPool) await pool?.end();

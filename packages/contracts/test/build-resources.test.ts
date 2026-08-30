@@ -22,5 +22,8 @@ describe("compiled contract schema resources", () => {
     for (const name of names) expect(await readFile(resolve(dist, name), "utf8")).toBe(await readFile(resolve(source, name), "utf8"));
     const module = await import(`${pathToFileURL(resolve(root, "dist/src/index.js")).href}?resource-test=${Date.now()}`);
     expect(module.authContract.parseTeacherMagicLinkRequest({ email: "teacher@example.edu" })).toEqual({ email: "teacher@example.edu" });
+    expect(module.roomHttpContract.parseJoinRoomRequest({
+      roomCode: "ABC234", seatCode: "DEF567GHJK",
+    })).toEqual({ roomCode: "ABC234", seatCode: "DEF567GHJK" });
   });
 });

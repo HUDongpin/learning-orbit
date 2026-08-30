@@ -6,6 +6,10 @@ import type { Pool, PoolClient } from "pg";
 
 const sqlDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../../db/sql");
 const lockRoomInTransactionSql = readFileSync(resolve(sqlDirectory, "lock_room_xact.sql"), "utf8");
+const lockRoomCodeAllocationSql = readFileSync(
+  resolve(sqlDirectory, "lock_room_code_allocation.sql"),
+  "utf8",
+);
 const lockRoomSessionSql = readFileSync(resolve(sqlDirectory, "lock_room_session.sql"), "utf8");
 const unlockRoomSessionSql = readFileSync(resolve(sqlDirectory, "unlock_room_session.sql"), "utf8");
 
@@ -13,9 +17,18 @@ const unlockRoomSessionSql = readFileSync(resolve(sqlDirectory, "unlock_room_ses
  * Room-scoped writes must take locks in this order: canonical room advisory,
  * classroom_room FOR UPDATE, family rows by primary key, exact worker_job FOR
  * UPDATE, then the mutation/marker. Candidate job claiming only locks worker_job.
+ * Room creation takes the canonical room-code allocation lock before checking
+ * or inserting a candidate code; it has no room row to lock yet.
  */
 export async function lockRoomInTransaction(tx: PoolClient, roomId: string): Promise<void> {
   await tx.query(lockRoomInTransactionSql, [roomId]);
+}
+
+export async function lockRoomCodeAllocationInTransaction(
+  tx: PoolClient,
+  normalizedCode: string,
+): Promise<void> {
+  await tx.query(lockRoomCodeAllocationSql, [normalizedCode]);
 }
 
 export async function withRoomSessionLock<T>(

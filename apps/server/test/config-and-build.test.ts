@@ -10,6 +10,13 @@ const distSql = resolve(repoRoot, "apps/server/dist/src/db/sql");
 const execFileAsync = promisify(execFile);
 
 describe("deployment-safe configuration and build resources", () => {
+  it("documents only empty room-code pepper variable slots", async () => {
+    const example = await readFile(resolve(repoRoot, ".env.example"), "utf8");
+    expect(example).toContain("ROOM_CODE_PEPPER_CURRENT_VERSION=\n");
+    expect(example).toContain("ROOM_CODE_PEPPER_V1=\n");
+    expect(example).not.toMatch(/ROOM_CODE_PEPPER_(?:CURRENT_VERSION|V[0-9]+)=.+/);
+  });
+
   it("binds Postgres locally and requires an injected password", async () => {
     const composePath = resolve(repoRoot, "infra/docker-compose.yml");
     const compose = await readFile(composePath, "utf8");
