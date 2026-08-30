@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/teacher-room-list.v1.json",
+  "title": "TeacherRoomListResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rooms", "truncated"],
+  "properties": {
+    "rooms": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["roomId", "topic", "status", "durationSeconds", "startsAt", "closesAt", "createdAt"],
+        "properties": {
+          "roomId": { "type": "string", "format": "uuid" },
+          "topic": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "status": { "enum": ["scheduled", "open", "paused", "closed"] },
+          "durationSeconds": { "const": 2700 },
+          "startsAt": { "type": ["string", "null"], "format": "date-time" },
+          "closesAt": { "type": ["string", "null"], "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "truncated": { "type": "boolean" }
+  }
+}

@@ -10,7 +10,8 @@
     "predev": "pnpm --filter @learning-orbit/contracts build",
     "dev": "tsx watch src/main.ts",
     "db:migrate": "tsx src/db/migrate-cli.ts",
-    "db:migrate:test": "tsx src/db/migrate-cli.ts --test"
+    "db:migrate:test": "tsx src/db/migrate-cli.ts --test",
+    "teacher:provision": "tsx src/teacher-provision-cli.ts"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",

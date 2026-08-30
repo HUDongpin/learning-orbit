@@ -88,7 +88,7 @@ Its contract is fixed:
 
 - Exactly one `--email` value is required. Unknown flags, missing values, malformed email, unavailable database, or migration mismatch fail non-zero before any ambiguous write.
 - The command trims and lowercases the address with the same canonical normalization used by Magic Link lookup, validates it, and performs an atomic `INSERT ... ON CONFLICT (email) DO NOTHING` against `teacher_account`.
-- Repeating the command for the same normalized address is safe: the first successful insertion prints `inserted=1`; every later successful invocation prints `inserted=0`.
+- Repeating the command for the same normalized address is safe: the first successful insertion prints `inserted: 1`; every later successful invocation prints `inserted: 0`.
 - Success output contains only that inserted count. Failure output uses a stable redacted reason code. Neither stream may print or interpolate the email, database host/name/URL, connection options, credentials, Magic Link, token, cookie, provider secret, or stack containing those values.
 - Database authority comes only from the operator's deployment-controlled environment. The command has no browser route, HTTP handler, interactive public form, password, self-registration behavior, or automatic Magic Link delivery.
 

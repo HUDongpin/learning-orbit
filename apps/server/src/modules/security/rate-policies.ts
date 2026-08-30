@@ -7,6 +7,20 @@ export const ratePolicies = {
   agentTrigger: { max: 3, timeWindow: "1 minute" },
 } as const;
 
+export function closedRateLimitError(
+  _request: FastifyRequest,
+  context: Readonly<{ statusCode: number }>,
+): Readonly<{ code: "RATE_LIMITED"; statusCode: number }> {
+  const body = { code: "RATE_LIMITED" } as { code: "RATE_LIMITED"; statusCode: number };
+  Object.defineProperty(body, "statusCode", {
+    configurable: false,
+    enumerable: false,
+    value: context.statusCode,
+    writable: false,
+  });
+  return body;
+}
+
 export function normalizedRequestIp(request: FastifyRequest): string {
   return normalizeRateIp(request.ip);
 }

@@ -5,7 +5,9 @@ export { routes } from "./routes.js";
 export { realtimeContract } from "./realtime.js";
 export { makeSchemaAjv } from "./schema-ajv.js";
 export { authContract } from "./auth.js";
+export { apiErrorContract } from "./api-error.js";
 export { roomHttpContract } from "./room.js";
+export { teacherRoomListContract } from "./teacher-room-list.js";
 export { roomInternalAutoCloseContract } from "./room-internal-auto-close.js";
 export { mediaAttachmentContract } from "./media-attachment.js";
 export { mediaCommandContract } from "./media-command.js";
@@ -36,8 +38,10 @@ export type {
   DeletionReceipt,
 } from "./governance.js";
 export type { AuthSession } from "./generated/auth-session.v1.js";
+export type { ApiError } from "./generated/api-error.v1.js";
 export type { TeacherMagicLinkAccepted, TeacherMagicLinkRequest } from "./generated/auth-http.v1.js";
 export type { CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomDetails, RoomEventPage } from "./generated/room-http.v1.js";
+export type { TeacherRoomListResponse } from "./generated/teacher-room-list.v1.js";
 export type {
   MessageAddedPayload,
   MessageRetractedPayload,

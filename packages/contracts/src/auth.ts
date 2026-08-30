@@ -44,6 +44,9 @@ export const authContract = {
   encodeTeacherMagicLinkAccepted(value: unknown): string {
     return JSON.stringify(parse(value, acceptedValidator, "INVALID_TEACHER_MAGIC_LINK_ACCEPTED"));
   },
+  parseTeacherMagicLinkAccepted(value: unknown): TeacherMagicLinkAccepted {
+    return parse(value, acceptedValidator, "INVALID_TEACHER_MAGIC_LINK_ACCEPTED");
+  },
   parseSession(value: unknown): AuthSession {
     return parse(value, sessionValidator, "INVALID_AUTH_SESSION");
   },

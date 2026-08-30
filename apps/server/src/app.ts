@@ -12,6 +12,7 @@ import { createDatabasePool } from "./db/pool.js";
 import { MagicLinkService, type SendMagicLink } from "./modules/auth/magic-link-service.js";
 import { createSmtpMailer, type MailTransport } from "./modules/auth/mailer.js";
 import { SessionService } from "./modules/auth/session-service.js";
+import { TeacherRoomListService } from "./modules/teacher/teacher-room-list-service.js";
 import { RoomService, type RoomCodeSource } from "./modules/rooms/room-service.js";
 import { CodeHasher } from "./modules/rooms/seat-codes.js";
 import { createCoreEventPayloadRegistry } from "@learning-orbit/contracts";
@@ -24,6 +25,7 @@ import { MessageService } from "./modules/rooms/message-service.js";
 import { CommandService } from "./modules/rooms/command-service.js";
 import { noAttachments } from "./modules/rooms/attachment-validator.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
+import { closedRateLimitError } from "./modules/security/rate-policies.js";
 import { registerRoutes } from "./routes.js";
 import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
 import { RealtimeConnection } from "./modules/realtime/connection.js";
@@ -55,6 +57,8 @@ export interface BuildAppOptions {
   config?: Partial<ServerConfig>;
   sendMagicLink?: SendMagicLink;
   mailTransport?: MailTransport;
+  sessions?: SessionService;
+  teacherRooms?: Pick<TeacherRoomListService, "list">;
   createSmtpMailer?: typeof createSmtpMailer;
   codeHasher?: CodeHasher;
   roomCodeSource?: RoomCodeSource;
@@ -84,7 +88,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cookie);
   await app.register(rateLimit, {
     global: false, skipOnError: false,
-    errorResponseBuilder: () => ({ statusCode: 429, code: "RATE_LIMITED" }),
+    errorResponseBuilder: closedRateLimitError,
   });
   await app.register(websocket, { options: { maxPayload: RealtimeConnection.MAX_INBOUND_FRAME_BYTES } });
   app.addHook("onRequest", async (request, reply) => {
@@ -175,7 +179,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     : undefined);
   await registerRoutes(app, {
     magicLinks: pool ? new MagicLinkService(pool, clock, config.publicBaseOrigin, sender) : undefined,
-    sessions: pool ? new SessionService(pool) : undefined,
+    sessions: options.sessions ?? (pool ? new SessionService(pool) : undefined),
+    teacherRooms: options.teacherRooms ?? (pool ? new TeacherRoomListService(pool) : undefined),
     rooms: pool && codeHasher
       ? new RoomService(pool, codeHasher, clock, options.roomCodeSource, lifecycle)
       : undefined,

@@ -1,0 +1,18 @@
+/* generated; source is JSON Schema */
+
+export interface ApiError {
+  code:
+    | "AUTH_REQUIRED"
+    | "ROOM_NOT_FOUND"
+    | "ROOM_LIST_UNAVAILABLE"
+    | "JOIN_FORBIDDEN"
+    | "INVALID_JOIN_REQUEST"
+    | "RATE_LIMITED"
+    | "ROOM_SERVICE_UNAVAILABLE"
+    | "ORIGIN_FORBIDDEN"
+    | "ROOM_FORBIDDEN"
+    | "INVALID_ROOM_REQUEST"
+    | "ROOM_CODE_UNAVAILABLE"
+    | "RETENTION_POLICY_NOT_CONFIGURED"
+    | "INVALID_QUERY";
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../../src/app.js";
+import { apiErrorContract } from "@learning-orbit/contracts";
 import { normalizeRateIp } from "../../src/modules/security/rate-policies.js";
 import { buildRatePolicyHarness } from "../fixtures/rate-policy-harness.js";
 
@@ -20,7 +21,8 @@ describe("origin and rate policy", () => {
     const app = await buildRatePolicyHarness();
     const magic = await Promise.all(Array.from({ length: 6 }, () => app.inject({ method: "POST", url: "/magic" })));
     expect(magic[5]?.statusCode).toBe(429);
-    expect(magic[5]?.body).toBe('{"statusCode":429,"code":"RATE_LIMITED"}');
+    expect(magic[5]?.body).toBe('{"code":"RATE_LIMITED"}');
+    expect(apiErrorContract.parse(magic[5]?.json())).toEqual({ code: "RATE_LIMITED" });
     for (let i = 0; i < 10; i += 1) expect((await app.inject({ method: "POST", url: "/failed-join" })).statusCode).toBe(204);
     expect((await app.inject({ method: "POST", url: "/failed-join" })).statusCode).toBe(429);
     for (let i = 0; i < 3; i += 1) expect((await app.inject({ method: "POST", url: "/agent?roomId=r&actorId=a" })).statusCode).toBe(204);

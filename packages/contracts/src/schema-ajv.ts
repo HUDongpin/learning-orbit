@@ -1,9 +1,9 @@
-import { createRequire } from "node:module";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import addFormatsModule, { type FormatsPlugin } from "ajv-formats";
 import mediaStatusSchema from "../schemas/media-status.v1.json" with { type: "json" };
 import agentStatusSchema from "../schemas/agent-status.v1.json" with { type: "json" };
-const require = createRequire(import.meta.url);
-const Ajv2020 = require("ajv/dist/2020.js").default;
-const addFormats = require("ajv-formats").default;
+
+const addFormats = addFormatsModule as unknown as FormatsPlugin;
 
 export function makeSchemaAjv() {
   const ajv = new Ajv2020({ strict: true, strictNumbers: true, allErrors: true });

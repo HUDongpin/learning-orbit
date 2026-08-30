@@ -15,7 +15,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/contracts-vitest.summary.json",
-      "expectedTests": 45
+      "expectedTests": 48
     },
     {
       "id": "server-vitest",
@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 185
+      "expectedTests": 198
     },
     {
       "id": "web-vitest",
@@ -47,7 +47,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/web-vitest.summary.json",
-      "expectedTests": 36
+      "expectedTests": 69
     },
     {
       "id": "pilot-harness-vitest",

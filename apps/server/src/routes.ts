@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 
-import { authContract, analyticsContract, roomHttpContract } from "@learning-orbit/contracts";
+import { authContract, analyticsContract, roomHttpContract, teacherRoomListContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
+import { TeacherRoomListError, type TeacherRoomListService } from "./modules/teacher/teacher-room-list-service.js";
 import { RoomServiceError, type RoomService } from "./modules/rooms/room-service.js";
 import { RoomError } from "./modules/rooms/errors.js";
 import { normalizedRequestIp, ratePolicies } from "./modules/security/rate-policies.js";
@@ -36,6 +37,7 @@ import { registerGovernanceRoutes } from "./modules/governance/governance-routes
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
   sessions: SessionService | undefined;
+  teacherRooms: Pick<TeacherRoomListService, "list"> | undefined;
   rooms: RoomService | undefined;
   lifecycle: RoomLifecycleService | undefined;
   serviceAssertionTrust: ServiceAssertionTrust | undefined;
@@ -97,6 +99,30 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     await dependencies.sessions?.revoke(request.cookies.lo_session);
     reply.clearCookie("lo_session", { httpOnly: true, secure: true, sameSite: "lax", path: "/" });
     return reply.code(204).send();
+  });
+
+  app.get(routes.teacher.rooms(), async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
+    if (!identity) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    if (identity.role !== "teacher") {
+      return reply.code(404).type("application/json").send({ code: "ROOM_NOT_FOUND" });
+    }
+    if (Object.keys(request.query as Record<string, unknown>).length !== 0) {
+      return reply.code(400).type("application/json").send({ code: "INVALID_QUERY" });
+    }
+    if (!dependencies.teacherRooms) {
+      return reply.code(503).type("application/json").send({ code: "ROOM_LIST_UNAVAILABLE" });
+    }
+    try {
+      const result = await dependencies.teacherRooms.list(identity);
+      return reply.type("application/json").send(teacherRoomListContract.encode(result));
+    } catch (error) {
+      if (error instanceof TeacherRoomListError) {
+        return reply.code(404).type("application/json").send({ code: "ROOM_NOT_FOUND" });
+      }
+      return reply.code(503).type("application/json").send({ code: "ROOM_LIST_UNAVAILABLE" });
+    }
   });
 
   app.post("/v1/rooms", async (request, reply) => {

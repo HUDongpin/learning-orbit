@@ -84,6 +84,9 @@ export const routes = {
     teacherMagicLink: () => "/v1/auth/teacher/magic-link",
     teacherMagicLinkConsume,
   },
+  teacher: {
+    rooms: () => "/v1/teacher/rooms",
+  },
   rooms: {
     create: () => "/v1/rooms",
     join: () => "/v1/rooms/join",
