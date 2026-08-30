@@ -26,3 +26,11 @@ class PipelineHandlerTests(unittest.TestCase):
         with self.assertRaises(ValueError): store.persist(snapshot={**snapshot, "projectionVersion": 1.5}, payload_hash="a")
         with self.assertRaises(ValueError): store.persist(snapshot={**snapshot, "roomId": "not-a-uuid"}, payload_hash="a")
         with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a", patch={"projectionVersion": 2, "baseVersion": 0}, patch_hash="b")
+
+    def test_patch_inherit_metadata_and_hash_are_closed(self):
+        store = ProjectionStore(object())
+        snapshot = {"roomId": ROOM, "analysisEpoch": ROOM, "projectionKey": "echo.teacher_shadow", "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 0, "algorithmVersion": "v1", "parameterHash": "a" * 64, "watermarkEventTime": "2026-08-30T00:00:00Z", "requiresReplay": False, "payload": {}}
+        patch = {"analysisEpoch": ROOM, "algorithmVersion": "v1", "parameterHash": "a" * 64, "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 0, "requiresReplay": False, "warnings": [], "nodesAdded": [], "nodesUpdated": [], "nodesHidden": [], "edgesAdded": [], "edgesUpdated": [], "edgesHidden": [], "positionUpdates": [], "changeScore": 0.0, "reasonCodes": [], "evidenceRefs": []}
+        with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch={**patch, "roomId": "00000000-0000-4000-8000-000000000099"}, patch_hash="b" * 64)
+        with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch=patch, patch_hash=None)
+        with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch={**patch, "changeScore": True}, patch_hash="b" * 64)

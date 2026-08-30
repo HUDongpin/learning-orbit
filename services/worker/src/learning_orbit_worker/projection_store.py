@@ -8,10 +8,13 @@ or outbox_event.  psycopg connections and lightweight test doubles exposing
 from __future__ import annotations
 
 import json
+import math
+import re
 from hashlib import sha256
-from typing import Any, Mapping
-from uuid import UUID
-from datetime import datetime
+from typing import Any, Mapping, Pattern
+
+_PROJECTION_KEYS = {"echo.teacher_shadow", "echo.student_approved", "trace.teacher_bundle", "trace.student_bundle"}
+_SHA256: Pattern[str] = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _jsonb(value: Any) -> Any:
@@ -23,6 +26,83 @@ def _jsonb(value: Any) -> Any:
         return value
 
 
+def _validate_snapshot(snapshot: Mapping[str, Any], payload_hash: str | None = None) -> None:
+    try:
+        from .generated.analysis_projection_envelope_v1 import Envelope
+        Envelope.from_dict(dict(snapshot))
+    except (ImportError, ValueError, TypeError, KeyError) as error:
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT") from error
+    key = snapshot.get("projectionKey")
+    if key not in _PROJECTION_KEYS:
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    version = snapshot.get("projectionVersion")
+    base = snapshot.get("baseVersion")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1 \
+            or isinstance(base, bool) or not isinstance(base, int) or base < 0 \
+            or version != base + 1:
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    parameter_hash = snapshot.get("parameterHash")
+    if not isinstance(parameter_hash, str) or not _SHA256.fullmatch(parameter_hash):
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    if payload_hash is not None and (not isinstance(payload_hash, str) or not _SHA256.fullmatch(payload_hash)):
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+
+
+def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None,
+                    patch_hash: str | None) -> None:
+    """Validate the ECHO patch envelope before any SQL is issued.
+
+    The patch schema intentionally omits room/key/epoch because these are
+    inherited from the enclosing projection.  If an adapter supplies them as
+    metadata, they must still match the enclosing snapshot.
+    """
+    if patch is None:
+        if patch_hash is not None:
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        return
+    if not isinstance(patch, Mapping):
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if not str(snapshot["projectionKey"]).startswith("echo."):
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    required = {"analysisEpoch", "algorithmVersion", "parameterHash",
+                "projectionVersion", "baseVersion", "completeThroughRoomSeq",
+                "requiresReplay", "warnings", "nodesAdded", "nodesUpdated",
+                "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden",
+                "positionUpdates", "changeScore", "reasonCodes", "evidenceRefs"}
+    optional = {"roomId", "projectionKey"}
+    if set(patch) - required - optional or not required <= set(patch):
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if patch.get("roomId", snapshot["roomId"]) != snapshot["roomId"] or patch.get("projectionKey", snapshot["projectionKey"]) != snapshot["projectionKey"]:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if patch["analysisEpoch"] != snapshot["analysisEpoch"] or patch["algorithmVersion"] != snapshot["algorithmVersion"] or patch["parameterHash"] != snapshot["parameterHash"]:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    for key, minimum in (("projectionVersion", 1), ("baseVersion", 0), ("completeThroughRoomSeq", 0)):
+        value = patch[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError("INVALID_PROJECTION_PATCH")
+    if patch["projectionVersion"] != snapshot["projectionVersion"] or patch["baseVersion"] != snapshot["baseVersion"]:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if patch["completeThroughRoomSeq"] != snapshot["completeThroughRoomSeq"] or patch["requiresReplay"] != snapshot["requiresReplay"]:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    for key in ("warnings", "nodesAdded", "nodesUpdated", "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates", "reasonCodes", "evidenceRefs"):
+        if not isinstance(patch[key], list):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+    for item in patch["positionUpdates"]:
+        if not isinstance(item, Mapping) or set(item) != {"nodeId", "x", "y"} or not isinstance(item["nodeId"], str):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        for coordinate in (item["x"], item["y"]):
+            if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)) or not math.isfinite(float(coordinate)) or not 0 <= coordinate <= 1:
+                raise ValueError("INVALID_PROJECTION_PATCH")
+    for item in patch["evidenceRefs"]:
+        if not isinstance(item, Mapping) or set(item) != {"eventId", "start", "end"} or not isinstance(item["eventId"], str):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        if isinstance(item["start"], bool) or not isinstance(item["start"], int) or item["start"] < 0 or isinstance(item["end"], bool) or not isinstance(item["end"], int) or item["end"] <= 0:
+            raise ValueError("INVALID_PROJECTION_PATCH")
+    score = patch["changeScore"]
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(float(score)) or not 0 <= score <= 1:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if patch_hash is None or not isinstance(patch_hash, str) or not _SHA256.fullmatch(patch_hash):
+        raise ValueError("INVALID_PROJECTION_PATCH")
 class ProjectionStore:
     def __init__(self, connection: Any, *, snapshot_url_factory: Any | None = None) -> None:
         self.connection = connection
@@ -52,32 +132,8 @@ class ProjectionStore:
         patch: Mapping[str, Any] | None = None,
         patch_hash: str | None = None,
     ) -> None:
-        required = ("roomId", "projectionKey", "analysisEpoch", "projectionVersion",
-                    "completeThroughRoomSeq", "algorithmVersion", "parameterHash",
-                    "watermarkEventTime", "requiresReplay", "payload")
-        if any(key not in snapshot for key in required):
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
-        if not isinstance(snapshot["roomId"], str) or not isinstance(snapshot["analysisEpoch"], str):
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
-        try:
-            UUID(snapshot["roomId"]); UUID(snapshot["analysisEpoch"])
-        except (ValueError, AttributeError):
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT") from None
-        int_fields = ("projectionVersion", "completeThroughRoomSeq")
-        if any(isinstance(snapshot[key], bool) or not isinstance(snapshot[key], int) or snapshot[key] < (1 if key == "projectionVersion" else 0) for key in int_fields):
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
-        if not isinstance(snapshot["requiresReplay"], bool) or not isinstance(snapshot["payload"], Mapping):
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
-        try:
-            datetime.fromisoformat(str(snapshot["watermarkEventTime"]).replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT") from None
-        for key in ("algorithmVersion", "projectionKey", "parameterHash"):
-            if not isinstance(snapshot[key], str) or not snapshot[key]:
-                raise ValueError("INVALID_PROJECTION_SNAPSHOT")
-        if patch is not None:
-            if not isinstance(patch, Mapping) or patch.get("projectionVersion") != snapshot["projectionVersion"] or patch.get("baseVersion") != snapshot.get("baseVersion", 0):
-                raise ValueError("INVALID_PROJECTION_PATCH")
+        _validate_snapshot(snapshot, payload_hash)
+        _validate_patch(snapshot, patch, patch_hash)
         algorithm = "ECHO-CM" if str(snapshot["projectionKey"]).startswith("echo.") else "TRACE-AI"
         self.connection.execute(
             """INSERT INTO analysis_projection_snapshots
@@ -162,11 +218,8 @@ class ProjectionStore:
         patch: Mapping[str, Any] | None = None, patch_hash: str | None = None,
     ) -> None:
         """Persist one immutable projection and CAS its room head in one tx."""
-        try:
-            from .generated.analysis_projection_envelope_v1 import Envelope
-            Envelope.from_dict(dict(snapshot))
-        except (ImportError, ValueError, TypeError, KeyError) as error:
-            raise ValueError("INVALID_PROJECTION_SNAPSHOT") from error
+        _validate_snapshot(snapshot, payload_hash)
+        _validate_patch(snapshot, patch, patch_hash)
         room_id = str(snapshot["roomId"])
         key = str(snapshot["projectionKey"])
         version = int(snapshot["projectionVersion"])
@@ -211,8 +264,6 @@ class ProjectionStore:
         if snapshot_id is None:
             raise RuntimeError("ANALYTICS_SNAPSHOT_UNAVAILABLE")
         if patch is not None:
-            if patch_hash is None:
-                raise ValueError("PATCH_HASH_REQUIRED")
             self.connection.execute(
                 """INSERT INTO analysis_projection_patches
                    (patch_id,room_id,projection_key,analysis_epoch,base_version,version,
