@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import { authContract, roomHttpContract } from "@learning-orbit/contracts";
+import { authContract, analyticsContract, roomHttpContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
 import { RoomServiceError, type RoomService } from "./modules/rooms/room-service.js";
@@ -23,6 +23,15 @@ import type { SocketLike } from "./modules/realtime/connection.js";
 import { registerMediaRoutes } from "./modules/media/media-routes.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
 import type { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
+import type { AgentService } from "./modules/agent/agent-service.js";
+import { AgentError } from "./modules/agent/agent-service.js";
+import type { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
+import { agentContract } from "@learning-orbit/contracts";
+import { AnalyticsPolicy, AnalyticsPolicyError, type AnalyticsGrant } from "./modules/analytics/analytics-policy.js";
+import { AnalyticsRepository, AnalyticsRepositoryError, patchWire, projectionWire, type ProjectionKey } from "./modules/analytics/analytics-repository.js";
+import { AnalyticsTeacherError, AnalyticsTeacherService } from "./modules/analytics/analytics-teacher-service.js";
+import type { GovernanceService } from "./modules/governance/governance-service.js";
+import { registerGovernanceRoutes } from "./modules/governance/governance-routes.js";
 
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
@@ -35,6 +44,11 @@ interface AuthRouteDependencies {
   realtime: { hub: RoomHub; authorizer: RealtimeDeliveryAuthorizer; publisher: OutboxPublisher } | undefined;
   media: MediaDeps | undefined;
   mediaInternalReconcile: MediaInternalReconcileRoute | undefined;
+  agent: AgentService | undefined;
+  agentProviderHealth: InternalProviderHealthRoute | undefined;
+  analytics?: { policy: AnalyticsPolicy; repository: AnalyticsRepository } | undefined;
+  analyticsTeacher?: AnalyticsTeacherService | undefined;
+  governance?: GovernanceService | undefined;
 }
 
 const genericAccepted = { accepted: true };
@@ -101,6 +115,9 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       }
       if (error instanceof RoomServiceError && error.code === "ROOM_CODE_UNAVAILABLE") {
         return reply.code(503).type("application/json").send({ code: "ROOM_CODE_UNAVAILABLE" });
+      }
+      if (error instanceof RoomServiceError && error.code === "RETENTION_POLICY_UNAVAILABLE") {
+        return reply.code(503).type("application/json").send({ code: "RETENTION_POLICY_UNAVAILABLE" });
       }
       if (error instanceof Error && error.message === "INVALID_CREATE_ROOM_REQUEST") {
         return reply.code(400).type("application/json").send({ code: "INVALID_ROOM_REQUEST" });
@@ -193,6 +210,7 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     if (!auth?.ok) return reply.code(auth?.closeCode === 4403 ? 403 : 401).send({ code: auth?.closeCode === 4403 ? "FORBIDDEN" : "AUTH_REQUIRED" });
     if (!dependencies.lifecycle) return reply.code(503).send({ code: "ROOM_SERVICE_UNAVAILABLE" });
     const query = request.query as { afterSeq?: string; limit?: string };
+    if (Object.keys(query as Record<string, unknown>).some((key) => key !== "afterSeq" && key !== "limit")) return reply.code(400).send({ code: "INVALID_QUERY" });
     const afterSeq = query.afterSeq === undefined ? 0 : Number(query.afterSeq);
     const limit = query.limit === undefined ? 500 : Number(query.limit);
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) return reply.code(400).send({ code: "INVALID_QUERY" });
@@ -242,6 +260,183 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       sessions: dependencies.sessions,
       internalReconcile: dependencies.mediaInternalReconcile,
     });
+  }
+
+  if (dependencies.analytics && dependencies.sessions) {
+    const analyticsKey = (value: unknown): ProjectionKey | null => (
+      typeof value === "string" && [
+        "echo.teacher_shadow", "echo.student_approved",
+        "trace.teacher_bundle", "trace.student_bundle",
+      ].includes(value) ? value as ProjectionKey : null
+    );
+    const access = async (request: any, roomId: string, key: string): Promise<AnalyticsGrant> => {
+      const token = request.cookies.lo_session;
+      const principal = await dependencies.sessions!.get(token);
+      const sessionId = await dependencies.sessions!.getSessionId(token);
+      const grant = await dependencies.analytics!.policy.requireRoomAccess(
+        principal, roomId, "latest", sessionId ?? undefined,
+      );
+      dependencies.analytics!.policy.assertProjection(grant, key);
+      return grant;
+    };
+    const errorResponse = (reply: any, error: unknown) => {
+      if (error instanceof AnalyticsPolicyError) return reply.code(error.statusCode).type("application/json").send({ code: error.code });
+      if (error instanceof AnalyticsRepositoryError) return reply.code(503).type("application/json").send({ code: error.code });
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    };
+    app.get("/v1/rooms/:roomId/analytics/:projectionKey/latest", async (request, reply) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
+      if (Object.keys(request.query as Record<string, unknown>).length > 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      if (!key) return reply.code(404).send({ code: "PROJECTION_NOT_FOUND" });
+      try {
+        await access(request, roomId, key);
+        const latest = await dependencies.analytics!.repository.latest(roomId, key);
+        if (!latest) return reply.code(404).send({ code: "ANALYTICS_NOT_READY" });
+        return reply.type("application/json").send(projectionWire(latest));
+      } catch (error) { return errorResponse(reply, error); }
+    });
+    app.get("/v1/rooms/:roomId/analytics/:projectionKey/patches", async (request, reply) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
+      const query = request.query as { analysisEpoch?: unknown; afterProjectionVersion?: unknown };
+      if (!key || Object.keys(query).some((name) => !["analysisEpoch", "afterProjectionVersion"].includes(name))
+        || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch)) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      const after = query.afterProjectionVersion === undefined ? 0 : Number(query.afterProjectionVersion);
+      if (!Number.isSafeInteger(after) || after < 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      try {
+        await access(request, roomId, key);
+        const snapshotUrl = `/v1/rooms/${encodeURIComponent(roomId)}/analytics/${encodeURIComponent(key)}/latest`;
+        const result = await dependencies.analytics!.repository.patchesAfter(roomId, key, query.analysisEpoch, after, snapshotUrl);
+        if (result.kind === "resync") return reply.code(409).send({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl });
+        return reply.type("application/json").send({ patches: result.patches?.map(patchWire) ?? [] });
+      } catch (error) { return errorResponse(reply, error); }
+    });
+    app.get("/v1/rooms/:roomId/analytics/:projectionKey/timeline", async (request, reply) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const key = (request.params as { projectionKey?: unknown }).projectionKey;
+      if (key !== "echo.teacher_shadow" && key !== "echo.student_approved") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      const query = request.query as { analysisEpoch?: unknown; limit?: unknown };
+      const limit = query.limit === undefined ? 50 : Number(query.limit);
+      if (Object.keys(query).some((name) => !["analysisEpoch", "limit"].includes(name))
+        || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch) || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      try {
+        await access(request, roomId, key);
+        const result = await dependencies.analytics!.repository.timeline(roomId, key, query.analysisEpoch, limit);
+        if (result.kind === "resync") {
+          const snapshotUrl = `/v1/rooms/${encodeURIComponent(roomId)}/analytics/${encodeURIComponent(key)}/latest`;
+          return reply.code(409).send({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl });
+        }
+        return reply.type("application/json").send({
+          baseSnapshot: result.baseSnapshot ? projectionWire(result.baseSnapshot) : null,
+          patches: result.patches.map(patchWire),
+          truncatedBeforeVersion: result.truncatedBeforeVersion,
+          headVersion: result.headVersion,
+        });
+      } catch (error) { return errorResponse(reply, error); }
+    });
+  }
+
+  if (dependencies.analyticsTeacher && dependencies.sessions) {
+    const teacherError = (reply: any, error: unknown) => {
+      if (error instanceof AnalyticsPolicyError || error instanceof AnalyticsTeacherError) {
+        return reply.code(error.statusCode).type("application/json").send({ code: error.code });
+      }
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    };
+    app.get("/v1/rooms/:roomId/analytics/artifacts", async (request, reply) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const query = request.query as Record<string, unknown>;
+      const allowed = ["reviewStatus", "afterArtifactId", "includeHistory", "limit"];
+      if (Object.keys(query).some((key) => !allowed.includes(key))
+        || Object.values(query).some((value) => typeof value !== "string")) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      const limit = query.limit === undefined ? 50 : Number(query.limit);
+      const includeHistory = query.includeHistory === undefined ? false : query.includeHistory === true || query.includeHistory === "true";
+      if (query.includeHistory !== undefined && query.includeHistory !== true && query.includeHistory !== false && query.includeHistory !== "true" && query.includeHistory !== "false") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      const reviewStatus = query.reviewStatus === undefined ? "unreviewed" : query.reviewStatus;
+      if (reviewStatus !== undefined && !["unreviewed", "approved", "rejected", "corrected"].includes(String(reviewStatus))) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
+      try {
+        const principal = await dependencies.sessions!.get(request.cookies.lo_session);
+        const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
+        const page = await dependencies.analyticsTeacher!.listArtifacts(principal, sessionId ?? undefined, roomId, {
+          ...(reviewStatus === undefined ? {} : { reviewStatus: reviewStatus as "unreviewed" | "approved" | "rejected" | "corrected" }),
+          ...(typeof query.afterArtifactId === "string" ? { afterArtifactId: query.afterArtifactId } : {}),
+          includeHistory, limit,
+        });
+        return reply.type("application/json").send(JSON.parse(analyticsContract.encodeArtifactPage(page)));
+      } catch (error) { return teacherError(reply, error); }
+    });
+    app.post("/v1/rooms/:roomId/analytics/reviews", async (request, reply) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      try {
+        const principal = await dependencies.sessions!.get(request.cookies.lo_session);
+        const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
+        const result = await dependencies.analyticsTeacher!.review(principal, sessionId ?? undefined, roomId, request.body);
+        return reply.code(201).type("application/json").send(result);
+      } catch (error) { return teacherError(reply, error); }
+    });
+    app.get("/v1/rooms/:roomId/analytics/reviews/:reviewEventId", async (request, reply) => {
+      const params = request.params as { roomId?: string; reviewEventId?: string };
+      try {
+        const principal = await dependencies.sessions!.get(request.cookies.lo_session);
+        const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
+        const result = await dependencies.analyticsTeacher!.reviewDetail(
+          principal, sessionId ?? undefined, params.roomId ?? "", params.reviewEventId ?? "",
+        );
+        return reply.header("Cache-Control", "no-store").type("application/json").send(result);
+      } catch (error) { return teacherError(reply, error); }
+    });
+  }
+
+  if (dependencies.agent && dependencies.sessions) {
+    const runRoute = async (request: any, reply: any, action: "request" | "cancel" | "current" | "settings") => {
+      const session = await dependencies.sessions!.get(request.cookies.lo_session);
+      const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
+      if (!session || !sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      try {
+        if (action === "request") {
+          const input = agentContract.parseRequest(request.body);
+          const result = await dependencies.agent!.request(session, sessionId, roomId, input.triggerEventId);
+          return reply.code(202).type("application/json").send(JSON.parse(agentContract.encodeAccepted({ agentRunId: result.agentRunId, state: result.state })));
+        }
+        if (action === "cancel") {
+          const runId = (request.params as { agentRunId?: string }).agentRunId ?? "";
+          agentContract.parseCancel(request.body);
+          const result = await dependencies.agent!.cancel(session, sessionId, roomId, runId);
+          return reply.code(202).type("application/json").send(JSON.parse(agentContract.encodeCancelAccepted({ agentRunId: result.agentRunId, state: "cancelled" })));
+        }
+        if (action === "current") {
+          const result = await dependencies.agent!.current(session, sessionId, roomId);
+          reply.header("Cache-Control", "no-store");
+          return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeCurrent(result)));
+        }
+        const input = agentContract.parseSettings(request.body);
+        const result = await dependencies.agent!.settings(session, sessionId, roomId, input.enabled);
+        return reply.code(200).type("application/json").send(JSON.parse(agentContract.encodeSettingsResponse(result)));
+      } catch (error) {
+        const code = error instanceof AgentError ? error.code : error instanceof Error ? error.message : "INTERNAL";
+        const status = code === "FORBIDDEN" ? 403 : code === "ROOM_NOT_FOUND" || code === "TRIGGER_EVENT_NOT_FOUND" ? 404 : ["INVALID_AGENT_COMMAND", "AGENT_CANNOT_TRIGGER_AGENT", "TRIGGER_EVENT_NOT_ACTIVE"].includes(code) ? 422 : ["ROOM_NOT_OPEN", "AGENT_DISABLED", "AGENT_RUN_ALREADY_ACTIVE", "AGENT_RUN_NOT_ACTIVE"].includes(code) ? 409 : code === "INTERNAL" ? 500 : 400;
+        return reply.code(status).type("application/json").send({ code });
+      }
+    };
+    app.post("/v1/rooms/:roomId/agent/runs", async (request, reply) => runRoute(request, reply, "request"));
+    app.post("/v1/rooms/:roomId/agent/runs/:agentRunId/cancel", async (request, reply) => runRoute(request, reply, "cancel"));
+    app.get("/v1/rooms/:roomId/agent/current", async (request, reply) => runRoute(request, reply, "current"));
+    app.put("/v1/rooms/:roomId/agent/settings", async (request, reply) => runRoute(request, reply, "settings"));
+  }
+
+  if (dependencies.agentProviderHealth) {
+    app.post(routes.internal.agent.health(), async (request, reply) => {
+      const result = await dependencies.agentProviderHealth!.handle(request.headers["x-lo-service-assertion"], request.body);
+      const parsed = agentContract.parseHealthResponse(result);
+      const status = parsed.status === "rejected" ? parsed.code === "PROBE_ASSERTION_INVALID" ? 401 : 409 : 200;
+      return reply.code(status).type("application/json").send(JSON.parse(agentContract.encodeHealthResponse(parsed)));
+    });
+  }
+
+  if (dependencies.governance && dependencies.sessions) {
+    await registerGovernanceRoutes(app, dependencies.governance, dependencies.sessions);
   }
 
 }

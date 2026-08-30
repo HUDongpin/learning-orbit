@@ -57,5 +57,11 @@ describe("teacher analytics surfaces", () => {
     expect(result.reviewEventId).toBe("00000000-0000-4000-8000-000000000017");
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analytics_review_detail"))).toBe(true);
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analytics_replay_request"))).toBe(true);
+    const retry = await svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
+      targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
+      expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
+    });
+    expect(retry).toEqual(result);
+    expect(events.transact).toHaveBeenCalledTimes(2);
   });
 });
