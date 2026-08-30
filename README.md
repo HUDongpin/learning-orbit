@@ -13,6 +13,7 @@ ECHO-CM and TRACE-AI are original engineering syntheses and research proposals. 
 - [Plan 03: Analytics](docs/plans/learning-orbit-plan-03-analytics.md)
 - [Plan 04: Agent and multimodal](docs/plans/learning-orbit-plan-04-agent-multimodal.md)
 - [Plan 05: Student and teacher UI](docs/plans/learning-orbit-plan-05-student-teacher-ui.md)
+- [Login and local verification addendum](docs/plans/learning-orbit-login-and-local-verification-addendum.md)
 - [Plan 06: Reliability and pilot admission](docs/plans/learning-orbit-plan-06-reliability-pilot.md)
 
 ## Current local delivery boundary
