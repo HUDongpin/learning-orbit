@@ -15,6 +15,60 @@ export function assertProductionStartPolicy(environment) {
   }
 }
 
+export function superviseChild(child, host = process) {
+  let settled = false;
+  const signalHandlers = new Map();
+  let onError;
+  let onExit;
+
+  const cleanup = () => {
+    for (const [signal, handler] of signalHandlers) {
+      host.off(signal, handler);
+    }
+    signalHandlers.clear();
+    child.off("error", onError);
+    child.off("exit", onExit);
+  };
+
+  const settle = (effect) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    effect();
+  };
+
+  for (const signal of forwardedSignals) {
+    const forward = () => {
+      if (!settled && child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+      }
+    };
+    signalHandlers.set(signal, forward);
+    host.on(signal, forward);
+  }
+
+  onError = (error) => {
+    settle(() => {
+      host.stderr.write(`${error.message}\n`);
+      host.exitCode = 1;
+    });
+  };
+  onExit = (code, signal) => {
+    settle(() => {
+      if (signal) {
+        host.kill(host.pid, signal);
+        return;
+      }
+      host.exitCode = code ?? 1;
+    });
+  };
+
+  child.once("error", onError);
+  child.once("exit", onExit);
+}
+
 export function startProductionServer(argv = process.argv.slice(2)) {
   assertProductionStartPolicy(process.env);
 
@@ -24,37 +78,7 @@ export function startProductionServer(argv = process.argv.slice(2)) {
     shell: false,
     stdio: "inherit",
   });
-  const signalHandlers = new Map();
-
-  for (const signal of forwardedSignals) {
-    const forward = () => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill(signal);
-      }
-    };
-    signalHandlers.set(signal, forward);
-    process.on(signal, forward);
-  }
-
-  const removeSignalHandlers = () => {
-    for (const [signal, handler] of signalHandlers) {
-      process.off(signal, handler);
-    }
-  };
-
-  child.once("error", (error) => {
-    removeSignalHandlers();
-    process.stderr.write(`${error.message}\n`);
-    process.exitCode = 1;
-  });
-  child.once("exit", (code, signal) => {
-    removeSignalHandlers();
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exitCode = code ?? 1;
-  });
+  superviseChild(child, process);
 
   return child;
 }

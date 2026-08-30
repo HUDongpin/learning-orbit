@@ -1,29 +1,24 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
-if (
-  process.env.NODE_ENV === "production"
-  && process.env.LO_LOCAL_SAME_ORIGIN_PROXY === "1"
-) {
-  throw new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN");
+export default function nextConfig(phase: string): NextConfig {
+  const localProxyEnabled = process.env.LO_LOCAL_SAME_ORIGIN_PROXY === "1";
+  if (localProxyEnabled && phase !== PHASE_DEVELOPMENT_SERVER) {
+    throw new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN");
+  }
+
+  return {
+    async rewrites() {
+      if (!localProxyEnabled) {
+        return [];
+      }
+
+      return [
+        {
+          source: "/v1/:path*",
+          destination: "http://127.0.0.1:3001/v1/:path*",
+        },
+      ];
+    },
+  };
 }
-
-const nextConfig: NextConfig = {
-  async rewrites() {
-    if (process.env.LO_LOCAL_SAME_ORIGIN_PROXY !== "1") {
-      return [];
-    }
-
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN");
-    }
-
-    return [
-      {
-        source: "/v1/:path*",
-        destination: "http://127.0.0.1:3001/v1/:path*",
-      },
-    ];
-  },
-};
-
-export default nextConfig;

@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  PHASE_DEVELOPMENT_SERVER,
+  PHASE_EXPORT,
+  PHASE_PRODUCTION_BUILD,
+  PHASE_PRODUCTION_SERVER,
+} from "next/constants";
+import type { NextConfig } from "next";
 
 import nextConfig from "../next.config.js";
 
@@ -26,34 +33,44 @@ afterEach(() => {
   setEnvironment("NODE_ENV", originalEnvironment.NODE_ENV);
 });
 
-async function configuredRewrites(): Promise<readonly Rewrite[]> {
-  expect(nextConfig.rewrites).toBeTypeOf("function");
-  return (await nextConfig.rewrites?.()) as readonly Rewrite[];
+function configForPhase(phase: string): NextConfig {
+  expect(nextConfig).toBeTypeOf("function");
+  return (nextConfig as unknown as (value: string) => NextConfig)(phase);
+}
+
+async function configuredRewrites(phase = PHASE_DEVELOPMENT_SERVER): Promise<readonly Rewrite[]> {
+  const config = configForPhase(phase);
+  expect(config.rewrites).toBeTypeOf("function");
+  return (await config.rewrites?.()) as readonly Rewrite[];
 }
 
 describe("Next.js local same-origin proxy", () => {
   it.each([undefined, "", "0", "true", " 1", "1 "])(
     "returns no rewrites when LO_LOCAL_SAME_ORIGIN_PROXY is %s",
     async (flag) => {
-      setEnvironment("NODE_ENV", "development");
       setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", flag);
 
       await expect(configuredRewrites()).resolves.toEqual([]);
     },
   );
 
-  it("keeps production disabled when the flag is not exactly 1", async () => {
-    setEnvironment("NODE_ENV", "production");
+  it("keeps every phase disabled when the flag is not exactly 1", async () => {
     setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "0");
 
-    await expect(configuredRewrites()).resolves.toEqual([]);
+    for (const phase of [
+      PHASE_DEVELOPMENT_SERVER,
+      PHASE_PRODUCTION_BUILD,
+      PHASE_PRODUCTION_SERVER,
+      PHASE_EXPORT,
+    ]) {
+      await expect(configuredRewrites(phase)).resolves.toEqual([]);
+    }
   });
 
   it("proxies only the public /v1 namespace when the local flag is exactly 1", async () => {
-    setEnvironment("NODE_ENV", "test");
     setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "1");
 
-    const rewrites = await configuredRewrites();
+    const rewrites = await configuredRewrites(PHASE_DEVELOPMENT_SERVER);
 
     expect(rewrites).toEqual([
       {
@@ -65,22 +82,16 @@ describe("Next.js local same-origin proxy", () => {
     expect(rewrites.some(({ source }) => source.startsWith("/internal"))).toBe(false);
   });
 
-  it("fails closed with a stable error when the local proxy is enabled in production", async () => {
-    setEnvironment("NODE_ENV", "production");
+  it.each([
+    PHASE_PRODUCTION_BUILD,
+    PHASE_PRODUCTION_SERVER,
+    PHASE_EXPORT,
+  ])("rejects local proxy flag in non-development phase %s", (phase) => {
+    setEnvironment("NODE_ENV", "test");
     setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "1");
 
-    await expect(configuredRewrites()).rejects.toEqual(
-      new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN"),
-    );
-  });
-
-  it("rejects production configuration during module initialization", async () => {
-    setEnvironment("NODE_ENV", "production");
-    setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "1");
-    vi.resetModules();
-
-    await expect(import("../next.config.js")).rejects.toEqual(
-      new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN"),
+    expect(() => configForPhase(phase)).toThrow(
+      "LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN",
     );
   });
 });
