@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "projectionKey": "echo.teacher_shadow",
+  "roomId": "00000000-0000-4000-8000-000000000010",
+  "analysisEpoch": "00000000-0000-4000-8000-000000000901",
+  "algorithmVersion": "echo-cm-reference-v1+adapter-v1",
+  "parameterHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "projectionVersion": 1,
+  "baseVersion": 0,
+  "completeThroughRoomSeq": 5,
+  "watermarkEventTime": "2026-08-28T09:05:00Z",
+  "requiresReplay": false,
+  "evidenceStatus": "active",
+  "reviewStatus": "unreviewed",
+  "displayStatus": "teacher_shadow",
+  "warnings": [],
+  "payload": {
+    "nodes": [
+      {"nodeId":"sun","label":"sun","nodeKind":"concept","evidenceStatus":"supported","reviewStatus":"unreviewed","displayStatus":"provisional","position":{"x":0.25,"y":0.25}},
+      {"nodeId":"producers","label":"producers","nodeKind":"concept","evidenceStatus":"supported","reviewStatus":"unreviewed","displayStatus":"provisional","position":{"x":0.75,"y":0.25}}
+    ],
+    "edges": [
+      {"edgeId":"e9d17530-a4bb-5717-9d50-11ba588f51f1","head":"sun","predicate":"provides energy to","tail":"producers","relationFamily":"energy_flow","evidenceStatus":"supported","reviewStatus":"unreviewed","displayStatus":"provisional","channels":{"support":1.0,"challenge":0.0,"uncertain":0.0,"question":0.0},"activityScore":1.0,"evidenceRefs":[{"eventId":"00000000-0000-4000-8000-000000000101","start":0,"end":9}]}
+    ]
+  }
+}

@@ -3,11 +3,25 @@ import type { CommandService } from "../rooms/command-service.js";
 import type { RealtimeDeliveryAuthorizer, DeliveryAuthorization } from "./realtime-delivery-authorizer.js";
 import type { RoomHub } from "./room-hub.js";
 import { EphemeralSignals } from "./ephemeral-signals.js";
+import { enforceBackpressure } from "./backpressure.js";
 
-export interface SocketLike { send(data: string): void; close(code?: number, reason?: string): void; on(event: string, cb: (...args: any[]) => void): void; }
+export interface SocketLike {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, cb: (...args: any[]) => void): void;
+  /** WebSocket bufferedAmount; optional for deterministic test doubles. */
+  readonly bufferedAmount?: number;
+}
 export interface ConnectionIdentity { readonly sessionId: string; readonly roomId: string; readonly principal: AuthSession; readonly actorId: string; }
 
 export class RealtimeConnection {
+  static readonly MAX_INBOUND_FRAME_BYTES = 16 * 1024;
+  /**
+   * Replay is intentionally finite.  A busy room must not let the in-memory
+   * live buffer grow without bound while a client is rebuilding a cursor.
+   * Crossing this limit asks the client to fetch a snapshot and reconnect.
+   */
+  static readonly MAX_LIVE_BUFFER_EVENTS = 512;
   readonly signals = new EphemeralSignals();
   #hello = false; #closed = false; #replaying = true; #resumeFrom = 0; #replayThrough = 0;
   #liveBuffer: Array<Extract<RealtimeFrame, { type: "event" }>> = [];
@@ -20,11 +34,27 @@ export class RealtimeConnection {
   }
   get helloReceived() { return this.#hello; }
   get resumeFrom() { return this.#resumeFrom; }
-  send(frame: RealtimeFrame): void { if (!this.#closed) this.socket.send(JSON.stringify(frame)); }
+  send(frame: RealtimeFrame): void {
+    if (this.#closed) return;
+    if (typeof this.socket.bufferedAmount === "number") {
+      const state = enforceBackpressure(this.socket as { bufferedAmount: number; close: (code?: number, reason?: string) => void });
+      if (state === "close") { this.close(1013, "snapshot required"); return; }
+    }
+    this.socket.send(JSON.stringify(frame));
+  }
   /** Deliver a durable event only after hello + ordered resume have completed. */
   sendDurable(frame: Extract<RealtimeFrame, { type: "event" }>): void {
     if (this.#closed) return;
     if (!this.#hello || this.#replaying) {
+      if (this.#liveBuffer.length >= RealtimeConnection.MAX_LIVE_BUFFER_EVENTS) {
+        this.send({
+          type: "snapshot_required",
+          afterSeq: this.#resumeFrom,
+          throughRoomSeq: Math.max(this.#resumeFrom, this.#replayThrough),
+        });
+        this.close(4409, "snapshot required");
+        return;
+      }
       this.#liveBuffer.push(frame);
       return;
     }
@@ -47,8 +77,20 @@ export class RealtimeConnection {
   async receive(raw: unknown): Promise<void> {
     if (this.#closed) return;
     let value: unknown = raw;
-    try { if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) value = JSON.parse(Buffer.from(raw).toString("utf8")); else if (typeof raw === "string") value = JSON.parse(raw); const frame = realtimeContract.parseRealtimeFrame(value); await this.#handle(frame); }
-    catch { this.close(4400, "invalid frame"); }
+    try {
+      const bytes = Buffer.isBuffer(raw) || raw instanceof Uint8Array
+        ? raw.byteLength
+        : typeof raw === "string"
+          ? Buffer.byteLength(raw, "utf8")
+          : Buffer.byteLength(JSON.stringify(raw), "utf8");
+      if (!Number.isSafeInteger(bytes) || bytes > RealtimeConnection.MAX_INBOUND_FRAME_BYTES) {
+        return this.close(1009, "frame too large");
+      }
+      if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) value = JSON.parse(Buffer.from(raw).toString("utf8"));
+      else if (typeof raw === "string") value = JSON.parse(raw);
+      const frame = realtimeContract.parseRealtimeFrame(value);
+      await this.#handle(frame);
+    } catch { this.close(4400, "invalid frame"); }
   }
   async #reauthorize(): Promise<DeliveryAuthorization & { ok: true }> {
     const result = await this.authorizer.reauthorize(this.identity.sessionId, this.identity.roomId);

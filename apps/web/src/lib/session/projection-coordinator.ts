@@ -51,10 +51,17 @@ export function coordinateProjections(messages: readonly LedgerMessage[]): { nod
     { id: "student-c", label: "探索者 C", kind: "student", x: 67, y: 53 }, { id: "student-d", label: "探索者 D", kind: "student", x: 42, y: 80 },
     { id: "nova", label: "Nova Agent", kind: "agent", x: 80, y: 21 }, { id: "room", label: "聊天室", kind: "room", x: 18, y: 21 },
   ];
+  const actorByMessageId = new Map(active.map((message) => [message.messageId, message.actorId]));
   const socialEdges: SocialEdge[] = [];
   for (const message of active) {
     const actor = message.actorId || "student-a";
-    if (message.replyTo) socialEdges.push({ id: `${message.eventId}:reply`, from: actor, to: message.replyTo, label: "回覆", kind: "communication", weight: 1, evidenceIds: [message.eventId] });
+    if (message.replyTo) {
+      // RoomEvent payloads carry the message-root ID.  Resolve it to the
+      // server-assigned actor for the visual network while retaining the
+      // original root in the message ledger and evidence metadata.
+      const target = actorByMessageId.get(message.replyTo) ?? message.replyTo;
+      socialEdges.push({ id: `${message.eventId}:reply`, from: actor, to: target, label: "回覆", kind: "communication", weight: 1, evidenceIds: [message.eventId] });
+    }
     for (const mention of message.mentions) socialEdges.push({ id: `${message.eventId}:mention:${mention}`, from: actor, to: mention, label: "提及", kind: "communication", weight: 1, evidenceIds: [message.eventId] });
     if (message.actorKind === "agent") socialEdges.push({ id: `${message.eventId}:facilitation`, from: "nova", to: "student-d", label: "促進", kind: "facilitation", weight: 1, evidenceIds: [message.eventId] });
     if (message.actorKind === "human" && has(message.text, "沿食物鏈", "共識", "我同意")) socialEdges.push({ id: `${message.eventId}:uptake`, from: actor, to: "student-b", label: "採用觀點", kind: "uptake", weight: 1, evidenceIds: [message.eventId] });

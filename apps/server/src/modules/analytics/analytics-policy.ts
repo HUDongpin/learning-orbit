@@ -36,28 +36,76 @@ export class AnalyticsPolicy {
     principal: AuthSession | null,
     roomId: string,
     _capability: AnalyticsCapability,
+    sessionId?: string,
   ): Promise<AnalyticsGrant> {
     if (!principal) throw new AnalyticsPolicyError(401, "AUTH_REQUIRED");
+    if (!sessionId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
+      throw new AnalyticsPolicyError(401, "AUTH_REQUIRED");
+    }
     if (principal.role === "teacher") {
-      const result = await this.pool.query<{ room_id: string; status: string }>(
-        "SELECT room_id,status FROM classroom_room WHERE room_id=$1 AND teacher_id=$2",
-        [roomId, principal.teacherId],
+      const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean }>(
+        `SELECT r.room_id,r.status,
+                (p.policy_id IS NOT NULL AND p.approved_at <= transaction_timestamp()
+                 AND p.expires_at > transaction_timestamp()) AS policy_current
+         FROM classroom_room r
+         LEFT JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
+         WHERE r.room_id=$1 AND r.teacher_id=$2
+           AND EXISTS (
+             SELECT 1 FROM auth_session s
+             WHERE s.session_id=$3::uuid AND s.teacher_id=r.teacher_id
+               AND s.principal_kind='teacher' AND s.revoked_at IS NULL
+               AND s.expires_at > transaction_timestamp()))`,
+         [roomId, principal.teacherId, sessionId],
       );
       const row = result.rows[0];
       if (!row) throw new AnalyticsPolicyError(404, "ROOM_NOT_FOUND");
       if (row.status === "closed") throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
+      if (row.policy_current !== true) {
+        throw new AnalyticsPolicyError(410, "RETENTION_POLICY_EXPIRED");
+      }
       return { roomId, role: "teacher", studentProjectionAllowlist: new Set() };
     }
-    const result = await this.pool.query<{ room_id: string; status: string }>(
-      `SELECT r.room_id,r.status
+    const result = await this.pool.query<{ room_id: string; status: string; policy_current: boolean }>(
+      `SELECT r.room_id,r.status,
+              (p.policy_id IS NOT NULL AND p.approved_at <= transaction_timestamp()
+               AND p.expires_at > transaction_timestamp()) AS policy_current
        FROM room_member m JOIN classroom_room r ON r.room_id=m.room_id
-       WHERE r.room_id=$1 AND m.room_member_id=$2 AND m.actor_id=$3`,
-      [roomId, principal.roomMemberId, principal.actorId],
+       LEFT JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
+       WHERE r.room_id=$1 AND m.room_member_id=$2 AND m.actor_id=$3
+         AND EXISTS (
+           SELECT 1 FROM auth_session s
+           WHERE s.session_id=$4::uuid AND s.room_member_id=m.room_member_id
+             AND s.principal_kind='student' AND s.revoked_at IS NULL
+             AND s.expires_at > transaction_timestamp()))`,
+      [roomId, principal.roomMemberId, principal.actorId, sessionId],
     );
     const row = result.rows[0];
     if (!row) throw new AnalyticsPolicyError(404, "ROOM_NOT_FOUND");
     if (row.status === "closed") throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
-    return { roomId, role: "student", studentProjectionAllowlist: new Set() };
+    if (row.policy_current !== true) {
+      throw new AnalyticsPolicyError(410, "RETENTION_POLICY_EXPIRED");
+    }
+    const promotion = await this.pool.query<{ feature_allowlist: string[]; promotion_record_sha256: string; policy_revision: string }>(
+      `SELECT feature_allowlist,promotion_record_sha256,policy_revision
+       FROM student_analytics_promotion
+       WHERE room_id=$1
+         AND revoked_at IS NULL
+         AND starts_at <= transaction_timestamp()
+         AND expires_at > transaction_timestamp()
+       ORDER BY policy_revision DESC
+       LIMIT 1`,
+      [roomId],
+    );
+    const promotionRow = promotion.rows[0];
+    if (promotionRow && (!/^[a-f0-9]{64}$/.test(promotionRow.promotion_record_sha256)
+      || !/^[1-9][0-9]*$/.test(String(promotionRow.policy_revision))
+      || !Array.isArray(promotionRow.feature_allowlist)
+      || promotionRow.feature_allowlist.some((key) => typeof key !== "string" || !STUDENT_PROJECTIONS.has(key))
+      || new Set(promotionRow.feature_allowlist).size !== promotionRow.feature_allowlist.length)) {
+      throw new AnalyticsPolicyError(403, "STUDENT_ANALYTICS_NOT_PROMOTED");
+    }
+    const allowlist = new Set(promotionRow?.feature_allowlist ?? []);
+    return { roomId, role: "student", studentProjectionAllowlist: allowlist };
   }
 
   assertProjection(grant: AnalyticsGrant, projectionKey: string): void {

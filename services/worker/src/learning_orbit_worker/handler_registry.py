@@ -81,7 +81,16 @@ class WorkerDeps:
         if self.connection_factory is None and hasattr(self.db, "info"):
             try:
                 import psycopg
-                dsn = self.db.info.dsn
+                # libpq deliberately omits the password from ``info.dsn``.
+                # Reusing that string for the heartbeat connection would make
+                # every real password-authenticated attempt lose its lease.
+                # Build the DSN in memory with the driver's password field;
+                # it is never logged or persisted.
+                from psycopg.conninfo import make_conninfo
+                dsn = make_conninfo(
+                    self.db.info.dsn,
+                    password=getattr(self.db.info, "password", None),
+                )
                 object.__setattr__(self, "connection_factory", lambda: psycopg.connect(dsn, autocommit=True))
             except Exception:
                 # Unit doubles and restricted environments can omit a second

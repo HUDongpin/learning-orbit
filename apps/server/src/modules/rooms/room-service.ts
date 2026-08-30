@@ -34,7 +34,8 @@ type RoomServiceErrorCode =
   | "ROOM_FORBIDDEN"
   | "JOIN_FORBIDDEN"
   | "ROOM_NOT_FOUND"
-  | "ROOM_CODE_UNAVAILABLE";
+  | "ROOM_CODE_UNAVAILABLE"
+  | "RETENTION_POLICY_NOT_CONFIGURED";
 
 export class RoomServiceError extends Error {
   constructor(readonly code: RoomServiceErrorCode) {
@@ -298,6 +299,20 @@ export class RoomService {
     teacherId: string,
     topic: string,
   ): Promise<string> {
+    // Resolve an approved, currently valid retention policy inside the same
+    // transaction as room creation.  The database default is only a test
+    // fixture; production never silently invents a governance policy.
+    const policy = await tx.query<{ policy_id: string }>(
+      `SELECT policy_id
+       FROM pilot_retention_policy
+       WHERE approved_at <= transaction_timestamp()
+         AND expires_at > transaction_timestamp()
+       ORDER BY approved_at DESC, policy_id
+       LIMIT 2
+       FOR SHARE`,
+    );
+    const retentionPolicyId = policy.rows.length === 1 ? policy.rows[0]!.policy_id : undefined;
+    if (!retentionPolicyId) throw new RoomServiceError("RETENTION_POLICY_NOT_CONFIGURED");
     for (let attempt = 0; attempt < ROOM_CODE_ATTEMPTS; attempt += 1) {
       const rawRoomCode = this.codeSource.roomCode();
       const normalizedRoomCode = rawRoomCode.trim().toUpperCase();
@@ -306,16 +321,17 @@ export class RoomService {
       const readableHashes = this.codeHasher.candidateHashes(rawRoomCode);
       const inserted = await tx.query(
         `INSERT INTO classroom_room(
-           room_id, room_code_hash, nova_actor_id, teacher_id, topic
+           room_id, room_code_hash, nova_actor_id, teacher_id, topic,
+           retention_policy_id
          )
-         SELECT $1, $2, $3, $4, $5
+         SELECT $1, $2, $3, $4, $5, $7
          WHERE NOT EXISTS (
            SELECT 1 FROM classroom_room
            WHERE room_code_hash = ANY($6::bytea[])
          )
          ON CONFLICT (room_code_hash) DO NOTHING
          RETURNING room_id`,
-        [roomId, currentHash, novaActorId, teacherId, topic, readableHashes],
+        [roomId, currentHash, novaActorId, teacherId, topic, readableHashes, retentionPolicyId],
       );
       if (inserted.rowCount === 1) return rawRoomCode;
     }

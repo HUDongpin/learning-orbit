@@ -23,6 +23,8 @@ type WorkerJobRow = {
   claim_generation: string;
   claim_token: string;
   locked_by: string;
+  analytics_order_seq: string | number | null;
+  analytics_order_kind: number | null;
 };
 
 export type ClaimedJob = Readonly<{
@@ -37,10 +39,29 @@ export type ClaimedJob = Readonly<{
   claimGeneration: string;
   claimToken: string;
   workerId: string;
+  analyticsOrderSeq: number | null;
+  analyticsOrderKind: number | null;
 }>;
 
 function toClaimedJob(row: WorkerJobRow): ClaimedJob {
   if (!row.claim_token || !row.locked_by) throw new Error("WORKER_JOB_CLAIM_INVARIANT");
+  const orderSeq = row.analytics_order_seq === null ? null : Number(row.analytics_order_seq);
+  const orderKind = row.analytics_order_kind === null ? null : Number(row.analytics_order_kind);
+  if ((orderSeq === null) !== (orderKind === null)
+    || (orderSeq !== null && (!Number.isSafeInteger(orderSeq) || orderSeq < 0))
+    || (orderKind !== null && (!Number.isSafeInteger(orderKind) || ![0, 1].includes(orderKind)))) {
+    throw new Error("WORKER_JOB_ANALYTICS_ORDER_INVARIANT");
+  }
+  if (row.job_type === "analytics.consume.v1" && (orderSeq === null || orderKind !== 0 || orderSeq < 1)) {
+    throw new Error("WORKER_JOB_ANALYTICS_ORDER_INVARIANT");
+  }
+  if (row.job_type === "analytics.replay-room.v1" && (orderSeq === null || orderKind !== 1)) {
+    throw new Error("WORKER_JOB_ANALYTICS_ORDER_INVARIANT");
+  }
+  if (row.job_type !== "analytics.consume.v1" && row.job_type !== "analytics.replay-room.v1"
+    && (orderSeq !== null || orderKind !== null)) {
+    throw new Error("WORKER_JOB_ANALYTICS_ORDER_INVARIANT");
+  }
   return {
     jobId: row.job_id,
     jobType: row.job_type,
@@ -53,11 +74,19 @@ function toClaimedJob(row: WorkerJobRow): ClaimedJob {
     claimGeneration: row.claim_generation,
     claimToken: row.claim_token,
     workerId: row.locked_by,
+    analyticsOrderSeq: orderSeq,
+    analyticsOrderKind: orderKind,
   };
 }
 
 export function claimIdentity(job: ClaimedJob): JobClaimIdentity {
-  const { payload: _payload, attempts: _attempts, ...identity } = job;
+  const {
+    payload: _payload,
+    attempts: _attempts,
+    analyticsOrderSeq: _analyticsOrderSeq,
+    analyticsOrderKind: _analyticsOrderKind,
+    ...identity
+  } = job;
   return identity;
 }
 

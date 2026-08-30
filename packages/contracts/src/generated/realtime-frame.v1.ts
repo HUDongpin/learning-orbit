@@ -27,7 +27,9 @@ export type ServerFrame =
   | ServerSnapshotRequired
   | ServerDegraded
   | ServerHeartbeat
-  | MediaStatusFrame;
+  | MediaStatusFrame
+  | AgentStatusFrame
+  | ProjectionFrame;
 export type T = string;
 export type Status = "scheduled" | "open" | "paused" | "closed";
 export type RoomEventEnvelope = {
@@ -160,4 +162,23 @@ export interface MediaStatusFrame {
   state: "uploaded" | "processing" | "ready" | "quarantined" | "failed" | "deleted";
   failureCode: string | null;
   updatedAt: string;
+}
+export interface AgentStatusFrame {
+  type: "agent_status";
+  roomId: string;
+  agentRunId: string | null;
+  state: "idle" | "queued" | "running" | "streaming" | "completed" | "blocked_by_policy" | "cancelled" | "failed";
+  serviceHealth: "healthy" | "degraded" | "unavailable";
+  agentEnabled: boolean;
+  updatedAt: string;
+  failureCode: string | null;
+}
+export interface ProjectionFrame {
+  type: "projection";
+  roomId: U;
+  projectionKey: "echo.teacher_shadow" | "echo.student_approved" | "trace.teacher_bundle" | "trace.student_bundle";
+  analysisEpoch: U;
+  projectionVersion: number;
+  completeThroughRoomSeq: number;
+  snapshotUrl: string;
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/agent-shadow.v1.json",
+  "title": "AgentShadowCandidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "text", "outputSha256", "sourceEventIds", "warningCodes", "failureCode"],
+  "properties": {
+    "state": {"enum": ["completed", "blocked_by_policy", "cancelled", "failed"]},
+    "text": {"type": "string", "maxLength": 4000},
+    "outputSha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "sourceEventIds": {"type": "array", "maxItems": 30, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "warningCodes": {"type": "array", "maxItems": 10, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z0-9_]{1,64}$"}},
+    "failureCode": {"type": ["string", "null"], "maxLength": 100}
+  }
+}

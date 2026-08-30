@@ -5,7 +5,7 @@
     {"file":"agent-provider-health.v1.json","id":"https://learning-orbit.local/schemas/agent-provider-health.v1.json","language":"python-ingress"},
     {"file":"derived-text-artifact.v1.json","id":"https://learning-orbit.local/schemas/derived-text-artifact.v1.json","language":"python-ingress","sha256":"9346fd3a5f8ef0453c5bb263eab65e39d0549af0734e531089fa2a97fef20c67","sourcePath":"packages/contracts/schemas/derived-text-artifact.v1.json"},
     {"file":"analysis-projection-envelope.v1.json","id":"https://learning-orbit.local/schemas/analysis-projection-envelope.v1.json","language":"python-ingress","sha256":"677d7f159b08f979e7e956fdcc96e05bd637e5d508b5100f8c100ae06ba9501a","sourcePath":"packages/contracts/schemas/analysis-projection-envelope.v1.json"},
-    {"file":"analytics-review-command.v1.json","id":"https://learning-orbit.local/schemas/analytics-review-command.v1.json","language":"python-ingress","sha256":"f205c8ff8ff3147d256d7336b296828025878dfbe161cfd6d8a4c0ca2824b35b","sourcePath":"packages/contracts/schemas/analytics-review-command.v1.json"},
+    {"file":"analytics-review-command.v1.json","id":"https://learning-orbit.local/schemas/analytics-review-command.v1.json","language":"python-ingress","sha256":"34cd3f11d55fa502b1ce66e8d17b76141920e8d76b407c25baf049a72f3db86e","sourcePath":"packages/contracts/schemas/analytics-review-command.v1.json"},
     {"file":"deletion-lifecycle.v1.json","id":"https://learning-orbit.local/schemas/deletion-lifecycle.v1.json","language":"python-ingress","sha256":"58ac14a3a6ab3f88265e1535528031d43a6c61ffb9def44770481fbb8bbe32e1","sourcePath":"packages/contracts/schemas/deletion-lifecycle.v1.json"}
   ],
   "generatedModules": [

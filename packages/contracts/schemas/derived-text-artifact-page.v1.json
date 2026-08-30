@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/derived-text-artifact-page.v1.json",
+  "title": "DerivedTextArtifactPage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "throughRoomSeq", "nextAfterArtifactId", "includeHistory"],
+  "properties": {
+    "items": { "type": "array", "maxItems": 200, "items": { "$ref": "derived-text-artifact.v1.json" } },
+    "throughRoomSeq": { "type": "integer", "minimum": 0 },
+    "nextAfterArtifactId": { "type": ["string", "null"], "format": "uuid" },
+    "includeHistory": { "type": "boolean" }
+  }
+}

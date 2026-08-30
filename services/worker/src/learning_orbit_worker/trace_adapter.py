@@ -58,7 +58,10 @@ def _normalize_view(snapshot: Mapping[str, Any], view: str, evidence_index: Mapp
         edge = dict(edge)
         src, dst = str(edge["sourceId"]), str(edge["targetId"])
         layer = str(edge["layer"])
-        if view == "human_only" and (node_kind.get(src) != "human" or node_kind.get(dst) != "human"):
+        if view == "human_only" and (
+            node_kind.get(src) not in {"human", "learner"}
+            or node_kind.get(dst) not in {"human", "learner"}
+        ):
             continue
         if view == "lineage_adjusted" and layer != "uptake":
             continue
@@ -87,7 +90,7 @@ def _normalize_view(snapshot: Mapping[str, Any], view: str, evidence_index: Mapp
         edges.append({"edgeId": trace_wire_edge_id(room_id, edge), "sourceId": src, "targetId": dst, "layer": layer, "channels": channels, "weight": weight, "evidenceRefs": evidence_refs})
     ids = {n["nodeId"] for n in nodes}
     if view == "human_only":
-        nodes = [n for n in nodes if node_kind.get(n["nodeId"]) == "human"]
+        nodes = [n for n in nodes if node_kind.get(n["nodeId"]) in {"human", "learner"}]
         ids = {n["nodeId"] for n in nodes}
     elif view == "lineage_adjusted":
         endpoint_ids = {e["sourceId"] for e in edges} | {e["targetId"] for e in edges}
@@ -130,20 +133,35 @@ def _single(reference: Mapping[str, Any], window_name: str, metadata: Mapping[st
             actor = node.get("actorKind", node.get("kind", "human"))
             teacher_nodes.append({"nodeId": node["nodeId"], "label": node.get("label", node["nodeId"]), "kind": "learner" if actor in {"human", "learner"} else actor})
         teacher_views[name] = {"nodes": teacher_nodes, "edges": internal["edges"], "metrics": internal["metrics"], "warnings": warnings}
+        # The student branch is intentionally narrower than the teacher
+        # observed view.  A teacher may inspect the virtual ROOM and Nova
+        # facilitation nodes, while the generated StudentView contract allows
+        # only pseudonymous learner nodes.  Filter on both the reference node
+        # kind and the server-side pseudonym record so a malformed actor index
+        # cannot relabel an Agent/ROOM as a learner.
+        learner_nodes = [
+            n for n in internal["nodes"]
+            if n["nodeId"] in pseudonyms
+            and n.get("actorKind", n.get("kind", "human")) in {"human", "learner"}
+            and pseudonyms[n["nodeId"]].get("kind") == "learner"
+        ]
+        learner_ids = {n["nodeId"] for n in learner_nodes}
         student_nodes = [
             {
                 "nodeId": str(pseudonyms[n["nodeId"]]["nodeId"]),
                 "label": str(pseudonyms[n["nodeId"]]["label"]),
-                "kind": str(pseudonyms[n["nodeId"]]["kind"]),
+                "kind": "learner",
             }
-            for n in internal["nodes"] if n["nodeId"] in pseudonyms
+            for n in learner_nodes
         ]
         student_edges = []
         for edge in internal["edges"]:
             if edge["layer"] not in STUDENT_EDGE_LAYERS:
                 continue
+            if edge["sourceId"] not in learner_ids or edge["targetId"] not in learner_ids:
+                continue
             src, dst = pseudonyms.get(edge["sourceId"]), pseudonyms.get(edge["targetId"])
-            if src and dst:
+            if src and dst and src.get("kind") == "learner" and dst.get("kind") == "learner":
                 student_edges.append({"sourceNodeId": src["nodeId"], "targetNodeId": dst["nodeId"], "layer": edge["layer"]})
         student_views[name] = {"nodes": student_nodes, "edges": student_edges, "metrics": internal["metrics"], "warnings": [w for w in warnings if w in STUDENT_WARNINGS]}
     teacher = {"payload": {"views": teacher_views}}

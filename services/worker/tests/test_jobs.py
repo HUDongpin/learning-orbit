@@ -32,3 +32,15 @@ class JobStoreTests(unittest.TestCase):
         store.succeed(job)
         self.assertEqual(self.db.execute("SELECT status FROM worker_job WHERE job_id=%s", (job.job_id,)).fetchone()[0], "succeeded")
 
+    def test_job_claims_accepts_worker_claim_alias(self):
+        """Handlers pass the immutable JobClaim, whose owner is worker_id."""
+        key = f"probe:{uuid.uuid4()}"
+        self.db.execute("INSERT INTO worker_job(job_type,dedupe_key,payload) VALUES('probe.v1',%s,'{}')", (key,))
+        store = JobStore(self.db, "worker-a")
+        job = store.claim(1)[0]
+        store.job_claims.complete_business(self.db, job.claim, "PROBE_COMPLETED")
+        marker = self.db.execute(
+            "SELECT completion_code FROM worker_job_completion WHERE job_id=%s AND claim_generation=%s",
+            (job.job_id, job.claim_generation),
+        ).fetchone()
+        self.assertEqual(marker[0], "PROBE_COMPLETED")

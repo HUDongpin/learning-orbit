@@ -25,7 +25,8 @@ import { CommandService } from "./modules/rooms/command-service.js";
 import { noAttachments } from "./modules/rooms/attachment-validator.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { registerRoutes } from "./routes.js";
-import { RoomHub } from "./modules/realtime/room-hub.js";
+import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
+import { RealtimeConnection } from "./modules/realtime/connection.js";
 import { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery-authorizer.js";
 import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
@@ -34,6 +35,17 @@ import { S3MediaStore } from "./modules/media/s3-media-store.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
 import type { MediaStore } from "./modules/media/media-store.js";
 import { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
+import { AnalyticsPolicy } from "./modules/analytics/analytics-policy.js";
+import { AnalyticsPolicyError } from "./modules/analytics/analytics-policy.js";
+import { AnalyticsRepository } from "./modules/analytics/analytics-repository.js";
+import { AnalyticsTeacherService } from "./modules/analytics/analytics-teacher-service.js";
+import { ProjectionOutboxRepository } from "./modules/analytics/projection-outbox-repository.js";
+import { AgentService } from "./modules/agent/agent-service.js";
+import { ProviderHealthRepository } from "./modules/agent/provider-health-repository.js";
+import { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
+import { registerAnalyticsReviewEventPayloads } from "./modules/analytics/register-analytics-review-event-payloads.js";
+import type { GovernanceService } from "./modules/governance/governance-service.js";
+import { GovernanceService as DefaultGovernanceService } from "./modules/governance/governance-service.js";
 
 export interface BuildAppOptions {
   databaseUrl?: string;
@@ -50,6 +62,8 @@ export interface BuildAppOptions {
   jobClaims?: JobClaimAuthority;
   media?: MediaDeps;
   mediaStore?: MediaStore;
+  /** Explicitly injected in tests/pilot; production requires LO_AUDIT_SALT. */
+  governance?: GovernanceService;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -72,7 +86,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     global: false, skipOnError: false,
     errorResponseBuilder: () => ({ statusCode: 429, code: "RATE_LIMITED" }),
   });
-  await app.register(websocket);
+  await app.register(websocket, { options: { maxPayload: RealtimeConnection.MAX_INBOUND_FRAME_BYTES } });
   app.addHook("onRequest", async (request, reply) => {
     const requestOrigin = request.headers.origin;
     if (requiresAllowedOrigin(request)) {
@@ -82,16 +96,51 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
   });
   const clock = options.clock ?? systemClock;
+  const eventPayloadRegistry = createCoreEventPayloadRegistry();
+  registerAnalyticsReviewEventPayloads(eventPayloadRegistry);
   const configuredHasher = config.roomCodePepperCurrentVersion !== undefined
     && config.roomCodePeppers !== undefined
     ? new CodeHasher(config.roomCodePepperCurrentVersion, config.roomCodePeppers)
     : undefined;
   const codeHasher = options.codeHasher ?? configuredHasher;
-  const lifecycle = pool ? new RoomLifecycleService(new RoomEventRepository(pool, createCoreEventPayloadRegistry(), clock), clock) : undefined;
+  const lifecycle = pool ? new RoomLifecycleService(new RoomEventRepository(pool, eventPayloadRegistry, clock), clock) : undefined;
   const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   const jobClaims = options.jobClaims ?? new JobClaimAuthority();
-  const realtime = pool ? (() => { const authorizer = new RealtimeDeliveryAuthorizer(pool); const hub = new RoomHub(pool, authorizer); return { authorizer, hub, publisher: new OutboxPublisher(pool, hub) }; })() : undefined;
+  const analytics = pool ? {
+    policy: new AnalyticsPolicy(pool),
+    repository: new AnalyticsRepository(pool),
+  } : undefined;
+  const realtime = pool ? (() => {
+    const authorizer = new RealtimeDeliveryAuthorizer(pool);
+    const hub = new RoomHub(pool, authorizer);
+    const authorizeProjection: ProjectionDeliveryAuthorizer = async ({ connection, frame, principal }) => {
+      if (!analytics) return { allow: false as const };
+      try {
+        const grant = await analytics.policy.requireRoomAccess(
+          principal, frame.roomId, "projection_frame", connection.identity.sessionId,
+        );
+        analytics.policy.assertProjection(grant, frame.projectionKey);
+        return { allow: true as const };
+      } catch (error) {
+        if (error instanceof AnalyticsPolicyError) {
+          if (error.statusCode === 401) return { allow: false as const, closeCode: 4401 as const };
+          if (error.statusCode === 410) return { allow: false as const, closeCode: 4410 as const };
+          if (error.statusCode === 404) return { allow: false as const, closeCode: 4403 as const };
+        }
+        return { allow: false as const };
+      }
+    };
+    const projection = analytics ? {
+      repository: new ProjectionOutboxRepository(pool),
+      authorize: authorizeProjection,
+    } : undefined;
+    return {
+      authorizer,
+      hub,
+      publisher: new OutboxPublisher(pool, hub, undefined, projection),
+    };
+  })() : undefined;
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
   const media: MediaDeps | undefined = options.media ?? (pool ? {
     pool,
@@ -102,7 +151,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   } : undefined);
   const mediaInternalReconcile = pool && media && assertionTrust
     ? new MediaInternalReconcileRoute(
-      lifecycle?.events ?? new RoomEventRepository(pool, createCoreEventPayloadRegistry(), clock),
+      lifecycle?.events ?? new RoomEventRepository(pool, eventPayloadRegistry, clock),
       media.repo ?? new MediaRepository(pool, clock),
       media.store,
       clock,
@@ -110,6 +159,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       jobClaims,
     )
     : undefined;
+  const analyticsTeacher = pool && lifecycle && analytics
+    ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined;
+  const agent = pool ? new AgentService(pool, clock) : undefined;
+  const agentProviderHealth = pool && assertionTrust ? new InternalProviderHealthRoute(
+    new ProviderHealthRepository(pool, clock), assertionTrust, clock,
+    { providerId: "fixture", manifestSha256: "0".repeat(64) },
+  ) : undefined;
+  const governance = options.governance ?? (pool && process.env.LO_AUDIT_SALT
+    ? new DefaultGovernanceService(pool, {
+      auditSalt: process.env.LO_AUDIT_SALT,
+      clock: () => clock.now(),
+      ...(realtime ? { evictRoom: realtime.hub.evictRoom.bind(realtime.hub) } : {}),
+    })
+    : undefined);
   await registerRoutes(app, {
     magicLinks: pool ? new MagicLinkService(pool, clock, config.publicBaseOrigin, sender) : undefined,
     sessions: pool ? new SessionService(pool) : undefined,
@@ -123,6 +186,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     realtime,
     media,
     mediaInternalReconcile,
+    agent,
+    agentProviderHealth,
+    analytics,
+    analyticsTeacher,
+    governance,
   });
   app.addHook("onClose", async () => {
     if (publisherTimer) clearInterval(publisherTimer);

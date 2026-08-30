@@ -1,0 +1,7 @@
+[
+  {"eventKey":"m001","actorId":"yaqing","actorKind":"human","text":"我先把太陽連到生產者。","replyTo":null,"mentions":[],"expectedCommunication":[["yaqing","ROOM",1.0]]},
+  {"eventKey":"m002","actorId":"zilang","actorKind":"human","text":"@雅晴 我同意能量從太陽進來。","replyTo":"m001","mentions":["yaqing"],"expectedCommunication":[["zilang","yaqing",1.0]],"expectedUptake":[["yaqing","zilang",1.0]]},
+  {"eventKey":"m004","actorId":"haoran","actorKind":"human","text":"分解者讓物質回到土壤。","replyTo":null,"mentions":[],"expectedCommunication":[["haoran","ROOM",1.0]]},
+  {"eventKey":"m005","actorId":"nova","actorKind":"agent","agentRole":"socratic_facilitator","text":"你們會用哪一條觀察來反駁？","replyTo":"m004","mentions":[],"expectedCommunication":[],"expectedFacilitation":[["nova","haoran",1.0]]},
+  {"eventKey":"m006","actorId":"meilin","actorKind":"human","text":"@浩然 因為能量會散失成熱，我承接這個觀點。","replyTo":"m005","mentions":["haoran"],"expectedCommunication":[["meilin","haoran",0.5],["meilin","nova",0.5]],"expectedUptake":[["haoran","meilin",1.0]],"expectedFacilitation":[]}
+]

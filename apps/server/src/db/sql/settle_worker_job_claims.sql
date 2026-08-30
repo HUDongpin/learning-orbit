@@ -23,6 +23,14 @@ WITH recovered AS (
     AND j.attempts >= j.max_attempts
     AND j.job_id NOT IN (SELECT job_id FROM recovered)
   RETURNING j.job_id
+), lifecycle_dead AS (
+  UPDATE deletion_job d
+  SET status = CASE WHEN d.status IN ('completed','dead') THEN d.status ELSE 'dead' END
+  FROM exhausted e
+  JOIN worker_job j ON j.job_id = e.job_id
+  WHERE j.job_type = 'room.delete-surface.v1'
+    AND d.deletion_job_id::text = j.payload->>'deletionJobId'
+  RETURNING d.deletion_job_id
 ), picked AS (
   SELECT j.job_id
   FROM worker_job j
@@ -33,6 +41,16 @@ WITH recovered AS (
       (j.status IN ('queued', 'retryable') AND j.claim_token IS NULL
         AND j.locked_at IS NULL AND j.locked_by IS NULL)
       OR (j.status = 'running' AND j.locked_at < now() - interval '2 minutes')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM worker_job prior
+      WHERE j.job_type IN ('analytics.consume.v1', 'analytics.replay-room.v1')
+        AND prior.job_type IN ('analytics.consume.v1', 'analytics.replay-room.v1')
+        AND prior.room_id = j.room_id
+        AND (prior.analytics_order_seq, prior.analytics_order_kind, prior.job_id)
+            < (j.analytics_order_seq, j.analytics_order_kind, j.job_id)
+        AND prior.status <> 'succeeded'
     )
 )
 UPDATE worker_job j

@@ -10,11 +10,20 @@ from __future__ import annotations
 import json
 import math
 import re
+from functools import lru_cache
 from hashlib import sha256
+from pathlib import Path
 from typing import Any, Mapping, Pattern
+from uuid import UUID
 
 _PROJECTION_KEYS = {"echo.teacher_shadow", "echo.student_approved", "trace.teacher_bundle", "trace.student_bundle"}
 _SHA256: Pattern[str] = re.compile(r"^[a-f0-9]{64}$")
+_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _content_hash(value: Any) -> str:
+    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def _jsonb(value: Any) -> Any:
@@ -24,6 +33,54 @@ def _jsonb(value: Any) -> Any:
         return Jsonb(value)
     except ImportError:
         return value
+
+
+@lru_cache(maxsize=2)
+def _nested_validator(projection_key: str) -> Any:
+    """Load the canonical nested projection schema when available.
+
+    The worker package keeps its generated envelope parser dependency-free,
+    while the locked worker environment also ships ``jsonschema`` for this
+    optional, fail-closed adapter check.  Keeping schema loading lazy avoids a
+    startup dependency for pure algorithm users and makes the source path
+    explicit rather than duplicating a second schema in Python.
+    """
+    schema_name = "echo-concept-projection.v1.json" if projection_key.startswith("echo.") else "trace-projection.v1.json"
+    try:
+        from jsonschema import Draft202012Validator
+        schema = json.loads((_ROOT / "packages" / "contracts" / "schemas" / schema_name).read_text(encoding="utf-8"))
+        return Draft202012Validator(schema)
+    except (ImportError, OSError, ValueError, TypeError):
+        return None
+
+
+def _validate_nested_projection(snapshot: Mapping[str, Any]) -> None:
+    """Reject a valid outer envelope whose payload violates its closed branch."""
+    key = snapshot.get("projectionKey")
+    if not isinstance(key, str):
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    validator = _nested_validator(key)
+    if validator is None:
+        # A missing optional validator is not permission to persist unchecked
+        # JSON.  The structural fallback covers the branch discriminator and
+        # the two payload roots; the full locked environment performs the
+        # canonical Draft 2020-12 validation above.
+        payload = snapshot.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        if key.startswith("echo."):
+            if set(payload) != {"nodes", "edges"} or not isinstance(payload.get("nodes"), list) or not isinstance(payload.get("edges"), list):
+                raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        elif key == "trace.student_bundle":
+            if set(payload) != {"windows", "interpretation"} or not isinstance(payload.get("windows"), Mapping) or not isinstance(payload.get("interpretation"), str):
+                raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        elif key == "trace.teacher_bundle":
+            if set(payload) != {"windows", "actorMapping"} or not isinstance(payload.get("windows"), Mapping) or not isinstance(payload.get("actorMapping"), Mapping):
+                raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+        return
+    errors = sorted(validator.iter_errors(dict(snapshot)), key=lambda error: list(error.path))
+    if errors:
+        raise ValueError("INVALID_PROJECTION_SNAPSHOT")
 
 
 def _validate_snapshot(snapshot: Mapping[str, Any], payload_hash: str | None = None) -> None:
@@ -46,6 +103,14 @@ def _validate_snapshot(snapshot: Mapping[str, Any], payload_hash: str | None = N
         raise ValueError("INVALID_PROJECTION_SNAPSHOT")
     if payload_hash is not None and (not isinstance(payload_hash, str) or not _SHA256.fullmatch(payload_hash)):
         raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    if payload_hash is not None:
+        try:
+            matches = payload_hash == _content_hash(snapshot["payload"])
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise ValueError("INVALID_PROJECTION_SNAPSHOT")
+    _validate_nested_projection(snapshot)
 
 
 def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None,
@@ -84,6 +149,14 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
         raise ValueError("INVALID_PROJECTION_PATCH")
     if patch["completeThroughRoomSeq"] != snapshot["completeThroughRoomSeq"] or patch["requiresReplay"] != snapshot["requiresReplay"]:
         raise ValueError("INVALID_PROJECTION_PATCH")
+    try:
+        UUID(str(patch["analysisEpoch"]))
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError("INVALID_PROJECTION_PATCH") from None
+    if not isinstance(patch["algorithmVersion"], str) or not 1 <= len(patch["algorithmVersion"]) <= 160:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    if not isinstance(patch["parameterHash"], str) or not _SHA256.fullmatch(patch["parameterHash"]):
+        raise ValueError("INVALID_PROJECTION_PATCH")
     for key in ("warnings", "nodesAdded", "nodesUpdated", "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates", "reasonCodes", "evidenceRefs"):
         if not isinstance(patch[key], list):
             raise ValueError("INVALID_PROJECTION_PATCH")
@@ -93,16 +166,92 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
         for coordinate in (item["x"], item["y"]):
             if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)) or not math.isfinite(float(coordinate)) or not 0 <= coordinate <= 1:
                 raise ValueError("INVALID_PROJECTION_PATCH")
+    for item in patch["nodesAdded"] + patch["nodesUpdated"]:
+        if not isinstance(item, Mapping) or not isinstance(item.get("nodeId"), str) \
+                or not isinstance(item.get("label"), str) or not isinstance(item.get("position"), Mapping):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+    for item in patch["edgesAdded"] + patch["edgesUpdated"]:
+        if not isinstance(item, Mapping) or not isinstance(item.get("edgeId"), str) \
+                or not isinstance(item.get("head"), str) or not isinstance(item.get("tail"), str) \
+                or not isinstance(item.get("predicate"), str) or not isinstance(item.get("evidenceRefs"), list):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        try:
+            UUID(str(item["edgeId"]))
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("INVALID_PROJECTION_PATCH") from None
+    if any(not isinstance(item, str) for item in patch["nodesHidden"] + patch["reasonCodes"] + patch["warnings"]):
+        raise ValueError("INVALID_PROJECTION_PATCH")
+    for item in patch["edgesHidden"]:
+        if not isinstance(item, str):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        try:
+            UUID(item)
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("INVALID_PROJECTION_PATCH") from None
     for item in patch["evidenceRefs"]:
         if not isinstance(item, Mapping) or set(item) != {"eventId", "start", "end"} or not isinstance(item["eventId"], str):
             raise ValueError("INVALID_PROJECTION_PATCH")
-        if isinstance(item["start"], bool) or not isinstance(item["start"], int) or item["start"] < 0 or isinstance(item["end"], bool) or not isinstance(item["end"], int) or item["end"] <= 0:
+        try:
+            UUID(item["eventId"])
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("INVALID_PROJECTION_PATCH") from None
+        if isinstance(item["start"], bool) or not isinstance(item["start"], int) or item["start"] < 0 or isinstance(item["end"], bool) or not isinstance(item["end"], int) or item["end"] <= item["start"]:
             raise ValueError("INVALID_PROJECTION_PATCH")
     score = patch["changeScore"]
     if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(float(score)) or not 0 <= score <= 1:
         raise ValueError("INVALID_PROJECTION_PATCH")
     if patch_hash is None or not isinstance(patch_hash, str) or not _SHA256.fullmatch(patch_hash):
         raise ValueError("INVALID_PROJECTION_PATCH")
+    try:
+        matches = patch_hash == _content_hash(patch)
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
+        raise ValueError("INVALID_PROJECTION_PATCH")
+
+
+def _row_field(row: Any, name: str, index: int) -> Any:
+    return row.get(name) if isinstance(row, Mapping) else row[index]
+
+
+def _existing_snapshot_matches(
+    row: Any,
+    snapshot: Mapping[str, Any],
+    payload_hash: str,
+) -> bool:
+    """Check an idempotent conflict instead of trusting ``DO NOTHING``."""
+    if row is None:
+        return False
+    names = (
+        "snapshot_id", "room_id", "projection_key", "analysis_epoch", "version",
+        "complete_through_seq", "watermark_event_time", "requires_replay",
+        "algorithm_version", "parameter_hash", "payload", "content_sha256",
+    )
+    values = {name: _row_field(row, name, index) for index, name in enumerate(names)}
+    try:
+        version = int(values["version"])
+        complete_through = int(values["complete_through_seq"])
+    except (TypeError, ValueError):
+        return False
+    watermark = values["watermark_event_time"]
+    if hasattr(watermark, "isoformat"):
+        watermark = watermark.isoformat().replace("+00:00", "Z")
+    return (
+        str(values["room_id"]) == str(snapshot["roomId"])
+        and str(values["projection_key"]) == str(snapshot["projectionKey"])
+        and str(values["analysis_epoch"]) == str(snapshot["analysisEpoch"])
+        and version == snapshot["projectionVersion"]
+        and complete_through == snapshot["completeThroughRoomSeq"]
+        and str(watermark) == str(snapshot["watermarkEventTime"])
+        and isinstance(values["requires_replay"], bool)
+        and values["requires_replay"] == snapshot["requiresReplay"]
+        and str(values["algorithm_version"]) == str(snapshot["algorithmVersion"])
+        and str(values["parameter_hash"]) == str(snapshot["parameterHash"])
+        and values["payload"] == snapshot["payload"]
+        and str(values["content_sha256"]) == payload_hash
+    )
+
+
 class ProjectionStore:
     def __init__(self, connection: Any, *, snapshot_url_factory: Any | None = None) -> None:
         self.connection = connection
@@ -237,6 +386,31 @@ class ProjectionStore:
         new_epoch = str(head["analysis_epoch"]) != str(snapshot["analysisEpoch"])
         existing_version = 0 if new_epoch else existing_head_version
         if existing_version >= version:
+            # A retry of an already committed version is only idempotent when
+            # the immutable snapshot bytes and metadata agree.  Silent
+            # acceptance of a same-key/different-payload conflict would make a
+            # corrupt row look like successful replay.
+            existing = self.connection.execute(
+                """SELECT snapshot_id,room_id,projection_key,analysis_epoch,version,
+                          complete_through_seq,watermark_event_time,requires_replay,
+                          algorithm_version,parameter_hash,payload,content_sha256
+                   FROM analysis_projection_snapshots
+                  WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
+                (room_id, key, snapshot["analysisEpoch"], version),
+            ).fetchone()
+            if not _existing_snapshot_matches(existing, snapshot, payload_hash):
+                raise RuntimeError("ANALYTICS_SNAPSHOT_CONFLICT")
+            if patch is not None:
+                existing_patch = self.connection.execute(
+                    """SELECT room_id,projection_key,analysis_epoch,version,base_version,
+                              complete_through_seq,algorithm_version,parameter_hash,
+                              payload,content_sha256
+                         FROM analysis_projection_patches
+                        WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
+                    (room_id, key, snapshot["analysisEpoch"], version),
+                ).fetchone()
+                if existing_patch is None or str(_row_field(existing_patch, "content_sha256", 9)) != str(patch_hash):
+                    raise RuntimeError("ANALYTICS_PATCH_CONFLICT")
             return
         if existing_version + 1 != version:
             raise RuntimeError("ANALYTICS_VERSION_CONFLICT")
@@ -257,34 +431,52 @@ class ProjectionStore:
         snapshot_id = inserted[0] if inserted else None
         if snapshot_id is None:
             current = self.connection.execute(
-                "SELECT snapshot_id FROM analysis_projection_snapshots WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s",
+                """SELECT snapshot_id,room_id,projection_key,analysis_epoch,version,
+                          complete_through_seq,watermark_event_time,requires_replay,
+                          algorithm_version,parameter_hash,payload,content_sha256
+                   FROM analysis_projection_snapshots
+                  WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
                 (room_id, key, snapshot["analysisEpoch"], version),
             ).fetchone()
-            snapshot_id = current[0] if current else None
+            if current is not None and not _existing_snapshot_matches(current, snapshot, payload_hash):
+                raise RuntimeError("ANALYTICS_SNAPSHOT_CONFLICT")
+            snapshot_id = _row_field(current, "snapshot_id", 0) if current else None
         if snapshot_id is None:
             raise RuntimeError("ANALYTICS_SNAPSHOT_UNAVAILABLE")
         if patch is not None:
-            self.connection.execute(
+            patch_cursor = self.connection.execute(
                 """INSERT INTO analysis_projection_patches
                    (patch_id,room_id,projection_key,analysis_epoch,base_version,version,
                     complete_through_seq,algorithm_version,parameter_hash,payload,content_sha256)
                    VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING""",
+                   ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING
+                   RETURNING patch_id""",
                 (room_id, key, snapshot["analysisEpoch"], patch["baseVersion"], version,
                  snapshot["completeThroughRoomSeq"], snapshot["algorithmVersion"],
                  snapshot["parameterHash"], _jsonb(patch), patch_hash),
             )
+            patch_inserted = patch_cursor.fetchone() if callable(getattr(patch_cursor, "fetchone", None)) else None
+            if patch_inserted is None:
+                existing_patch_row = self.connection.execute(
+                    """SELECT room_id,projection_key,analysis_epoch,version,base_version,
+                              complete_through_seq,algorithm_version,parameter_hash,payload,content_sha256
+                         FROM analysis_projection_patches
+                        WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
+                    (room_id, key, snapshot["analysisEpoch"], version),
+                ).fetchone()
+                if existing_patch_row is None or str(_row_field(existing_patch_row, "content_sha256", 9)) != str(patch_hash):
+                    raise RuntimeError("ANALYTICS_PATCH_CONFLICT")
         updated = self.connection.execute(
             """UPDATE analysis_room_heads
                SET analysis_epoch=%s,version=%s,complete_through_seq=%s,
                    algorithm_version=%s,parameter_hash=%s,
                    max_seen_event_time=%s,watermark_event_time=%s,
                    requires_replay=%s,snapshot_id=%s,updated_at=now()
-               WHERE room_id=%s AND projection_key=%s AND version=%s""",
+               WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
             (snapshot["analysisEpoch"], version, snapshot["completeThroughRoomSeq"],
              snapshot["algorithmVersion"], snapshot["parameterHash"], snapshot["watermarkEventTime"],
              snapshot["watermarkEventTime"], snapshot["requiresReplay"], snapshot_id,
-            room_id, key, existing_head_version),
+            room_id, key, head["analysis_epoch"], existing_head_version),
         )
         if getattr(updated, "rowcount", 1) != 1:
             raise RuntimeError("ANALYTICS_HEAD_CAS_FAILED")
@@ -298,8 +490,7 @@ class ProjectionStore:
         )
 
     def content_hash(self, payload: Any) -> str:
-        return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
-                                  separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        return _content_hash(payload)
 
     def advance_checkpoint(self, room_id: str, room_seq: int, *, consumer_name: str = "analytics") -> None:
         if not isinstance(room_seq, int) or isinstance(room_seq, bool) or room_seq < 0:

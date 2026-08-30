@@ -64,5 +64,6 @@ describe("pilot governance contracts", () => {
     } })).toThrow("INVALID_DELETION_STATUS");
     expect(routes.rooms.deletionStatus(uuid)).toBe(`/v1/rooms/${uuid}/deletion`);
     expect(routes.deletions.get(uuid)).toBe(`/v1/deletions/${uuid}`);
+    expect(routes.deletions.forRoom(uuid)).toBe(`/v1/rooms/${uuid}/deletion`);
   });
 });

@@ -13,6 +13,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 import re
+from uuid import UUID
 
 
 class StaleClaim(RuntimeError):
@@ -81,6 +82,10 @@ class WorkerJob:
     locked_by: str
     claim_generation: str
     claim_token: str
+    # Nullable for non-analytics jobs.  Analytics migration 003 requires both
+    # values to be present and ties them to the room-local ordering tuple.
+    analytics_order_seq: int | None = None
+    analytics_order_kind: int | None = None
 
     @property
     def claim(self) -> "JobClaim":
@@ -103,6 +108,7 @@ class WorkerJob:
             "source_event_id": "source_event_id", "dedupe_key": "dedupe_key",
             "payload": "payload", "attempts": "attempts", "correlation_id": "correlation_id",
             "locked_by": "locked_by", "claim_generation": "claim_generation", "claim_token": "claim_token",
+            "analytics_order_seq": "analytics_order_seq", "analytics_order_kind": "analytics_order_kind",
         }
         if key not in aliases:
             raise KeyError(key)
@@ -112,6 +118,7 @@ class WorkerJob:
         return {field: getattr(self, field) for field in (
             "job_id", "job_type", "room_id", "source_event_id", "dedupe_key",
             "payload", "attempts", "correlation_id", "locked_by", "claim_generation", "claim_token",
+            "analytics_order_seq", "analytics_order_kind",
         )}
 
 
@@ -196,21 +203,65 @@ def _job_from_row(row: Mapping[str, Any]) -> WorkerJob:
     )
     if any(key not in row for key in required) or not row["locked_by"] or not row["claim_token"]:
         raise JobInvariantError("WORKER_JOB_CLAIM_INVARIANT")
+    def strict_int(value: Any, code: str, *, minimum: int = 0) -> int:
+        # PostgreSQL returns integers for bigint/smallint, while a few test
+        # doubles expose canonical decimal strings.  Never call int() on an
+        # arbitrary float/bool: silent truncation would change the ordering
+        # barrier or retry budget.
+        if isinstance(value, bool):
+            raise JobInvariantError(code)
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
+            parsed = int(value)
+        else:
+            raise JobInvariantError(code)
+        if parsed < minimum:
+            raise JobInvariantError(code)
+        return parsed
+
+    order_seq = row.get("analytics_order_seq")
+    order_kind = row.get("analytics_order_kind")
+    if order_seq is not None:
+        order_seq = strict_int(order_seq, "WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    if order_kind is not None:
+        order_kind = strict_int(order_kind, "WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+        if order_kind not in (0, 1):
+            raise JobInvariantError("WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    if (order_seq is None) != (order_kind is None):
+        raise JobInvariantError("WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    job_type = str(row["job_type"])
+    if job_type == "analytics.consume.v1":
+        if order_seq is None or order_kind != 0 or order_seq < 1:
+            raise JobInvariantError("WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    elif job_type == "analytics.replay-room.v1":
+        if order_seq is None or order_kind != 1:
+            raise JobInvariantError("WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    elif order_seq is not None or order_kind is not None:
+        raise JobInvariantError("WORKER_JOB_ANALYTICS_ORDER_INVARIANT")
+    attempts = strict_int(row["attempts"], "WORKER_JOB_ATTEMPTS_INVARIANT", minimum=0)
+    claim_generation = strict_int(row["claim_generation"], "WORKER_JOB_CLAIM_GENERATION_INVARIANT", minimum=1)
     return WorkerJob(
-        job_id=str(row["job_id"]), job_type=str(row["job_type"]),
+        job_id=str(row["job_id"]), job_type=job_type,
         room_id=None if row["room_id"] is None else str(row["room_id"]),
         source_event_id=None if row["source_event_id"] is None else str(row["source_event_id"]),
         dedupe_key=str(row["dedupe_key"]), payload=row["payload"],
-        attempts=int(row["attempts"]), correlation_id=str(row["correlation_id"]),
-        locked_by=str(row["locked_by"]), claim_generation=str(row["claim_generation"]),
-        claim_token=str(row["claim_token"]),
+        attempts=attempts, correlation_id=str(row["correlation_id"]),
+        locked_by=str(row["locked_by"]), claim_generation=str(claim_generation),
+        claim_token=str(row["claim_token"]), analytics_order_seq=order_seq,
+        analytics_order_kind=order_kind,
     )
 
 
 def _claim_predicate(job: WorkerJob | JobClaim) -> tuple[Any, ...]:
+    worker_id = getattr(job, "locked_by", None)
+    if worker_id is None:
+        worker_id = getattr(job, "worker_id", None)
+    if not worker_id:
+        raise JobInvariantError("WORKER_JOB_CLAIM_INVARIANT")
     return (
         job.job_id, job.job_type, job.room_id, job.source_event_id, job.dedupe_key,
-        job.correlation_id, job.claim_generation, job.claim_token, job.locked_by,
+        job.correlation_id, job.claim_generation, job.claim_token, worker_id,
     )
 
 
@@ -323,19 +374,76 @@ class JobStore:
             code = getattr(error, "code", None) or (error if isinstance(error, str) else "JOB_HANDLER_FAILED")
             if not isinstance(code, str) or not re.fullmatch(r"[A-Z0-9_]{1,64}", code):
                 code = "JOB_HANDLER_FAILED"
+            terminal = bool(getattr(error, "terminal", False))
+            status_sql = "'dead'" if terminal else "CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'retryable' END"
+            run_after_sql = "run_after" if terminal else "CASE WHEN attempts >= max_attempts THEN run_after ELSE now() + interval '5 seconds' END"
             changed = self.db.execute(
-                """UPDATE worker_job SET status = CASE WHEN attempts >= max_attempts
-                       THEN 'dead' ELSE 'retryable' END,
-                       run_after = CASE WHEN attempts >= max_attempts THEN run_after
-                         ELSE now() + interval '5 seconds' END,
+                f"""UPDATE worker_job SET status = {status_sql},
+                       run_after = {run_after_sql},
                        claim_token=NULL, locked_at=NULL, locked_by=NULL,
                        last_error=%s, updated_at=now()
                        WHERE job_id=%s AND status='running' AND locked_by=%s
-                         AND claim_generation=%s::bigint AND claim_token=%s::uuid""",
+                         AND claim_generation=%s::bigint AND claim_token=%s::uuid
+                       RETURNING status""",
                 (code, job.job_id, self.worker_id, job.claim_generation, job.claim_token),
             )
             if getattr(changed, "rowcount", 0) != 1:
                 raise StaleClaim("STALE_CLAIM")
+            changed_row = changed.fetchone() if callable(getattr(changed, "fetchone", None)) else None
+            if changed_row is None:
+                actual_status = "dead" if terminal else None
+            elif isinstance(changed_row, Mapping):
+                actual_status = changed_row.get("status")
+            else:
+                actual_status = changed_row[0]
+            self._sync_lifecycle_status(self.db, job, "dead" if actual_status == "dead" else None, code)
+
+    @staticmethod
+    def _lifecycle_deletion_id(job: WorkerJob | JobClaim) -> str | None:
+        """Extract only the opaque deletion UUID for status synchronization."""
+        if getattr(job, "job_type", None) != "room.delete-surface.v1":
+            return None
+        payload = getattr(job, "payload", None)
+        if not isinstance(payload, Mapping):
+            return None
+        value = payload.get("deletionJobId")
+        try:
+            return str(UUID(str(value)))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    @classmethod
+    def _sync_lifecycle_status(
+        cls,
+        connection: Any,
+        job: WorkerJob | JobClaim,
+        terminal_status: str | None,
+        _failure_code: str | None,
+    ) -> None:
+        """Project worker outcome onto the parent deletion saga.
+
+        The parent status is monotonic with respect to terminal states: a
+        late retry cannot move a completed/dead saga backwards, while a dead
+        surface can always escalate a queued/running/retryable saga.
+        """
+        deletion_id = cls._lifecycle_deletion_id(job)
+        if deletion_id is None:
+            return
+        if terminal_status == "dead":
+            status = "dead"
+        else:
+            status = "retryable"
+        # ``last_error`` is intentionally stored on worker_job, not the
+        # content-free deletion_job table.  The status table only carries the
+        # stable lifecycle state; governance reads the bounded worker code.
+        connection.execute(
+            """UPDATE deletion_job
+                  SET status=CASE
+                    WHEN status IN ('completed','dead') THEN status
+                    ELSE %s END
+                WHERE deletion_job_id=%s""",
+            (status, deletion_id),
+        )
 
     def cancel(self, job: WorkerJob | JobClaim, code: str = "JOB_CANCELLED") -> None:
         if not re.fullmatch(r"[A-Z0-9_]{1,64}", code):

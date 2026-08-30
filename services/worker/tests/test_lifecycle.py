@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from learning_orbit_worker.core_handlers import TerminalJobError
 from learning_orbit_worker.handler_registry import HandlerOutcome
 from learning_orbit_worker.jobs import WorkerJob
-from learning_orbit_worker.lifecycle import delete_surface_handler, register_lifecycle_handlers
+from learning_orbit_worker.lifecycle import _surface_count, delete_surface_handler, register_lifecycle_handlers
 from learning_orbit_worker.handler_registry import HandlerRegistry
 
 
@@ -53,6 +53,14 @@ class LifecycleHandlerTests(unittest.TestCase):
     def test_missing_claim_is_terminal(self):
         with self.assertRaisesRegex(TerminalJobError, "CLAIM"):
             delete_surface_handler(SimpleNamespace(claim=None), job({"deletionJobId": DELETION, "surface": "events"}))
+
+    def test_capability_surfaces_have_explicit_zero_probe(self):
+        class ShouldNotQuery:
+            def execute(self, *_args):
+                raise AssertionError("capability surface must not issue a parameterless query with room args")
+
+        self.assertEqual(_surface_count(ShouldNotQuery(), "caches", DELETION), 0)
+        self.assertEqual(_surface_count(ShouldNotQuery(), "provider_copies", DELETION), 0)
 
 
 if __name__ == "__main__":

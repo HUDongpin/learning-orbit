@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/trace-projection.v1.json",
+  "title": "SnaProjectionBundle",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/TeacherBundle" },
+    { "$ref": "#/$defs/StudentBundle" }
+  ],
+  "$defs": {
+    "Metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["participationBalance", "reciprocity", "agentShare", "semanticCoverage"],
+      "properties": {
+        "participationBalance": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reciprocity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "agentShare": { "type": "number", "minimum": 0, "maximum": 1 },
+        "semanticCoverage": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "start", "end", "basis"],
+      "properties": {
+        "eventId": { "type": "string", "format": "uuid" },
+        "start": { "type": ["integer", "null"], "minimum": 0 },
+        "end": { "type": ["integer", "null"], "minimum": 1 },
+        "basis": { "enum": ["text_span", "event_metadata"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "basis": { "const": "event_metadata" } } }, "then": { "properties": { "start": { "type": "null" }, "end": { "type": "null" } } } },
+        { "if": { "properties": { "basis": { "const": "text_span" } } }, "then": { "properties": { "start": { "type": "integer", "minimum": 0 }, "end": { "type": "integer", "minimum": 1 } } } }
+      ]
+    },
+    "Channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["positive", "challenge", "uncertain"],
+      "properties": {
+        "positive": { "type": "number", "minimum": 0 },
+        "challenge": { "type": "number", "minimum": 0 },
+        "uncertain": { "type": "number", "minimum": 0 }
+      }
+    },
+    "TeacherNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "label", "kind"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "enum": ["learner", "agent", "room"] }
+      }
+    },
+    "HumanNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodeId", "label", "kind"],
+      "properties": {
+        "nodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "kind": { "const": "learner" }
+      }
+    },
+    "TeacherEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edgeId", "sourceId", "targetId", "layer", "channels", "weight", "evidenceRefs"],
+      "properties": {
+        "edgeId": { "type": "string", "format": "uuid" },
+        "sourceId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "layer": { "enum": ["communication", "uptake", "stance", "coordination", "facilitation"] },
+        "channels": { "$ref": "#/$defs/Channels" },
+        "weight": { "type": "number", "exclusiveMinimum": 0 },
+        "evidenceRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/EvidenceRef" } }
+      }
+    },
+    "HumanEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edgeId", "sourceId", "targetId", "layer", "channels", "weight", "evidenceRefs"],
+      "properties": {
+        "edgeId": { "type": "string", "format": "uuid" },
+        "sourceId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "layer": { "enum": ["communication", "uptake", "stance", "coordination"] },
+        "channels": { "$ref": "#/$defs/Channels" },
+        "weight": { "type": "number", "exclusiveMinimum": 0 },
+        "evidenceRefs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/EvidenceRef" } }
+      }
+    },
+    "TeacherView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges", "metrics", "warnings"],
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/TeacherNode" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/TeacherEdge" } },
+        "metrics": { "$ref": "#/$defs/Metrics" },
+        "warnings": { "type": "array", "items": { "type": "string", "maxLength": 160 } }
+      }
+    },
+    "HumanView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges", "metrics", "warnings"],
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/HumanNode" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/HumanEdge" } },
+        "metrics": { "$ref": "#/$defs/Metrics" },
+        "warnings": { "type": "array", "items": { "type": "string", "maxLength": 160 } }
+      }
+    },
+    "StudentEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceNodeId", "targetNodeId", "layer"],
+      "properties": {
+        "sourceNodeId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "targetNodeId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "layer": { "enum": ["communication", "uptake"] }
+      }
+    },
+    "StudentView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges", "metrics", "warnings"],
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/HumanNode" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/StudentEdge" } },
+        "metrics": { "$ref": "#/$defs/Metrics" },
+        "warnings": { "type": "array", "items": { "type": "string", "maxLength": 160 } }
+      }
+    },
+    "TeacherWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windowStartEventTime", "windowEndEventTime", "views"],
+      "properties": {
+        "windowStartEventTime": { "type": "string", "format": "date-time" },
+        "windowEndEventTime": { "type": "string", "format": "date-time" },
+        "views": { "type": "object", "additionalProperties": false, "required": ["observed", "human_only", "lineage_adjusted"], "properties": { "observed": { "$ref": "#/$defs/TeacherView" }, "human_only": { "$ref": "#/$defs/HumanView" }, "lineage_adjusted": { "$ref": "#/$defs/HumanView" } } }
+      }
+    },
+    "StudentWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windowStartEventTime", "windowEndEventTime", "views"],
+      "properties": {
+        "windowStartEventTime": { "type": "string", "format": "date-time" },
+        "windowEndEventTime": { "type": "string", "format": "date-time" },
+        "views": { "type": "object", "additionalProperties": false, "required": ["observed", "human_only", "lineage_adjusted"], "properties": { "observed": { "$ref": "#/$defs/StudentView" }, "human_only": { "$ref": "#/$defs/StudentView" }, "lineage_adjusted": { "$ref": "#/$defs/StudentView" } } }
+      }
+    },
+    "Meta": {
+      "type": "object",
+      "required": ["schemaVersion", "roomId", "analysisEpoch", "algorithmVersion", "parameterHash", "projectionVersion", "baseVersion", "completeThroughRoomSeq", "watermarkEventTime", "requiresReplay", "evidenceStatus", "reviewStatus", "displayStatus", "warnings"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "roomId": { "type": "string", "format": "uuid" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
+        "algorithmVersion": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "parameterHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "projectionVersion": { "type": "integer", "minimum": 1 },
+        "baseVersion": { "type": "integer", "minimum": 0 },
+        "completeThroughRoomSeq": { "type": "integer", "minimum": 0 },
+        "watermarkEventTime": { "type": "string", "format": "date-time" },
+        "requiresReplay": { "type": "boolean" },
+        "evidenceStatus": { "enum": ["active", "retracted", "superseded", "requires_replay"] },
+        "reviewStatus": { "enum": ["unreviewed", "approved", "rejected", "corrected"] },
+        "displayStatus": { "enum": ["hidden", "teacher_shadow", "student_aggregate"] },
+        "warnings": { "type": "array", "items": { "type": "string", "maxLength": 160 } }
+      }
+    },
+    "TeacherBundle": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/Meta" },
+        {
+          "type": "object",
+          "required": ["projectionKey", "payload"],
+          "properties": {
+            "projectionKey": { "const": "trace.teacher_bundle" },
+            "displayStatus": { "const": "teacher_shadow" },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["windows", "actorMapping"],
+              "properties": {
+                "windows": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["recent_10m", "session_45m"],
+                  "properties": {
+                    "recent_10m": { "$ref": "#/$defs/TeacherWindow" },
+                    "session_45m": { "$ref": "#/$defs/TeacherWindow" }
+                  }
+                },
+                "actorMapping": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^[a-zA-Z0-9_-]{1,160}$": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["actorId", "pseudonym", "kind"],
+                      "properties": {
+                        "actorId": { "type": "string", "format": "uuid" },
+                        "pseudonym": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D", "Nova Agent", "共學聊天室"] },
+                        "kind": { "enum": ["learner", "agent", "room"] }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "StudentBundle": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/Meta" },
+        {
+          "type": "object",
+          "required": ["projectionKey", "reviewStatus", "displayStatus", "payload"],
+          "properties": {
+            "projectionKey": { "const": "trace.student_bundle" },
+            "reviewStatus": { "const": "approved" },
+            "displayStatus": { "const": "student_aggregate" },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["windows", "interpretation"],
+              "properties": {
+                "windows": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["recent_10m", "session_45m"],
+                  "properties": {
+                    "recent_10m": { "$ref": "#/$defs/StudentWindow" },
+                    "session_45m": { "$ref": "#/$defs/StudentWindow" }
+                  }
+                },
+                "interpretation": { "const": "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

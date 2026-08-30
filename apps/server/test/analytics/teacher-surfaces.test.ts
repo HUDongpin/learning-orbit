@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AnalyticsTeacherService } from "../../src/modules/analytics/analytics-teacher-service.js";
+import { AnalyticsTeacherError, AnalyticsTeacherService } from "../../src/modules/analytics/analytics-teacher-service.js";
 
 const roomId = "00000000-0000-4000-8000-000000000010";
 const teacherId = "00000000-0000-4000-8000-000000000011";
@@ -63,5 +63,40 @@ describe("teacher analytics surfaces", () => {
     });
     expect(retry).toEqual(result);
     expect(events.transact).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when an artifact row has a non-boolean active flag", async () => {
+    const { svc, pool } = service();
+    pool.query.mockResolvedValueOnce({ rows: [{ ...artifactRow, active: "false" }] });
+    await expect(svc.listArtifacts(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
+      includeHistory: false, limit: 20,
+    })).rejects.toMatchObject({ statusCode: 503, code: "ANALYTICS_CORRUPT" } satisfies Partial<AnalyticsTeacherError>);
+  });
+
+  it("resolves an identical retry even after the projection head has moved", async () => {
+    const { svc, pool, events } = service();
+    const existingEvent = {
+      eventId: "00000000-0000-4000-8000-000000000017",
+      roomSeq: 2,
+      correlationId: "00000000-0000-4000-8000-000000000018",
+      type: "analytics.review.recorded.v1",
+      actorId: teacherId,
+      actorKind: "human",
+      actorRole: "teacher",
+    };
+    const client = { query: vi.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
+    events.transact.mockImplementationOnce(async (_room: string, work: any) => work({
+      client,
+      findByCausation: async () => existingEvent,
+    }));
+    pool.query.mockResolvedValueOnce({ rows: [{ job_id: "00000000-0000-4000-8000-000000000019" }] });
+    const input = {
+      targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
+      expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
+    };
+    const result = await svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, input);
+    expect(result.reviewEventId).toBe(existingEvent.eventId);
+    expect(result.replayJobId).toBe("00000000-0000-4000-8000-000000000019");
+    expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analysis_room_heads"))).toBe(false);
   });
 });

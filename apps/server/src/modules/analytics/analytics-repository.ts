@@ -84,7 +84,8 @@ export class AnalyticsRepositoryError extends Error {
   constructor() { super("ANALYTICS_CORRUPT"); }
 }
 
-function numberField(value: string | number, name: string): number {
+function numberField(value: unknown, _name: string): number {
+  if (typeof value === "boolean") throw new AnalyticsRepositoryError();
   const result = Number(value);
   if (!Number.isSafeInteger(result) || result < 0) throw new AnalyticsRepositoryError();
   return result;
@@ -108,6 +109,12 @@ function validatePatchWire(candidate: Record<string, unknown>, key: ProjectionKe
 function mapProjection(row: any): ProjectionRow {
   const key = row.projection_key as ProjectionKey;
   if (!TEACHER_PROJECTION_KEYS.has(key)) throw new AnalyticsRepositoryError();
+  if (typeof row.requires_replay !== "boolean") throw new AnalyticsRepositoryError();
+  if (row.schema_version !== undefined && row.schema_version !== 1) throw new AnalyticsRepositoryError();
+  if (row.algorithm !== undefined) {
+    const expectedAlgorithm = key.startsWith("echo.") ? "ECHO-CM" : "TRACE-AI";
+    if (row.algorithm !== expectedAlgorithm) throw new AnalyticsRepositoryError();
+  }
   const watermark = new Date(row.watermark_event_time);
   const created = new Date(row.created_at);
   if (!Number.isFinite(watermark.getTime()) || !Number.isFinite(created.getTime())) {
@@ -116,8 +123,9 @@ function mapProjection(row: any): ProjectionRow {
   const version = numberField(row.version, "version");
   const baseVersion = row.base_version === undefined || row.base_version === null
     ? Math.max(0, version - 1) : numberField(row.base_version, "base_version");
+  if (baseVersion !== version - 1) throw new AnalyticsRepositoryError();
   const completeThroughRoomSeq = numberField(row.complete_through_seq, "complete_through_seq");
-  const requiresReplay = Boolean(row.requires_replay);
+  const requiresReplay = row.requires_replay;
   const reviewStatus = key === "trace.student_bundle" ? "approved" as const : "unreviewed" as const;
   const displayStatus = key === "echo.student_approved" ? "student_approved"
     : key === "trace.student_bundle" ? "student_aggregate" : "teacher_shadow";
@@ -135,7 +143,7 @@ function mapProjection(row: any): ProjectionRow {
     baseVersion,
     completeThroughRoomSeq,
     watermarkEventTime: watermark.toISOString(),
-    requiresReplay: Boolean(row.requires_replay),
+    requiresReplay,
     evidenceStatus: row.requires_replay ? "requires_replay" : "active",
     reviewStatus,
     displayStatus,
@@ -170,18 +178,21 @@ function mapPatch(row: any): PatchRow {
   }
   const baseVersion = numberField(row.base_version, "base_version");
   const version = numberField(row.version, "version");
+  if (baseVersion !== version - 1) throw new AnalyticsRepositoryError();
   const key = row.projection_key as ProjectionKey;
+  if (row.schema_version !== undefined && row.schema_version !== 1) throw new AnalyticsRepositoryError();
+  if (row.algorithm !== undefined && row.algorithm !== "ECHO-CM") throw new AnalyticsRepositoryError();
   const rawPayload = row.payload;
   if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) {
     throw new AnalyticsRepositoryError();
   }
   const payload = rawPayload as Record<string, unknown>;
-  if (payload.requiresReplay !== undefined && typeof payload.requiresReplay !== "boolean") {
+  if (typeof payload.requiresReplay !== "boolean") {
     throw new AnalyticsRepositoryError();
   }
   if (typeof row.requires_replay !== "boolean") throw new AnalyticsRepositoryError();
-  const requiresReplay = payload.requiresReplay ?? row.requires_replay;
-  if (payload.requiresReplay !== undefined && payload.requiresReplay !== row.requires_replay) {
+  const requiresReplay = payload.requiresReplay;
+  if (payload.requiresReplay !== row.requires_replay) {
     throw new AnalyticsRepositoryError();
   }
   validatePatchWire({
@@ -229,14 +240,16 @@ function mapPatch(row: any): PatchRow {
 function validatePatchChain(
   rows: readonly any[],
   afterVersion: number,
-  head: { version: number; analysisEpoch: string; algorithmVersion: string; parameterHash: string },
+  head: { version: number; analysisEpoch: string; algorithmVersion: string; parameterHash: string; roomId: string; projectionKey: ProjectionKey },
 ): PatchRow[] | null {
   const patches: PatchRow[] = [];
   let expected = afterVersion;
   try {
     for (const row of rows) {
       const patch = mapPatch(row);
-      if (patch.analysisEpoch !== head.analysisEpoch
+      if (patch.roomId !== head.roomId
+        || patch.projectionKey !== head.projectionKey
+        || patch.analysisEpoch !== head.analysisEpoch
         || patch.algorithmVersion !== head.algorithmVersion
         || patch.parameterHash !== head.parameterHash
         || patch.baseVersion !== expected
@@ -274,10 +287,11 @@ export class AnalyticsRepository {
       `SELECT s.room_id,s.projection_key,s.analysis_epoch,s.version,
               GREATEST(0,s.version-1) AS base_version,
               s.complete_through_seq,s.watermark_event_time,s.algorithm_version,
-              s.parameter_hash,s.requires_replay,s.payload,s.created_at
+              s.parameter_hash,s.requires_replay,s.algorithm,s.schema_version,s.payload,s.created_at
        FROM analysis_projection_snapshots s
        JOIN analysis_room_heads h ON h.snapshot_id=s.snapshot_id
        WHERE h.room_id=$1 AND h.projection_key=$2
+         AND s.room_id=h.room_id AND s.projection_key=h.projection_key
          AND h.analysis_epoch=s.analysis_epoch AND h.version=s.version
        LIMIT 1`,
       [roomId, projectionKey],
@@ -292,6 +306,9 @@ export class AnalyticsRepository {
     afterProjectionVersion: number,
     snapshotUrl: string,
   ): Promise<PatchWindow> {
+    if (!Number.isSafeInteger(afterProjectionVersion) || afterProjectionVersion < 0) {
+      throw new AnalyticsRepositoryError();
+    }
     const headResult = await this.pool.query(
       `SELECT analysis_epoch,version,algorithm_version,parameter_hash
        FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2`,
@@ -308,18 +325,23 @@ export class AnalyticsRepository {
       return { kind: "resync", snapshotUrl };
     }
     const result = await this.pool.query(
-      `SELECT room_id,projection_key,analysis_epoch,version,base_version,
-              complete_through_seq,watermark_event_time,algorithm_version,
-              parameter_hash,CASE WHEN jsonb_typeof(payload->'requiresReplay')='boolean' THEN (payload->>'requiresReplay')::boolean ELSE false END AS requires_replay,payload,created_at
-       FROM analysis_projection_patches
-       WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3
-         AND version>$4 AND version<=$5 ORDER BY version LIMIT 201`,
+      `SELECT p.room_id,p.projection_key,p.analysis_epoch,p.version,p.base_version,
+              p.complete_through_seq,s.watermark_event_time,p.algorithm_version,
+              p.parameter_hash,s.requires_replay,s.algorithm,s.schema_version,
+              p.payload,p.created_at
+       FROM analysis_projection_patches p
+       JOIN analysis_projection_snapshots s
+         ON s.room_id=p.room_id AND s.projection_key=p.projection_key
+        AND s.analysis_epoch=p.analysis_epoch AND s.version=p.version
+       WHERE p.room_id=$1 AND p.projection_key=$2 AND p.analysis_epoch=$3
+         AND p.version>$4 AND p.version<=$5 ORDER BY p.version LIMIT 201`,
       [roomId, projectionKey, analysisEpoch, afterProjectionVersion, headVersion],
     );
     if (result.rows.length > 200) return { kind: "resync", snapshotUrl };
     const patches = validatePatchChain(result.rows, afterProjectionVersion, {
       version: headVersion, analysisEpoch: head.analysis_epoch,
       algorithmVersion: head.algorithm_version, parameterHash: head.parameter_hash,
+      roomId, projectionKey,
     });
     if (patches === null) return { kind: "resync", snapshotUrl };
     return { kind: "patches", patches };
@@ -331,6 +353,7 @@ export class AnalyticsRepository {
     analysisEpoch: string,
     limit: number,
   ): Promise<{ kind: "timeline" | "resync"; baseSnapshot: ProjectionRow | null; patches: readonly PatchRow[]; truncatedBeforeVersion: number | null; headVersion: number }> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new AnalyticsRepositoryError();
     const headResult = await this.pool.query(
       "SELECT version,analysis_epoch,algorithm_version,parameter_hash FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3",
       [roomId, projectionKey, analysisEpoch],
@@ -338,24 +361,33 @@ export class AnalyticsRepository {
     const head = headResult.rows[0];
     const headVersion = head ? numberField(head.version, "version") : 0;
     if (!head) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion: 0 };
+    const expectedCount = Math.min(limit, headVersion);
     const result = await this.pool.query(
-      `SELECT room_id,projection_key,analysis_epoch,version,base_version,
-              complete_through_seq,watermark_event_time,algorithm_version,
-              parameter_hash,CASE WHEN jsonb_typeof(payload->'requiresReplay')='boolean' THEN (payload->>'requiresReplay')::boolean ELSE false END AS requires_replay,payload,created_at
-       FROM analysis_projection_patches
-       WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3
-       ORDER BY version DESC LIMIT $4`, [roomId, projectionKey, analysisEpoch, limit],
+      `SELECT p.room_id,p.projection_key,p.analysis_epoch,p.version,p.base_version,
+              p.complete_through_seq,s.watermark_event_time,p.algorithm_version,
+              p.parameter_hash,s.requires_replay,s.algorithm,s.schema_version,
+              p.payload,p.created_at
+       FROM analysis_projection_patches p
+       JOIN analysis_projection_snapshots s
+         ON s.room_id=p.room_id AND s.projection_key=p.projection_key
+        AND s.analysis_epoch=p.analysis_epoch AND s.version=p.version
+       WHERE p.room_id=$1 AND p.projection_key=$2 AND p.analysis_epoch=$3
+       ORDER BY p.version DESC LIMIT $4`, [roomId, projectionKey, analysisEpoch, limit],
     );
-    const patches = validatePatchChain(result.rows, Math.max(0, headVersion - result.rows.length), {
+    if (result.rows.length !== expectedCount) {
+      return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
+    }
+    const patches = validatePatchChain([...result.rows].reverse(), headVersion - expectedCount, {
       version: headVersion, analysisEpoch: head.analysis_epoch,
       algorithmVersion: head.algorithm_version, parameterHash: head.parameter_hash,
+      roomId, projectionKey,
     });
     if (patches === null) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
     const first = patches[0]?.version ?? headVersion;
     if (headVersion > 0 && patches.length === 0) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
     const base = first > 1 ? await this.pool.query(
       `SELECT room_id,projection_key,analysis_epoch,version,GREATEST(0,version-1) AS base_version,complete_through_seq,
-              watermark_event_time,algorithm_version,parameter_hash,requires_replay,payload,created_at
+              watermark_event_time,algorithm_version,parameter_hash,requires_replay,algorithm,schema_version,payload,created_at
        FROM analysis_projection_snapshots
        WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3 AND version=$4`,
       [roomId, projectionKey, analysisEpoch, first - 1],
@@ -366,7 +398,9 @@ export class AnalyticsRepository {
     return {
       baseSnapshot: base.rows[0] ? mapProjection(base.rows[0]) : null,
       patches,
-      truncatedBeforeVersion: first > 1 ? first : null,
+      // The suffix begins at `first`; report the first version omitted from
+      // the returned window (not the first version included).
+      truncatedBeforeVersion: first > 1 ? first - 1 : null,
       headVersion,
       kind: "timeline",
     };

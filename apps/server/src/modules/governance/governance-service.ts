@@ -12,9 +12,10 @@ import { makeDeletionReceipt } from "./retention-policy.js";
 
 const SURFACES = ["events", "media", "derivatives", "artifacts", "projections", "agent_runs", "caches", "provider_copies"] as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DELETION_NAMESPACE = Buffer.from("4d3f1a0e6b9c42d8a1f0e5c7b2d64980", "hex");
 
 export class GovernanceError extends Error {
-  constructor(readonly code: "AUTH_REQUIRED" | "ROOM_NOT_FOUND" | "DELETION_IN_PROGRESS" | "INVALID_DELETE_REQUEST" | "INVALID_EXPORT_FORMAT" | "EXPORT_UNAVAILABLE", readonly statusCode: 400 | 401 | 404 | 409 | 410 | 503 = 400) {
+  constructor(readonly code: "AUTH_REQUIRED" | "ROOM_NOT_FOUND" | "DELETION_IN_PROGRESS" | "DELETION_STATUS_CORRUPT" | "INVALID_DELETE_REQUEST" | "INVALID_EXPORT_FORMAT" | "EXPORT_UNAVAILABLE", readonly statusCode: 400 | 401 | 404 | 409 | 410 | 503 = 400) {
     super(code);
   }
 }
@@ -26,6 +27,59 @@ function teacherOnly(principal: AuthSession | null): asserts principal is Extrac
 
 function refHash(roomId: string, salt: string): string {
   return createHash("sha256").update(`${salt}:room:${roomId}`).digest("hex");
+}
+
+function stableUuid(parts: readonly string[]): string {
+  const digest = createHash("sha1").update(DELETION_NAMESPACE).update(parts.join("\0")).digest();
+  digest[6] = (digest[6]! & 0x0f) | 0x50;
+  digest[8] = (digest[8]! & 0x3f) | 0x80;
+  const hex = digest.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roomId: string, frozenAt: Date): Promise<void> {
+  const countQueries: Record<typeof SURFACES[number], string> = {
+    events: "SELECT count(*)::text AS count FROM room_event WHERE room_id=$1",
+    media: "SELECT count(*)::text AS count FROM media_asset WHERE room_id=$1",
+    derivatives: "SELECT count(*)::text AS count FROM media_derivative d JOIN media_asset m ON m.media_id=d.media_id WHERE m.room_id=$1",
+    artifacts: "SELECT count(*)::text AS count FROM derived_text_artifact WHERE room_id=$1",
+    projections: "SELECT (SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=$1) AS count",
+    agent_runs: "SELECT count(*)::text AS count FROM agent_run WHERE room_id=$1",
+    caches: "SELECT 0::text AS count",
+    provider_copies: "SELECT 0::text AS count",
+  };
+  for (const surface of SURFACES) {
+    // Capability-owned surfaces intentionally use a parameterless literal
+    // probe.  Do not pass `roomId` to those statements: node-postgres rejects
+    // an argument list whose length does not match the SQL placeholders, and
+    // a failed probe would roll back the entire deletion request.
+    const result = await tx.query<{ count: string }>(
+      countQueries[surface],
+      surface === "caches" || surface === "provider_copies" ? [] : [roomId],
+    );
+    const count = Number(result.rows[0]?.count ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0) throw new GovernanceError("DELETION_IN_PROGRESS", 409);
+    await tx.query(
+      `INSERT INTO deletion_surface_manifest(deletion_job_id,surface,expected_item_count,status,frozen_at)
+       VALUES($1,$2,$3,'frozen',$4)`, [deletionJobId, surface, count, frozenAt],
+    );
+  }
+}
+
+async function enqueueDeletionSurfaceJobs(
+  tx: PoolClient,
+  deletionJobId: string,
+  correlationId: string,
+): Promise<void> {
+  for (const surface of SURFACES) {
+    const dedupeKey = `room.delete-surface.v1:${deletionJobId}:${surface}`;
+    await tx.query(
+      `INSERT INTO worker_job(job_id,job_type,room_id,source_event_id,dedupe_key,correlation_id,payload)
+       VALUES($1,'room.delete-surface.v1',NULL,NULL,$2,$3,$4)
+       ON CONFLICT(dedupe_key) DO NOTHING`,
+      [stableUuid([deletionJobId, surface]), dedupeKey, correlationId, { deletionJobId, surface }],
+    );
+  }
 }
 
 function isSensitive(key: string): boolean {
@@ -43,7 +97,12 @@ function sanitize(value: unknown): unknown {
   return undefined;
 }
 
-export interface GovernanceServiceOptions { readonly auditSalt: string; readonly clock?: () => Date }
+export interface GovernanceServiceOptions {
+  readonly auditSalt: string;
+  readonly clock?: () => Date;
+  /** Called only after the deletion transaction commits. */
+  readonly evictRoom?: (roomId: string, code?: number) => void;
+}
 
 export class GovernanceService {
   private readonly clock: () => Date;
@@ -61,7 +120,7 @@ export class GovernanceService {
     try { input = deletionLifecycleContract.parseRequest(raw); }
     catch { throw new GovernanceError("INVALID_DELETE_REQUEST", 400); }
     if (input.confirmation !== `DELETE ${roomId}`) throw new GovernanceError("INVALID_DELETE_REQUEST", 400);
-    return inTransaction(this.pool, async (tx) => {
+    const accepted = await inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
       const room = await tx.query<{ room_id: string; teacher_id: string; status: string }>(
         "SELECT room_id, teacher_id, status FROM classroom_room WHERE room_id=$1 FOR UPDATE", [roomId]);
@@ -76,17 +135,22 @@ export class GovernanceService {
         `INSERT INTO deletion_job(deletion_job_id,correlation_id,room_id,room_ref_sha256,request_kind,status,owner_teacher_id,requested_by_teacher_id)
          VALUES($1,$2,$3,$4,'teacher','queued',$5,$5) RETURNING deletion_job_id`,
         [deletionJobId, correlationId, roomId, refHash(roomId, this.options.auditSalt), principal.teacherId]);
-      for (const surface of SURFACES) {
-        await tx.query(
-          `INSERT INTO deletion_surface_manifest(deletion_job_id,surface,expected_item_count,status,frozen_at)
-           VALUES($1,$2,0,'frozen',$3)`, [deletionJobId, surface, this.clock()]);
-      }
+      await freezeDeletionSurfaces(tx, deletionJobId, roomId, this.clock());
       await tx.query("UPDATE classroom_room SET status='closed', closed_at=$2 WHERE room_id=$1", [roomId, this.clock()]);
       await tx.query("UPDATE auth_session SET revoked_at=$2 WHERE room_member_id IN (SELECT room_member_id FROM room_member WHERE room_id=$1) AND revoked_at IS NULL", [roomId, this.clock()]);
       await tx.query("UPDATE worker_job SET status='cancelled', claim_token=NULL, locked_at=NULL, locked_by=NULL WHERE room_id=$1 AND status IN ('queued','retryable','running')", [roomId]);
+      // Lifecycle jobs deliberately carry a NULL room_id so the final delete
+      // can remove classroom_room while the claim/receipt row remains alive.
+      await enqueueDeletionSurfaceJobs(tx, deletionJobId, correlationId);
       await this.audit(tx, principal, roomId, correlationId, "deletion.request", "allowed", "DELETION_ACCEPTED");
       return deletionLifecycleContract.parseAccepted({ deletionJobId: inserted.rows[0]?.deletion_job_id ?? deletionJobId, status: "queued" });
     });
+    // Session revocation and the closed-room tombstone are durable first;
+    // eviction is a best-effort transport action and must never run before
+    // that commit.  Every subsequent broadcast still reauthorizes against
+    // the closed room, so a lost callback cannot reopen the surface.
+    try { this.options.evictRoom?.(roomId, 4410); } catch { /* durable tombstone already won */ }
+    return accepted;
   }
 
   async deletionStatus(principal: AuthSession | null, deletionJobId: string): Promise<DeletionStatus> {
@@ -99,10 +163,44 @@ export class GovernanceService {
     const row = result.rows[0];
     if (!row) throw new GovernanceError("ROOM_NOT_FOUND", 404);
     if (row.status === "completed") {
-      const receipt = makeDeletionReceipt({ completedAt: new Date(row.completed_at).toISOString(), surfacesVerified: row.surfaces_verified ?? SURFACES });
-      return deletionLifecycleContract.parseStatus({ deletionJobId, status: "completed", receipt });
+      const completed = row.completed_at === null || row.completed_at === undefined
+        ? new Date(Number.NaN) : new Date(row.completed_at);
+      if (!Number.isFinite(completed.getTime()) || row.surfaces_verified === null || row.surfaces_verified === undefined) {
+        throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
+      }
+      try {
+        const receipt = makeDeletionReceipt({ completedAt: completed.toISOString(), surfacesVerified: row.surfaces_verified });
+        return deletionLifecycleContract.parseStatus({ deletionJobId, status: "completed", receipt });
+      } catch {
+        throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
+      }
     }
-    return deletionLifecycleContract.parseStatus({ deletionJobId, status: row.status, nextPollAfterMs: 1000, failureCode: null });
+    if (!["queued", "running", "retryable", "dead"].includes(row.status)) {
+      throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
+    }
+    // Worker failure text is deliberately not part of deletion_job.  Read a
+    // bounded, code-shaped value from the lifecycle jobs only; arbitrary
+    // database text is treated as corruption rather than exposed to a client.
+    let failureCode: string | null = null;
+    if (row.status === "retryable" || row.status === "dead") {
+      const failure = await this.pool.query<{ last_error: string | null }>(
+        `SELECT last_error FROM worker_job
+          WHERE job_type='room.delete-surface.v1'
+            AND payload->>'deletionJobId'=$1
+            AND last_error IS NOT NULL
+          ORDER BY updated_at DESC,job_id DESC LIMIT 1`, [deletionJobId],
+      );
+      const candidate = failure.rows[0]?.last_error;
+      if (candidate !== undefined && candidate !== null) {
+        if (!/^[A-Z0-9_]{1,100}$/.test(candidate)) throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
+        failureCode = candidate;
+      }
+    }
+    return deletionLifecycleContract.parseStatus({
+      deletionJobId, status: row.status,
+      nextPollAfterMs: row.status === "dead" ? null : 1000,
+      failureCode,
+    });
   }
 
   async deletionStatusForRoom(principal: AuthSession | null, roomId: string): Promise<DeletionStatus> {

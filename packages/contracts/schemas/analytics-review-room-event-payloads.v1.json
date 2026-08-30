@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/analytics-review-room-event-payloads.v1.json",
+  "title": "AnalyticsReviewRoomEventPayloadCatalog",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "AnalyticsReviewNoticePayload": { "type": "object", "additionalProperties": false, "required": ["changeKind"], "properties": { "changeKind": { "const": "review" } } },
+    "AnalyticsCorrectionNoticePayload": { "type": "object", "additionalProperties": false, "required": ["changeKind"], "properties": { "changeKind": { "const": "correction" } } }
+  }
+}

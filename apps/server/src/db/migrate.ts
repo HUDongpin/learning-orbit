@@ -24,6 +24,23 @@ export async function runMigrations(connectionString: string, directory: string)
   try {
     await client.query(migrationLockSql);
     lockHeld = true;
+    // The pilot bootstrap migration is deliberately gated.  Test databases
+    // are detected from their conventional *_test name; a real deployment
+    // must opt into an environment explicitly and provision its own approved
+    // retention policy rather than inheriting a fixture policy.
+    let databaseName = "";
+    try {
+      databaseName = decodeURIComponent(new URL(connectionString).pathname.slice(1));
+    } catch {
+      // The pg driver will provide the authoritative connection error below;
+      // leaving the migration environment empty is the safe default.
+    }
+    const migrationEnvironment = process.env.LO_MIGRATION_ENV
+      ?? (/(^|[_-])test(?:ing)?$/i.test(databaseName) ? "test" : "");
+    await client.query(
+      "SELECT set_config('learning_orbit.migration_env', $1, false)",
+      [migrationEnvironment],
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS learning_orbit_schema_migration (
         migration_id text PRIMARY KEY,

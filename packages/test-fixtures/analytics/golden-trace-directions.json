@@ -1,0 +1,6 @@
+{
+  "m002": {"communication": [["zilang", "yaqing", 1.0]], "uptake": [["yaqing", "zilang", 1.0]]},
+  "m004": {"communication": [["haoran", "ROOM", 1.0]]},
+  "m005": {"facilitation": [["nova", "haoran", 1.0]]},
+  "m006": {"communication": [["meilin", "haoran", 0.5], ["meilin", "nova", 0.5]], "uptake": [["haoran", "meilin", 1.0]]}
+}

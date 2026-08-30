@@ -80,6 +80,13 @@ def _count(connection: Any, query: str, room_id: str) -> int:
 
 
 def _surface_count(connection: Any, surface: str, room_id: str) -> int:
+    # These surfaces are intentionally capability-owned rather than backed by
+    # a local relational table in the pilot schema.  Returning a literal zero
+    # avoids pretending that a provider sweep occurred and, importantly,
+    # avoids passing a room parameter to a parameterless ``SELECT 0`` query.
+    # A non-zero frozen manifest still fails closed in ``delete_surface_handler``.
+    if surface in {"caches", "provider_copies"}:
+        return 0
     queries = {
         "events": "SELECT count(*) AS count FROM room_event WHERE room_id=%s",
         "media": "SELECT count(*) AS count FROM media_asset WHERE room_id=%s",
@@ -87,10 +94,6 @@ def _surface_count(connection: Any, surface: str, room_id: str) -> int:
         "artifacts": "SELECT count(*) AS count FROM derived_text_artifact WHERE room_id=%s",
         "projections": "SELECT (SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=%s) AS count",
         "agent_runs": "SELECT count(*) AS count FROM agent_run WHERE room_id=%s",
-        "caches": "SELECT 0 AS count",
-        # Provider processing tables are optional until a provider adapter is
-        # installed. The frozen manifest remains authoritative for zero.
-        "provider_copies": "SELECT 0 AS count",
     }
     if surface == "projections":
         result = connection.execute(queries[surface], (room_id, room_id, room_id)).fetchone()
@@ -145,6 +148,20 @@ def _verify_all_manifests(connection: Any, deletion_id: str) -> bool:
     return set(statuses) == set(SURFACES) and all(statuses.get(surface) == "verified" for surface in SURFACES)
 
 
+def _valid_receipt(row: Any) -> bool:
+    """Validate the content-free completion proof before settling a retry."""
+    if row is None:
+        return False
+    version = _row(row, "receipt_version", 0)
+    if isinstance(version, bool) or version != 1:
+        return False
+    surfaces = _row(row, "surfaces_verified", 1)
+    if not isinstance(surfaces, (list, tuple)):
+        return False
+    normalized = [str(item) for item in surfaces]
+    return len(normalized) == len(SURFACES) and set(normalized) == set(SURFACES)
+
+
 def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
     if deps.claim is None:
         raise TerminalJobError("LIFECYCLE_CLAIM_MISSING")
@@ -164,13 +181,26 @@ def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
         manifest = _manifest(deps.db, deletion_id, surface)
         if deletion_status == "dead":
             raise TerminalJobError("LIFECYCLE_JOB_NOT_ACTIVE")
-        if manifest["status"] == "verified":
+        if deletion_status == "completed":
+            receipt = deps.db.execute(
+                "SELECT receipt_version,surfaces_verified FROM deletion_receipt WHERE deletion_job_id=%s FOR UPDATE",
+                (deletion_id,),
+            ).fetchone()
+            if not _valid_receipt(receipt) or not _verify_all_manifests(deps.db, deletion_id):
+                raise TerminalJobError("LIFECYCLE_RECEIPT_INVALID")
             deps.job_claims.complete_business(deps.db, claim, "LIFECYCLE_SURFACE_COMPLETED")
             return HandlerOutcome.SUCCESS
-        if deletion_status == "completed":
-            receipt = deps.db.execute("SELECT receipt_version,surfaces_verified FROM deletion_receipt WHERE deletion_job_id=%s FOR UPDATE", (deletion_id,)).fetchone()
-            if receipt is None or _row(receipt, "receipt_version", 0) != 1:
-                raise TerminalJobError("LIFECYCLE_RECEIPT_INVALID")
+        # Expose that at least one surface is actively being processed.  The
+        # transition is monotonic with respect to completed/dead terminal
+        # states; a concurrent retry cannot resurrect a finished saga.
+        deps.db.execute(
+            """UPDATE deletion_job SET status='running'
+                WHERE deletion_job_id=%s AND status IN ('queued','retryable')""",
+            (deletion_id,),
+        )
+        if manifest["status"] == "dead":
+            raise TerminalJobError("LIFECYCLE_SURFACE_NOT_ACTIVE")
+        if manifest["status"] == "verified":
             deps.job_claims.complete_business(deps.db, claim, "LIFECYCLE_SURFACE_COMPLETED")
             return HandlerOutcome.SUCCESS
         if room_id is None:
@@ -202,7 +232,9 @@ def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
             # surfaces may be required before the final room deletion.
             if any(state_by_surface.get(item) != "verified" for item in DELETE_ORDER[:-1]):
                 raise RetryableJobError("LIFECYCLE_DEPENDENCY_PENDING")
-            deps.db.execute("DELETE FROM classroom_room WHERE room_id=%s", (room_id,))
+            deleted = deps.db.execute("DELETE FROM classroom_room WHERE room_id=%s", (room_id,))
+            if getattr(deleted, "rowcount", 1) != 1:
+                raise RetryableJobError("LIFECYCLE_ROOM_REFERENCE_MISSING")
         else:
             if expected > 0 and current_count > 0:
                 _delete_surface(deps.db, surface, room_id)
@@ -215,6 +247,12 @@ def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
                 raise RetryableJobError("LIFECYCLE_DEPENDENCY_PENDING")
             verified = list(sorted(SURFACES))
             deps.db.execute("INSERT INTO deletion_receipt(deletion_job_id,receipt_version,surfaces_verified,completed_at) VALUES(%s,1,%s,now()) ON CONFLICT(deletion_job_id) DO NOTHING", (deletion_id, _jsonb(verified)))
+            receipt = deps.db.execute(
+                "SELECT receipt_version,surfaces_verified FROM deletion_receipt WHERE deletion_job_id=%s FOR UPDATE",
+                (deletion_id,),
+            ).fetchone()
+            if not _valid_receipt(receipt):
+                raise TerminalJobError("LIFECYCLE_RECEIPT_INVALID")
             deps.db.execute("UPDATE deletion_job SET status='completed',completed_at=now(),room_id=NULL WHERE deletion_job_id=%s", (deletion_id,))
         deps.job_claims.complete_business(deps.db, claim, "LIFECYCLE_SURFACE_COMPLETED")
     return HandlerOutcome.SUCCESS

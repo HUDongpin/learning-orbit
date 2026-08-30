@@ -11,6 +11,30 @@ export { mediaAttachmentContract } from "./media-attachment.js";
 export { mediaCommandContract } from "./media-command.js";
 export { mediaStatusContract } from "./media-status.js";
 export { mediaInternalReconcileContract } from "./media-internal-reconcile.js";
+export { agentContract } from "./agent.js";
+export { analyticsContract, analyticsReviewRoomEventPayloadSchema } from "./analytics.js";
+export type {
+  DerivedTextArtifact,
+  DerivedTextArtifactPage,
+  AnalysisProjectionEnvelope,
+  ConceptMapPatch,
+  ConceptMapSnapshot,
+  SnaProjectionBundle,
+} from "./analytics.js";
+export {
+  deletionLifecycleContract,
+  parseDeletionReceipt,
+  pilotRetentionPolicyContract,
+  providerCopyAuthorityContract,
+} from "./governance.js";
+export type {
+  PilotRetentionPolicyRecord,
+  ProviderCopyAuthorityRecord,
+  DeleteRoomRequest,
+  DeleteRoomAccepted,
+  DeletionStatus,
+  DeletionReceipt,
+} from "./governance.js";
 export type { AuthSession } from "./generated/auth-session.v1.js";
 export type { TeacherMagicLinkAccepted, TeacherMagicLinkRequest } from "./generated/auth-http.v1.js";
 export type { CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomDetails, RoomEventPage } from "./generated/room-http.v1.js";
@@ -36,6 +60,7 @@ export type {
   ServerPresence,
   ServerTyping,
   Status,
+  ProjectionFrame,
 } from "./generated/realtime-frame.v1.js";
 export type { MediaAttachmentView } from "./generated/media-attachment-view.v1.js";
 export type {
@@ -45,6 +70,14 @@ export type {
   MediaUploadGrant,
 } from "./generated/media-command.schema.js";
 export type { MediaStatusFrame } from "./generated/media-status.v1.js";
+export type { AgentStatusFrame } from "./generated/agent-status.v1.js";
+export type { AgentCurrentState } from "./generated/agent-current-state.v1.js";
+export type { AgentRun } from "./generated/agent-run.schema.js";
+export type {
+  AgentRunAccepted, CancelAgentRunAccepted, AgentSettingsInput, AgentSettingsResponse,
+  RequestAgentRunInput, CancelAgentRunInput,
+} from "./generated/agent-command.v1.js";
+export type { Request as AgentProviderHealthRequest, Response as AgentProviderHealthResponse } from "./generated/agent-provider-health.v1.js";
 export type {
   Request as MediaInternalReconcileRequest,
   Response as MediaInternalReconcileResponse,

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/analysis-projection-envelope.v1.json",
+  "title": "AnalysisProjectionEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "projectionKey", "roomId", "analysisEpoch", "algorithmVersion", "parameterHash", "projectionVersion", "baseVersion", "completeThroughRoomSeq", "watermarkEventTime", "requiresReplay", "evidenceStatus", "reviewStatus", "displayStatus", "warnings", "payload"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "projectionKey": { "enum": ["echo.teacher_shadow", "echo.student_approved", "trace.teacher_bundle", "trace.student_bundle"] },
+    "roomId": { "type": "string", "format": "uuid" },
+    "analysisEpoch": { "type": "string", "format": "uuid" },
+    "algorithmVersion": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "parameterHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "projectionVersion": { "type": "integer", "minimum": 1 },
+    "baseVersion": { "type": "integer", "minimum": 0 },
+    "completeThroughRoomSeq": { "type": "integer", "minimum": 0 },
+    "watermarkEventTime": { "type": "string", "format": "date-time" },
+    "requiresReplay": { "type": "boolean" },
+    "evidenceStatus": { "enum": ["active", "retracted", "superseded", "requires_replay"] },
+    "reviewStatus": { "enum": ["unreviewed", "approved", "rejected", "corrected"] },
+    "displayStatus": { "enum": ["hidden", "teacher_shadow", "student_approved", "student_aggregate"] },
+    "warnings": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 160 } },
+    "payload": { "type": "object" }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "teacher": {
+    "schemaVersion": 1,
+    "projectionKey": "trace.teacher_bundle",
+    "roomId": "00000000-0000-4000-8000-000000000010",
+    "analysisEpoch": "00000000-0000-4000-8000-000000000901",
+    "algorithmVersion": "trace-ai-reference-v1+adapter-v1",
+    "parameterHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 5,
+    "watermarkEventTime": "2026-08-28T09:05:00Z", "requiresReplay": false,
+    "evidenceStatus": "active", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow",
+    "warnings": [],
+    "payload": {
+      "windows": {
+        "recent_10m": {"windowStartEventTime":"2026-08-28T08:55:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]}}},
+        "session_45m": {"windowStartEventTime":"2026-08-28T08:20:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]}}}
+      },
+      "actorMapping": {}
+    }
+  },
+  "student": {
+    "schemaVersion": 1,
+    "projectionKey": "trace.student_bundle",
+    "roomId": "00000000-0000-4000-8000-000000000010",
+    "analysisEpoch": "00000000-0000-4000-8000-000000000901",
+    "algorithmVersion": "trace-ai-reference-v1+adapter-v1",
+    "parameterHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 5,
+    "watermarkEventTime": "2026-08-28T09:05:00Z", "requiresReplay": false,
+    "evidenceStatus": "active", "reviewStatus": "approved", "displayStatus": "student_aggregate",
+    "warnings": ["small_group_interpretation_warning"],
+    "payload": {
+      "windows": {
+        "recent_10m": {"windowStartEventTime":"2026-08-28T08:55:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]}}},
+        "session_45m": {"windowStartEventTime":"2026-08-28T08:20:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]}}}
+      },
+      "interpretation": "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。"
+    }
+  }
+}

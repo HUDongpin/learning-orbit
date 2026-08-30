@@ -389,6 +389,24 @@ export class RoomEventRepository {
              VALUES($1, $2, $3, $4)`,
             [candidate.eventId, candidate.roomId, candidate.roomSeq, candidate],
           );
+          // Analytics consumes the canonical ledger asynchronously.  The job is
+          // inserted in the same transaction as room_event/outbox_event so a
+          // committed event can never be missing from the analytics stream.
+          // Keep the payload deliberately small: the envelope remains the sole
+          // source of event facts and is reloaded by the worker by event id.
+          await client.query(
+            `INSERT INTO worker_job(
+               job_type, room_id, source_event_id, dedupe_key,
+               correlation_id, payload, analytics_order_seq, analytics_order_kind
+             ) VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              "analytics.consume.v1", candidate.roomId, candidate.eventId,
+              `analytics.consume.v1:${candidate.roomId}:${candidate.roomSeq}`,
+              candidate.correlationId,
+              { eventId: candidate.eventId, roomSeq: candidate.roomSeq, eventType: candidate.type },
+              candidate.roomSeq, 0,
+            ],
+          );
           const advanced = await client.query(
             `UPDATE classroom_room SET next_room_seq = $2
              WHERE room_id = $1 AND next_room_seq = $3`,

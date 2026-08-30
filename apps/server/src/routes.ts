@@ -116,8 +116,8 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       if (error instanceof RoomServiceError && error.code === "ROOM_CODE_UNAVAILABLE") {
         return reply.code(503).type("application/json").send({ code: "ROOM_CODE_UNAVAILABLE" });
       }
-      if (error instanceof RoomServiceError && error.code === "RETENTION_POLICY_UNAVAILABLE") {
-        return reply.code(503).type("application/json").send({ code: "RETENTION_POLICY_UNAVAILABLE" });
+      if (error instanceof RoomServiceError && error.code === "RETENTION_POLICY_NOT_CONFIGURED") {
+        return reply.code(503).type("application/json").send({ code: "RETENTION_POLICY_NOT_CONFIGURED" });
       }
       if (error instanceof Error && error.message === "INVALID_CREATE_ROOM_REQUEST") {
         return reply.code(400).type("application/json").send({ code: "INVALID_ROOM_REQUEST" });
@@ -301,6 +301,8 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       const key = analyticsKey((request.params as { projectionKey?: unknown }).projectionKey);
       const query = request.query as { analysisEpoch?: unknown; afterProjectionVersion?: unknown };
       if (!key || Object.keys(query).some((name) => !["analysisEpoch", "afterProjectionVersion"].includes(name))
+        || (query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
+        || (query.afterProjectionVersion !== undefined && typeof query.afterProjectionVersion !== "string")
         || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch)) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       const after = query.afterProjectionVersion === undefined ? 0 : Number(query.afterProjectionVersion);
       if (!Number.isSafeInteger(after) || after < 0) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
@@ -317,6 +319,8 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       const key = (request.params as { projectionKey?: unknown }).projectionKey;
       if (key !== "echo.teacher_shadow" && key !== "echo.student_approved") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       const query = request.query as { analysisEpoch?: unknown; limit?: unknown };
+      if ((query.analysisEpoch !== undefined && typeof query.analysisEpoch !== "string")
+        || (query.limit !== undefined && typeof query.limit !== "string")) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       const limit = query.limit === undefined ? 50 : Number(query.limit);
       if (Object.keys(query).some((name) => !["analysisEpoch", "limit"].includes(name))
         || typeof query.analysisEpoch !== "string" || !/^[0-9a-f-]{36}$/i.test(query.analysisEpoch) || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
@@ -353,7 +357,7 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       const limit = query.limit === undefined ? 50 : Number(query.limit);
       const includeHistory = query.includeHistory === undefined ? false : query.includeHistory === true || query.includeHistory === "true";
       if (query.includeHistory !== undefined && query.includeHistory !== true && query.includeHistory !== false && query.includeHistory !== "true" && query.includeHistory !== "false") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const reviewStatus = query.reviewStatus === undefined ? "unreviewed" : query.reviewStatus;
+      const reviewStatus = query.reviewStatus;
       if (reviewStatus !== undefined && !["unreviewed", "approved", "rejected", "corrected"].includes(String(reviewStatus))) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       try {
         const principal = await dependencies.sessions!.get(request.cookies.lo_session);

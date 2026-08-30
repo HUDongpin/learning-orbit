@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/analytics-review-command.v1.json",
+  "title": "AnalyticsReviewCommand",
+  "oneOf": [
+    { "$ref": "#/$defs/AnalyticsReviewInput" },
+    { "$ref": "#/$defs/ReplaceTextCorrection" },
+    { "$ref": "#/$defs/ReplaceEvidenceSpanCorrection" },
+    { "$ref": "#/$defs/ReplaceRelationCorrection" },
+    { "$ref": "#/$defs/MergeAliasCorrection" },
+    { "$ref": "#/$defs/SplitAliasCorrection" },
+    { "$ref": "#/$defs/UndoMergeCorrection" },
+    { "$ref": "#/$defs/RetractCorrection" }
+  ],
+  "$defs": {
+    "EvidenceRef": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventId", "start", "end"],
+      "properties": {
+        "eventId": { "type": "string", "format": "uuid" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "EmptyReplacement": { "type": "object", "additionalProperties": false, "maxProperties": 0 },
+    "AnalyticsReviewInput": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetType", "targetId", "decision", "rationale", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetType": { "enum": ["derived_text", "evidence", "projection"] },
+        "targetId": { "type": "string", "format": "uuid" },
+        "decision": { "enum": ["review_pass", "review_concerns", "review_fail", "approve", "reject", "revoke"] },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ReplaceTextCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetArtifactId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetArtifactId": { "type": "string", "format": "uuid" },
+        "correctionKind": { "const": "replace_text" },
+        "replacement": { "type": "object", "additionalProperties": false, "required": ["text", "languageTag"], "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 20000 }, "languageTag": { "type": "string", "minLength": 2, "maxLength": 35 } } },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "ReplaceEvidenceSpanCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetProjectionEdgeId", "correctionKind", "target", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetProjectionEdgeId": { "type": "string", "format": "uuid" },
+        "correctionKind": { "const": "replace_evidence_span" },
+        "target": { "$ref": "#/$defs/EvidenceRef" },
+        "replacement": { "$ref": "#/$defs/EvidenceRef" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "RelationReplacement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["head", "predicate", "tail", "relationFamily"],
+      "properties": {
+        "head": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "predicate": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "tail": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "relationFamily": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "ReplaceRelationCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetProjectionEdgeId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetProjectionEdgeId": { "type": "string", "format": "uuid" },
+        "correctionKind": { "const": "replace_relation" },
+        "replacement": { "$ref": "#/$defs/RelationReplacement" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "MergeAliasCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetCanonicalNodeId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetCanonicalNodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "correctionKind": { "const": "merge_alias" },
+        "replacement": { "type": "object", "additionalProperties": false, "required": ["aliasNodeId"], "properties": { "aliasNodeId": { "type": "string", "minLength": 1, "maxLength": 160 } } },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "SplitAliasCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetCanonicalNodeId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetCanonicalNodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "correctionKind": { "const": "split_alias" },
+        "replacement": { "type": "object", "additionalProperties": false, "required": ["aliasNodeId", "newCanonicalNodeId", "newLabel"], "properties": { "aliasNodeId": { "type": "string", "minLength": 1, "maxLength": 160 }, "newCanonicalNodeId": { "type": "string", "minLength": 1, "maxLength": 160 }, "newLabel": { "type": "string", "minLength": 1, "maxLength": 160 } } },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "UndoMergeCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetCorrectionEventId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetCorrectionEventId": { "type": "string", "format": "uuid" },
+        "correctionKind": { "const": "undo_merge" },
+        "replacement": { "$ref": "#/$defs/EmptyReplacement" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "RetractCorrection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["targetType", "targetId", "correctionKind", "replacement", "reason", "expectedAnalysisEpoch", "expectedProjectionVersion"],
+      "properties": {
+        "targetType": { "enum": ["derived_text", "evidence", "projection"] },
+        "targetId": { "type": "string", "format": "uuid" },
+        "correctionKind": { "const": "retract" },
+        "replacement": { "$ref": "#/$defs/EmptyReplacement" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "expectedAnalysisEpoch": { "type": "string", "format": "uuid" },
+        "expectedProjectionVersion": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

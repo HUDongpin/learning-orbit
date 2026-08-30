@@ -43,7 +43,7 @@ export class AgentService {
     const mentions = Array.isArray(event.payload?.mentions) ? event.payload.mentions : [];
     if (owner.role !== "teacher" && !mentions.includes(roomRow.nova_actor_id)) throw new AgentError("EXPLICIT_TRIGGER_REQUIRED");
     try {
-      return await this.repository.getOrCreateRunAndJob({ roomId, triggerEventId, correlationId: event.correlation_id, owner });
+      return await this.repository.getOrCreateRunAndJob({ roomId, triggerEventId, correlationId: event.correlation_id, owner, sessionId });
     } catch (error) {
       if (error instanceof Error && ["AGENT_RUN_ALREADY_ACTIVE", "TRIGGER_EVENT_NOT_FOUND"].includes(error.message)) throw new AgentError(error.message);
       throw error;
@@ -53,7 +53,7 @@ export class AgentService {
   async cancel(principal: AuthSession, sessionId: string, roomId: string, runId: string) {
     if (principal.role !== "teacher") throw new AgentError("FORBIDDEN");
     await this.authorizeMember(principal, sessionId, roomId);
-    try { return await this.repository.cancelRun(roomId, runId, principal.teacherId, randomUUID()); }
+    try { return await this.repository.cancelRun(roomId, runId, principal.teacherId, randomUUID(), sessionId); }
     catch (error) { if (error instanceof Error) throw new AgentError(error.message); throw error; }
   }
 
@@ -65,7 +65,7 @@ export class AgentService {
   async settings(principal: AuthSession, sessionId: string, roomId: string, enabled: boolean) {
     if (principal.role !== "teacher") throw new AgentError("FORBIDDEN");
     await this.authorizeMember(principal, sessionId, roomId);
-    try { return await this.repository.setEnabled(roomId, principal.teacherId, enabled, randomUUID()); }
+    try { return await this.repository.setEnabled(roomId, principal.teacherId, enabled, randomUUID(), sessionId); }
     catch (error) { if (error instanceof Error) throw new AgentError(error.message); throw error; }
   }
 

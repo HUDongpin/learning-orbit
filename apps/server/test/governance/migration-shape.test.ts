@@ -15,4 +15,11 @@ describe("pilot governance migrations", () => {
     expect(migration).toContain("CHECK (retention_policy_id IS NOT NULL) NOT VALID");
     expect(migration).toContain("RETENTION_POLICY_IMMUTABLE");
   });
+
+  it("keeps future multimodal artifact references room-scoped", async () => {
+    const migration = await readFile(new URL("../../../../infra/postgres/migrations/009_analytics_media_integrity.sql", import.meta.url), "utf8");
+    expect(migration).toContain("derived_text_artifact_room_media_fk");
+    expect(migration).toContain("extraction_artifact_room_artifact_fk");
+    expect(migration).toContain("NOT VALID");
+  });
 });

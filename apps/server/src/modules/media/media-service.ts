@@ -142,6 +142,34 @@ async function transaction<T>(client: PoolClient, work: () => Promise<T>): Promi
 
 async function requireStudent(deps: MediaDeps, input: { sessionId?: string; principal?: AuthSession; roomId: string }) {
   if (!UUID.test(input.roomId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+  // When a session id is available it is the authoritative credential.  The
+  // principal object came from an earlier request preflight and may become
+  // stale; re-check the active auth_session and membership in this query so a
+  // revoke racing an upload/finalize/download cannot be bypassed.
+  if (input.sessionId) {
+    if (!UUID.test(input.sessionId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    const active = await deps.pool.query<{ actor_id: string; room_member_id: string }>(
+      `SELECT m.actor_id, m.room_member_id
+       FROM auth_session s
+       JOIN room_member m ON m.room_member_id = s.room_member_id
+       WHERE s.session_id = $1
+         AND s.principal_kind = 'student'
+         AND s.revoked_at IS NULL
+         AND s.expires_at > transaction_timestamp()
+         AND m.room_id = $2`,
+      [input.sessionId, input.roomId],
+    );
+    const row = active.rows[0];
+    if (!row) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    if (input.principal
+      && (input.principal.role !== "student"
+        || input.principal.roomId !== input.roomId
+        || input.principal.roomMemberId !== row.room_member_id
+        || input.principal.actorId !== row.actor_id)) {
+      throw new MediaError("MEDIA_NOT_FOUND", 404);
+    }
+    return { actorId: row.actor_id, roomId: input.roomId };
+  }
   if (input.principal?.role === "student") {
     if (input.principal.roomId !== input.roomId || !UUID.test(input.principal.actorId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
     const membership = await deps.pool.query<{ actor_id: string }>(
@@ -152,12 +180,55 @@ async function requireStudent(deps: MediaDeps, input: { sessionId?: string; prin
     if (membership.rowCount !== 1) throw new MediaError("MEDIA_NOT_FOUND", 404);
     return { actorId: input.principal.actorId, roomId: input.roomId };
   }
-  if (input.sessionId && deps.rooms) {
-    try {
-      return await deps.rooms.requireActiveStudent(input.sessionId, input.roomId);
-    } catch {
+  throw new MediaError("AUTH_REQUIRED", 401);
+}
+
+/** Read-only media surfaces are available to the authenticated teacher and
+ * room students; writes remain student-owned and continue through
+ * ``requireStudent``.  The session row is re-read so a revoked cookie cannot
+ * keep a stale principal alive during a media lookup/download. */
+async function requireRoomMember(deps: MediaDeps, input: { sessionId?: string; principal?: AuthSession; roomId: string }) {
+  if (!UUID.test(input.roomId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+  if (input.sessionId) {
+    if (!UUID.test(input.sessionId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    const active = await deps.pool.query<{
+      principal_kind: "teacher" | "student";
+      teacher_id: string | null;
+      room_member_id: string | null;
+      actor_id: string | null;
+    }>(
+      `SELECT s.principal_kind,s.teacher_id,s.room_member_id,m.actor_id
+         FROM auth_session s
+         LEFT JOIN room_member m ON m.room_member_id=s.room_member_id
+        WHERE s.session_id=$1
+          AND s.revoked_at IS NULL
+          AND s.expires_at > transaction_timestamp()
+          AND ((s.principal_kind='teacher' AND s.teacher_id IN (SELECT teacher_id FROM classroom_room WHERE room_id=$2))
+            OR (s.principal_kind='student' AND m.room_id=$2))`,
+      [input.sessionId, input.roomId],
+    );
+    const row = active.rows[0];
+    if (!row) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    if (input.principal?.role === "teacher"
+      && (row.principal_kind !== "teacher" || row.teacher_id !== input.principal.teacherId)) {
       throw new MediaError("MEDIA_NOT_FOUND", 404);
     }
+    if (input.principal?.role === "student"
+      && (row.principal_kind !== "student"
+        || row.room_member_id !== input.principal.roomMemberId
+        || row.actor_id !== input.principal.actorId)) {
+      throw new MediaError("MEDIA_NOT_FOUND", 404);
+    }
+    return { actorId: row.actor_id ?? row.teacher_id ?? "", roomId: input.roomId };
+  }
+  if (input.principal?.role === "student") return requireStudent(deps, input);
+  if (input.principal?.role === "teacher") {
+    const room = await deps.pool.query(
+      "SELECT 1 FROM classroom_room WHERE room_id=$1 AND teacher_id=$2",
+      [input.roomId, input.principal.teacherId],
+    );
+    if (room.rowCount !== 1) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    return { actorId: input.principal.teacherId, roomId: input.roomId };
   }
   throw new MediaError("AUTH_REQUIRED", 401);
 }
@@ -386,7 +457,7 @@ export async function getMediaAttachment(
   deps: MediaDeps,
   input: { readonly sessionId?: string; readonly principal?: AuthSession; readonly roomId: string; readonly mediaId: string },
 ): Promise<MediaAttachmentView | null> {
-  await requireStudent(deps, input);
+  await requireRoomMember(deps, input);
   if (!UUID.test(input.mediaId)) return null;
   return resolvedRepo(deps).getPublicMedia(input.mediaId, input.roomId);
 }
@@ -395,7 +466,7 @@ export async function createDownloadGrant(
   deps: MediaDeps,
   input: { readonly sessionId?: string; readonly principal?: AuthSession; readonly roomId: string; readonly mediaId: string },
 ): Promise<MediaDownloadGrant> {
-  await requireStudent(deps, input);
+  await requireRoomMember(deps, input);
   if (!UUID.test(input.mediaId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
   const config = resolvedConfig(deps);
   const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId);

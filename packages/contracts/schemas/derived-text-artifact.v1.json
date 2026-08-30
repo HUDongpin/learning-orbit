@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/derived-text-artifact.v1.json",
+  "title": "DerivedTextArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "artifactId", "lineageId", "roomId", "eventId", "roomSeq", "sourceMediaId", "sourceModality", "derivation", "text", "normalizedTextSha256", "sourceConfidenceRaw", "sourceConfidenceCalibrated", "provider", "modelVersion", "languageTag", "spans", "reviewStatus", "displayStatus", "warnings", "supersedesArtifactId", "active", "createdAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "artifactId": { "type": "string", "format": "uuid" },
+    "lineageId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "eventId": { "type": "string", "format": "uuid" },
+    "roomSeq": { "type": "integer", "minimum": 1 },
+    "sourceMediaId": { "type": ["string", "null"], "format": "uuid" },
+    "sourceModality": { "enum": ["text", "audio", "image"] },
+    "derivation": { "enum": ["direct", "asr", "ocr", "image_description", "human_correction"] },
+    "text": { "type": "string", "minLength": 1, "maxLength": 20000 },
+    "normalizedTextSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceConfidenceRaw": { "type": "number", "minimum": 0, "maximum": 1 },
+    "sourceConfidenceCalibrated": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+    "provider": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "modelVersion": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "languageTag": { "type": "string", "minLength": 2, "maxLength": 35 },
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end", "confidence"],
+        "properties": {
+          "start": { "type": "integer", "minimum": 0 },
+          "end": { "type": "integer", "minimum": 1 },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 },
+          "boundingBox": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+        }
+      }
+    },
+    "reviewStatus": { "enum": ["unreviewed", "approved", "rejected", "corrected"] },
+    "displayStatus": { "enum": ["hidden", "teacher_shadow", "student_approved"] },
+    "warnings": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 160 }, "maxItems": 32 },
+    "supersedesArtifactId": { "type": ["string", "null"], "format": "uuid" },
+    "active": { "type": "boolean" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    { "if": { "properties": { "derivation": { "const": "direct" } } }, "then": { "properties": { "sourceModality": { "const": "text" }, "sourceMediaId": { "type": "null" } } } },
+    { "if": { "properties": { "derivation": { "const": "human_correction" } } }, "then": { "required": ["supersedesArtifactId"], "properties": { "supersedesArtifactId": { "type": "string", "format": "uuid" } } } }
+  ]
+}
