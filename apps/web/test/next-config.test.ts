@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import nextConfig from "../next.config.js";
 
@@ -70,6 +70,16 @@ describe("Next.js local same-origin proxy", () => {
     setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "1");
 
     await expect(configuredRewrites()).rejects.toEqual(
+      new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN"),
+    );
+  });
+
+  it("rejects production configuration during module initialization", async () => {
+    setEnvironment("NODE_ENV", "production");
+    setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", "1");
+    vi.resetModules();
+
+    await expect(import("../next.config.js")).rejects.toEqual(
       new Error("LO_LOCAL_SAME_ORIGIN_PROXY_FORBIDDEN"),
     );
   });
