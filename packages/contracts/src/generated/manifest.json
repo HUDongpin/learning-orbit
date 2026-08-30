@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "sourceSchemas": [
+    {
+      "file": "core-room-event-payloads.v1.json",
+      "id": "https://learning-orbit.local/schemas/core-room-event-payloads.v1.json",
+      "sha256": "9a5197c0208ccd8b158ce7618fb14b73a346b0b45dbf8254eead1ac7e4040f1c"
+    },
+    {
+      "file": "realtime-frame.v1.json",
+      "id": "https://learning-orbit.local/schemas/realtime-frame.v1.json",
+      "sha256": "72d4af850415dcb096be724f8e3b6a53ac270a2fe31cc81e858f1d974a090b5c"
+    },
+    {
+      "file": "room-command.v1.json",
+      "id": "https://learning-orbit.local/schemas/room-command.v1.json",
+      "sha256": "1fa68250ff1604ff3bb8802d8dc35fe2220d47440663ed3a91377b8e2693225e"
+    },
+    {
+      "file": "room-event-envelope.v1.json",
+      "id": "https://learning-orbit.local/schemas/room-event-envelope.v1.json",
+      "sha256": "9aecd6033e201e88677a5f7027b2324ea0174888f7190d0409816501818790c2"
+    },
+    {
+      "file": "room-http.v1.json",
+      "id": "https://learning-orbit.local/schemas/room-http.v1.json",
+      "sha256": "ae5c1c2d36773640be66b3dc3d44439e259e816e0718edac0dd1195c77723455"
+    }
+  ],
+  "generatedModules": [
+    {
+      "sourceFile": "core-room-event-payloads.v1.json",
+      "moduleFile": "core-room-event-payloads.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "realtime-frame.v1.json",
+      "moduleFile": "realtime-frame.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "room-command.v1.json",
+      "moduleFile": "room-command.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "room-event-envelope.v1.json",
+      "moduleFile": "room-event-envelope.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "room-http.v1.json",
+      "moduleFile": "room-http.v1.ts",
+      "language": "typescript"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/core-room-event-payloads.v1.json",
+  "title": "CoreRoomEventPayloadCatalog",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "u": { "type": "string", "format": "uuid" },
+    "t": { "type": "string", "format": "date-time" },
+    "m": { "type": "array", "maxItems": 5, "uniqueItems": true, "items": { "$ref": "#/$defs/u" } },
+    "ids": { "type": "array", "maxItems": 4, "uniqueItems": true, "items": { "$ref": "#/$defs/u" } },
+    "RoomOpenedPayload": { "type": "object", "additionalProperties": false, "required": ["startsAt", "closesAt"], "properties": { "startsAt": { "$ref": "#/$defs/t" }, "closesAt": { "$ref": "#/$defs/t" } } },
+    "RoomPausedPayload": { "type": "object", "additionalProperties": false, "required": ["pausedAt"], "properties": { "pausedAt": { "$ref": "#/$defs/t" } } },
+    "RoomResumedPayload": { "type": "object", "additionalProperties": false, "required": ["resumedAt"], "properties": { "resumedAt": { "$ref": "#/$defs/t" } } },
+    "RoomClosedPayload": { "type": "object", "additionalProperties": false, "required": ["closedAt"], "properties": { "closedAt": { "$ref": "#/$defs/t" } } },
+    "MessageAddedPayload": { "type": "object", "additionalProperties": false, "required": ["messageId", "text", "replyTo", "mentions", "mediaIds"], "properties": { "messageId": { "$ref": "#/$defs/u" }, "text": { "type": "string", "maxLength": 4000 }, "replyTo": { "type": ["string", "null"], "format": "uuid" }, "mentions": { "$ref": "#/$defs/m" }, "mediaIds": { "$ref": "#/$defs/ids" }, "agentRunId": { "$ref": "#/$defs/u" }, "sourceEventIds": { "type": "array", "maxItems": 30, "uniqueItems": true, "items": { "$ref": "#/$defs/u" } }, "warningCodes": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 100 } } } },
+    "MessageRevisedPayload": { "type": "object", "additionalProperties": false, "required": ["messageId", "text", "replyTo", "mentions", "mediaIds"], "properties": { "messageId": { "$ref": "#/$defs/u" }, "text": { "type": "string", "maxLength": 4000 }, "replyTo": { "type": ["string", "null"], "format": "uuid" }, "mentions": { "$ref": "#/$defs/m" }, "mediaIds": { "$ref": "#/$defs/ids" } } },
+    "MessageRetractedPayload": { "type": "object", "additionalProperties": false, "required": ["messageId"], "properties": { "messageId": { "$ref": "#/$defs/u" } } }
+  }
+}

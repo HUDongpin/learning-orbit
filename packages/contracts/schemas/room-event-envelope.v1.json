@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/room-event-envelope.v1.json",
+  "title": "RoomEventEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "schemaVersion", "roomId", "roomSeq", "type", "actorId", "actorKind", "actorRole", "revision", "operation", "eventTime", "ingestTime", "causationId", "correlationId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" }, "schemaVersion": { "const": 1 }, "roomId": { "type": "string", "format": "uuid" }, "roomSeq": { "type": "integer", "minimum": 1 }, "type": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_.]*$" }, "actorId": { "type": "string", "format": "uuid" }, "actorKind": { "enum": ["human", "agent", "system"] }, "actorRole": { "enum": ["teacher", "student", "socratic_facilitator", "room_clock", "system_worker"] }, "revision": { "type": "integer", "minimum": 1 }, "operation": { "enum": ["add", "revise", "retract"] }, "eventTime": { "type": "string", "format": "date-time" }, "ingestTime": { "type": "string", "format": "date-time" }, "causationId": { "type": "string", "format": "uuid" }, "correlationId": { "type": "string", "format": "uuid" }, "payload": { "type": "object" }
+  },
+  "oneOf": [
+    { "type": "object", "required": ["actorKind", "actorRole"], "properties": { "actorKind": { "const": "human" }, "actorRole": { "enum": ["teacher", "student"] } } },
+    { "type": "object", "required": ["actorKind", "actorRole"], "properties": { "actorKind": { "const": "agent" }, "actorRole": { "const": "socratic_facilitator" } } },
+    { "type": "object", "required": ["actorKind", "actorRole"], "properties": { "actorKind": { "const": "system" }, "actorRole": { "enum": ["room_clock", "system_worker"] } } }
+  ]
+}

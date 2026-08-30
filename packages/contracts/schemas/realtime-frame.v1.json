@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/realtime-frame.v1.json",
+  "title": "RealtimeFrame",
+  "type": "object",
+  "oneOf": [{ "$ref": "#/$defs/ClientFrame" }, { "$ref": "#/$defs/ServerFrame" }],
+  "$defs": {
+    "u": { "type": "string", "format": "uuid" },
+    "t": { "type": "string", "format": "date-time" },
+    "status": { "enum": ["scheduled", "open", "paused", "closed"] },
+    "ClientFrame": { "oneOf": [{ "$ref": "#/$defs/ClientHello" }, { "$ref": "#/$defs/ClientCommand" }, { "$ref": "#/$defs/ClientPresence" }, { "$ref": "#/$defs/ClientTyping" }, { "$ref": "#/$defs/ClientHeartbeat" }] },
+    "ServerFrame": { "oneOf": [{ "$ref": "#/$defs/ServerWelcome" }, { "$ref": "#/$defs/ServerAck" }, { "$ref": "#/$defs/ServerReject" }, { "$ref": "#/$defs/ServerEvent" }, { "$ref": "#/$defs/ServerPresence" }, { "$ref": "#/$defs/ServerTyping" }, { "$ref": "#/$defs/ServerResumeComplete" }, { "$ref": "#/$defs/ServerSnapshotRequired" }, { "$ref": "#/$defs/ServerDegraded" }, { "$ref": "#/$defs/ServerHeartbeat" }] },
+    "ClientHello": { "type": "object", "additionalProperties": false, "required": ["type", "clientId", "resumeFrom"], "properties": { "type": { "const": "hello" }, "clientId": { "$ref": "#/$defs/u" }, "resumeFrom": { "type": "integer", "minimum": 0 } } },
+    "ClientCommand": { "type": "object", "additionalProperties": false, "required": ["type", "command"], "properties": { "type": { "const": "command" }, "command": { "$ref": "room-command.v1.json" } } },
+    "ClientPresence": { "type": "object", "additionalProperties": false, "required": ["type", "state", "clientSeq"], "properties": { "type": { "const": "presence" }, "state": { "enum": ["active", "away"] }, "clientSeq": { "type": "integer", "minimum": 0 } } },
+    "ClientTyping": { "type": "object", "additionalProperties": false, "required": ["type", "active", "clientSeq"], "properties": { "type": { "const": "typing" }, "active": { "type": "boolean" }, "clientSeq": { "type": "integer", "minimum": 0 } } },
+    "ClientHeartbeat": { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "heartbeat" } } },
+    "ServerWelcome": { "type": "object", "additionalProperties": false, "required": ["type", "serverTime", "roomId", "cursor", "status"], "properties": { "type": { "const": "welcome" }, "serverTime": { "$ref": "#/$defs/t" }, "roomId": { "$ref": "#/$defs/u" }, "cursor": { "type": "integer", "minimum": 0 }, "status": { "$ref": "#/$defs/status" } } },
+    "ServerAck": { "type": "object", "additionalProperties": false, "required": ["type", "commandId", "roomSeq", "revision"], "properties": { "type": { "const": "ack" }, "commandId": { "$ref": "#/$defs/u" }, "roomSeq": { "type": "integer", "minimum": 1 }, "revision": { "type": "integer", "minimum": 1 } } },
+    "ServerReject": { "type": "object", "additionalProperties": false, "required": ["type", "code"], "properties": { "type": { "const": "reject" }, "commandId": { "$ref": "#/$defs/u" }, "code": { "enum": ["AUTH_REQUIRED", "FORBIDDEN", "INVALID_COMMAND", "ROOM_NOT_OPEN", "MESSAGE_NOT_FOUND", "REVISION_CONFLICT", "RESYNC_REQUIRED", "INTERNAL"] }, "retryable": { "type": "boolean" } } },
+    "ServerEvent": { "type": "object", "additionalProperties": false, "required": ["type", "event"], "properties": { "type": { "const": "event" }, "event": { "$ref": "room-event-envelope.v1.json" } } },
+    "ServerPresence": { "type": "object", "additionalProperties": false, "required": ["type", "actorId", "state", "expiresAt"], "properties": { "type": { "const": "presence" }, "actorId": { "$ref": "#/$defs/u" }, "state": { "enum": ["active", "away"] }, "expiresAt": { "$ref": "#/$defs/t" } } },
+    "ServerTyping": { "type": "object", "additionalProperties": false, "required": ["type", "actorId", "active", "expiresAt"], "properties": { "type": { "const": "typing" }, "actorId": { "$ref": "#/$defs/u" }, "active": { "type": "boolean" }, "expiresAt": { "$ref": "#/$defs/t" } } },
+    "ServerResumeComplete": { "type": "object", "additionalProperties": false, "required": ["type", "throughRoomSeq"], "properties": { "type": { "const": "resume_complete" }, "throughRoomSeq": { "type": "integer", "minimum": 0 } } },
+    "ServerSnapshotRequired": { "type": "object", "additionalProperties": false, "required": ["type", "afterSeq", "throughRoomSeq"], "properties": { "type": { "const": "snapshot_required" }, "afterSeq": { "type": "integer", "minimum": 0 }, "throughRoomSeq": { "type": "integer", "minimum": 0 } } },
+    "ServerDegraded": {
+      "type": "object", "additionalProperties": false, "required": ["type", "scope", "code", "updatedAt"],
+      "properties": { "type": { "const": "degraded" }, "scope": { "enum": ["realtime", "media", "analytics", "agent"] }, "code": { "type": "string", "minLength": 1 }, "updatedAt": { "$ref": "#/$defs/t" }, "retryAfterMs": { "type": "integer", "minimum": 0 }, "projectionKey": { "enum": ["echo.student_approved", "trace.student_bundle"] } },
+      "allOf": [
+        { "if": { "type": "object", "required": ["scope"], "properties": { "scope": { "not": { "const": "analytics" } } } }, "then": { "type": "object", "not": { "type": "object", "properties": { "projectionKey": true }, "required": ["projectionKey"] } } },
+        { "if": { "type": "object", "required": ["code"], "properties": { "code": { "const": "STUDENT_ANALYTICS_NOT_PROMOTED" } } }, "then": { "type": "object", "required": ["projectionKey"], "properties": { "scope": { "const": "analytics" }, "projectionKey": { "enum": ["echo.student_approved", "trace.student_bundle"] } } } }
+      ]
+    },
+    "ServerHeartbeat": { "type": "object", "additionalProperties": false, "required": ["type", "serverTime"], "properties": { "type": { "const": "heartbeat" }, "serverTime": { "$ref": "#/$defs/t" } } }
+  }
+}
