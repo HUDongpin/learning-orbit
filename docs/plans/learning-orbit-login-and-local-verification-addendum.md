@@ -221,6 +221,8 @@ The final receipt is valid only if every required gate passed, cleanup passed, `
 
 ## 6. Acceptance and claim ceiling
 
+Migration `010_projection_snapshot_warnings.sql` can only backfill pre-existing 003–009 Snapshot rows with an empty warning array because earlier schemas never persisted the original warning bytes. Such legacy history is not reconstructed. A local-pilot database must therefore be newly created after Migration 010 or install a new replay epoch before any warning-history claim; a migrated legacy row may only be described as “warning history unavailable and backfilled empty.”
+
 Implementation conforms to this addendum only when the exact committed implementation satisfies `pnpm verify:local-pilot` with zero required skips and content-free receipts, and a fresh review confirms all of these statements:
 
 - `/` canonicalizes permanently to one accessible `/login`; student code join and teacher Magic Link remain distinct server-owned authentication flows inside that page.

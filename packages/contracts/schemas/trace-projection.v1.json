@@ -50,7 +50,7 @@
       "required": ["nodeId", "label", "kind"],
       "properties": {
         "nodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
-        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "label": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D", "Nova Agent", "共學聊天室"] },
         "kind": { "enum": ["learner", "agent", "room"] }
       }
     },
@@ -60,7 +60,7 @@
       "required": ["nodeId", "label", "kind"],
       "properties": {
         "nodeId": { "type": "string", "minLength": 1, "maxLength": 160 },
-        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "label": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D"] },
         "kind": { "const": "learner" }
       }
     },
@@ -163,6 +163,40 @@
         "views": { "type": "object", "additionalProperties": false, "required": ["observed", "human_only", "lineage_adjusted"], "properties": { "observed": { "$ref": "#/$defs/TeacherView" }, "human_only": { "$ref": "#/$defs/HumanView" }, "lineage_adjusted": { "$ref": "#/$defs/HumanView" } } }
       }
     },
+    "TeacherActorMappingEntry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actorId", "pseudonym", "kind"],
+          "properties": {
+            "actorId": { "type": "string", "format": "uuid" },
+            "pseudonym": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D"] },
+            "kind": { "const": "learner" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actorId", "pseudonym", "kind"],
+          "properties": {
+            "actorId": { "type": "string", "format": "uuid" },
+            "pseudonym": { "const": "Nova Agent" },
+            "kind": { "const": "agent" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["roomId", "pseudonym", "kind"],
+          "properties": {
+            "roomId": { "type": "string", "format": "uuid" },
+            "pseudonym": { "const": "共學聊天室" },
+            "kind": { "const": "room" }
+          }
+        }
+      ]
+    },
     "StudentWindow": {
       "type": "object",
       "additionalProperties": false,
@@ -221,16 +255,7 @@
                   "type": "object",
                   "additionalProperties": false,
                   "patternProperties": {
-                    "^[a-zA-Z0-9_-]{1,160}$": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["actorId", "pseudonym", "kind"],
-                      "properties": {
-                        "actorId": { "type": "string", "format": "uuid" },
-                        "pseudonym": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D", "Nova Agent", "共學聊天室"] },
-                        "kind": { "enum": ["learner", "agent", "room"] }
-                      }
-                    }
+                    "^[a-zA-Z0-9_-]{1,160}$": { "$ref": "#/$defs/TeacherActorMappingEntry" }
                   }
                 }
               }

@@ -406,7 +406,13 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
         const snapshotUrl = routes.analytics.latest(roomId, key);
         const result = await dependencies.analytics!.repository.patchesAfter(roomId, key, query.analysisEpoch, after, snapshotUrl);
         if (result.kind === "resync") return reply.code(409).type("application/json").send(JSON.parse(analyticsHttpContract.encodeResync({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl })));
-        return reply.type("application/json").send(JSON.parse(analyticsHttpContract.encodePatchPage({ patches: result.patches?.map(patchWire) ?? [] })));
+        return reply.type("application/json").send(JSON.parse(analyticsHttpContract.encodePatchPage({
+          schemaVersion: 1,
+          roomId,
+          projectionKey: key,
+          analysisEpoch: query.analysisEpoch,
+          patches: result.patches?.map(patchWire) ?? [],
+        })));
       } catch (error) { return errorResponse(reply, error); }
     });
     app.get("/v1/rooms/:roomId/analytics/:projectionKey/timeline", async (request, reply) => {
@@ -429,6 +435,10 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
           return reply.code(409).type("application/json").send(JSON.parse(analyticsHttpContract.encodeResync({ code: "SNAPSHOT_RESYNC_REQUIRED", snapshotUrl })));
         }
         return reply.type("application/json").send(JSON.parse(analyticsHttpContract.encodeTimeline({
+          schemaVersion: 1,
+          roomId,
+          projectionKey: key,
+          analysisEpoch: query.analysisEpoch,
           baseSnapshot: result.baseSnapshot ? projectionWire(result.baseSnapshot) : null,
           patches: result.patches.map(patchWire),
           truncatedBeforeVersion: result.truncatedBeforeVersion,

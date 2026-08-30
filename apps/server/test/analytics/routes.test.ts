@@ -29,8 +29,9 @@ const snapshotRow = {
   parameterHash: "b".repeat(64),
   requiresReplay: false,
   evidenceStatus: "active" as const,
-  reviewStatus: "approved" as const,
+  reviewStatus: "unreviewed" as const,
   displayStatus: "student_approved" as const,
+  warnings: ["client_time_future_clamped"],
   payload: { nodes: [], edges: [] },
   createdAt: "2026-08-31T01:00:00.000Z",
 };
@@ -43,7 +44,7 @@ const patchRow = {
     requiresReplay: false,
     warnings: [], nodesAdded: [], nodesUpdated: [], nodesHidden: [],
     edgesAdded: [], edgesUpdated: [], edgesHidden: [], positionUpdates: [],
-    changeScore: 0, reasonCodes: [], evidenceRefs: [],
+    changeScore: 0, reasonCodes: [],
   },
 };
 
@@ -93,7 +94,10 @@ describe("public analytics route boundary", () => {
 
     expect(responses.map(({ statusCode }) => statusCode)).toEqual([200, 200, 200, 409]);
     for (const response of responses) expect(response.headers["cache-control"]).toBe("no-store");
-    expect(analyticsContract.parseEchoSnapshot(responses[0]!.json())).toMatchObject({ projectionKey: "echo.student_approved" });
+    expect(analyticsContract.parseEchoSnapshot(responses[0]!.json())).toMatchObject({
+      projectionKey: "echo.student_approved",
+      warnings: ["client_time_future_clamped"],
+    });
     expect(analyticsHttpContract.parsePatchPage(responses[1]!.json()).patches).toHaveLength(1);
     expect(analyticsHttpContract.parseTimeline(responses[2]!.json())).toMatchObject({ headVersion: 2 });
     expect(analyticsHttpContract.parseResync(responses[3]!.json())).toEqual({

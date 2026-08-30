@@ -137,10 +137,19 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
             trace_validator = Draft202012Validator(json.loads((schema_root / "trace-projection.v1.json").read_text()))
             projection_rows = connection.execute(
                 "SELECT room_id,projection_key,analysis_epoch,version,complete_through_seq,"
-                "watermark_event_time,requires_replay,algorithm_version,parameter_hash,payload "
+                "watermark_event_time,requires_replay,algorithm_version,parameter_hash,"
+                "warnings,warnings_sha256,payload,content_sha256 "
                 "FROM analysis_projection_snapshots WHERE room_id=%s",
                 (room_id,),
             ).fetchall()
+            student_trace_warnings = [
+                row[9] for row in projection_rows if row[1] == "trace.student_bundle"
+            ]
+            self.assertTrue(student_trace_warnings)
+            self.assertTrue(all(
+                "small_group_interpretation_warning" in warnings
+                for warnings in student_trace_warnings
+            ))
             for row in projection_rows:
                 envelope = {
                     "schemaVersion": 1,
@@ -157,9 +166,11 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
                     "evidenceStatus": "requires_replay" if row[6] else "active",
                     "reviewStatus": "approved" if row[1] == "trace.student_bundle" else "unreviewed",
                     "displayStatus": "student_approved" if row[1] == "echo.student_approved" else "student_aggregate" if row[1] == "trace.student_bundle" else "teacher_shadow",
-                    "warnings": [],
-                    "payload": row[9],
+                    "warnings": row[9],
+                    "payload": row[11],
                 }
+                self.assertEqual(row[10], store.content_hash(row[9]))
+                self.assertEqual(row[12], store.content_hash(row[11]))
                 if row[1].startswith("echo."):
                     echo_validator.validate(envelope)
                 else:

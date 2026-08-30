@@ -20,6 +20,7 @@ export interface ProjectionRow {
   readonly evidenceStatus: "active" | "requires_replay";
   readonly reviewStatus: "unreviewed" | "approved" | "rejected" | "corrected";
   readonly displayStatus: "teacher_shadow" | "student_approved" | "student_aggregate";
+  readonly warnings: readonly string[];
   readonly payload: unknown;
   readonly createdAt: string;
 }
@@ -49,15 +50,28 @@ export function projectionWire(row: ProjectionRow): Record<string, unknown> {
     evidenceStatus: row.evidenceStatus,
     reviewStatus: row.reviewStatus,
     displayStatus: row.displayStatus,
-    warnings: [],
+    warnings: row.warnings,
     payload: row.payload,
   };
 }
 
 export function patchWire(row: PatchRow): Record<string, unknown> {
-  const payload = row.payload && typeof row.payload === "object"
-    ? row.payload as Record<string, unknown> : {};
-  return {
+  if (!row.projectionKey.startsWith("echo.") || !row.payload || typeof row.payload !== "object" || Array.isArray(row.payload)) {
+    throw new AnalyticsRepositoryError();
+  }
+  const payload = row.payload as Record<string, unknown>;
+  const fields = [
+    "requiresReplay", "warnings", "nodesAdded", "nodesUpdated", "nodesHidden",
+    "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates", "changeScore", "reasonCodes",
+  ];
+  const student = row.projectionKey === "echo.student_approved";
+  const allowed = new Set(student ? fields : [...fields, "evidenceRefs"]);
+  if (Object.keys(payload).some((key) => !allowed.has(key))
+    || fields.some((key) => !(key in payload))
+    || (!student && !("evidenceRefs" in payload))) {
+    throw new AnalyticsRepositoryError();
+  }
+  const candidate: Record<string, unknown> = {
     analysisEpoch: row.analysisEpoch,
     algorithmVersion: row.algorithmVersion,
     parameterHash: row.parameterHash,
@@ -65,18 +79,20 @@ export function patchWire(row: PatchRow): Record<string, unknown> {
     baseVersion: row.baseVersion,
     completeThroughRoomSeq: row.completeThroughRoomSeq,
     requiresReplay: row.requiresReplay,
-    warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
-    nodesAdded: Array.isArray(payload.nodesAdded) ? payload.nodesAdded : [],
-    nodesUpdated: Array.isArray(payload.nodesUpdated) ? payload.nodesUpdated : [],
-    nodesHidden: Array.isArray(payload.nodesHidden) ? payload.nodesHidden : [],
-    edgesAdded: Array.isArray(payload.edgesAdded) ? payload.edgesAdded : [],
-    edgesUpdated: Array.isArray(payload.edgesUpdated) ? payload.edgesUpdated : [],
-    edgesHidden: Array.isArray(payload.edgesHidden) ? payload.edgesHidden : [],
-    positionUpdates: Array.isArray(payload.positionUpdates) ? payload.positionUpdates : [],
-    changeScore: typeof payload.changeScore === "number" ? payload.changeScore : 0,
-    reasonCodes: Array.isArray(payload.reasonCodes) ? payload.reasonCodes : [],
-    evidenceRefs: Array.isArray(payload.evidenceRefs) ? payload.evidenceRefs : [],
+    warnings: payload.warnings,
+    nodesAdded: payload.nodesAdded,
+    nodesUpdated: payload.nodesUpdated,
+    nodesHidden: payload.nodesHidden,
+    edgesAdded: payload.edgesAdded,
+    edgesUpdated: payload.edgesUpdated,
+    edgesHidden: payload.edgesHidden,
+    positionUpdates: payload.positionUpdates,
+    changeScore: payload.changeScore,
+    reasonCodes: payload.reasonCodes,
   };
+  if (!student) candidate.evidenceRefs = payload.evidenceRefs;
+  validatePatchWire(candidate, row.projectionKey);
+  return candidate;
 }
 
 export class AnalyticsRepositoryError extends Error {
@@ -102,8 +118,18 @@ function validateProjectionWire(candidate: Record<string, unknown>, key: Project
 
 function validatePatchWire(candidate: Record<string, unknown>, key: ProjectionKey): void {
   if (typeof key !== "string" || !key.startsWith("echo.")) throw new AnalyticsRepositoryError();
-  try { analyticsContract.parseEchoPatch(candidate); }
+  try {
+    if (key === "echo.student_approved") analyticsContract.parseStudentEchoPatch(candidate);
+    else analyticsContract.parseTeacherEchoPatch(candidate);
+  }
   catch { throw new AnalyticsRepositoryError(); }
+}
+
+function studentEchoHasContent(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const value = payload as { nodes?: unknown; edges?: unknown };
+  return (Array.isArray(value.nodes) && value.nodes.length > 0)
+    || (Array.isArray(value.edges) && value.edges.length > 0);
 }
 
 function mapProjection(row: any): ProjectionRow {
@@ -126,7 +152,16 @@ function mapProjection(row: any): ProjectionRow {
   if (baseVersion !== version - 1) throw new AnalyticsRepositoryError();
   const completeThroughRoomSeq = numberField(row.complete_through_seq, "complete_through_seq");
   const requiresReplay = row.requires_replay;
-  const reviewStatus = key === "trace.student_bundle" || key === "echo.student_approved"
+  if (!Array.isArray(row.warnings) || row.warnings.some((warning: unknown) => typeof warning !== "string")) {
+    throw new AnalyticsRepositoryError();
+  }
+  const warnings = [...row.warnings] as string[];
+  if (typeof row.warnings_sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(row.warnings_sha256)
+    || contentHash(warnings) !== row.warnings_sha256) {
+    throw new AnalyticsRepositoryError();
+  }
+  const reviewStatus = key === "trace.student_bundle"
+    || (key === "echo.student_approved" && studentEchoHasContent(row.payload))
     ? "approved" as const : "unreviewed" as const;
   const displayStatus = key === "echo.student_approved" ? "student_approved"
     : key === "trace.student_bundle" ? "student_aggregate" : "teacher_shadow";
@@ -148,7 +183,7 @@ function mapProjection(row: any): ProjectionRow {
     evidenceStatus: row.requires_replay ? "requires_replay" : "active",
     reviewStatus,
     displayStatus,
-    warnings: [],
+    warnings,
     payload: row.payload,
   }, key);
   const result: ProjectionRow = {
@@ -166,6 +201,7 @@ function mapProjection(row: any): ProjectionRow {
     evidenceStatus: requiresReplay ? "requires_replay" : "active",
     reviewStatus,
     displayStatus,
+    warnings,
     payload: row.payload,
     createdAt: created.toISOString(),
   };
@@ -188,6 +224,9 @@ function mapPatch(row: any): PatchRow {
     throw new AnalyticsRepositoryError();
   }
   const payload = rawPayload as Record<string, unknown>;
+  if (!Array.isArray(payload.warnings) || payload.warnings.some((warning) => typeof warning !== "string")) {
+    throw new AnalyticsRepositoryError();
+  }
   if (typeof payload.requiresReplay !== "boolean") {
     throw new AnalyticsRepositoryError();
   }
@@ -196,28 +235,8 @@ function mapPatch(row: any): PatchRow {
   if (payload.requiresReplay !== row.requires_replay) {
     throw new AnalyticsRepositoryError();
   }
-  validatePatchWire({
-    analysisEpoch: row.analysis_epoch,
-    algorithmVersion: row.algorithm_version,
-    parameterHash: row.parameter_hash,
-    projectionVersion: version,
-    baseVersion,
-    completeThroughRoomSeq: numberField(row.complete_through_seq, "complete_through_seq"),
-    requiresReplay,
-    warnings: [],
-    nodesAdded: row.payload?.nodesAdded ?? [],
-    nodesUpdated: row.payload?.nodesUpdated ?? [],
-    nodesHidden: row.payload?.nodesHidden ?? [],
-    edgesAdded: row.payload?.edgesAdded ?? [],
-    edgesUpdated: row.payload?.edgesUpdated ?? [],
-    edgesHidden: row.payload?.edgesHidden ?? [],
-    positionUpdates: row.payload?.positionUpdates ?? [],
-    changeScore: row.payload?.changeScore ?? 0,
-    reasonCodes: row.payload?.reasonCodes ?? [],
-    evidenceRefs: row.payload?.evidenceRefs ?? [],
-  }, key);
   if (!TEACHER_PROJECTION_KEYS.has(key)) throw new AnalyticsRepositoryError();
-  return {
+  const mapped: PatchRow = {
     schemaVersion: 1,
     roomId: row.room_id,
     projectionKey: key,
@@ -233,9 +252,12 @@ function mapPatch(row: any): PatchRow {
     reviewStatus: "unreviewed",
     displayStatus: key === "echo.student_approved" ? "student_approved"
       : key === "trace.student_bundle" ? "student_aggregate" : "teacher_shadow",
+    warnings: [...payload.warnings] as string[],
     payload: row.payload,
     createdAt: created.toISOString(),
   };
+  patchWire(mapped);
+  return mapped;
 }
 
 function validatePatchChain(
@@ -288,7 +310,8 @@ export class AnalyticsRepository {
       `SELECT s.room_id,s.projection_key,s.analysis_epoch,s.version,
               GREATEST(0,s.version-1) AS base_version,
               s.complete_through_seq,s.watermark_event_time,s.algorithm_version,
-              s.parameter_hash,s.requires_replay,s.algorithm,s.schema_version,s.payload,s.created_at
+              s.parameter_hash,s.requires_replay,s.algorithm,s.schema_version,
+              s.warnings,s.warnings_sha256,s.payload,s.created_at
        FROM analysis_projection_snapshots s
        JOIN analysis_room_heads h ON h.snapshot_id=s.snapshot_id
        WHERE h.room_id=$1 AND h.projection_key=$2
@@ -387,7 +410,8 @@ export class AnalyticsRepository {
     if (headVersion > 0 && patches.length === 0) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
     const base = first > 1 ? await this.pool.query(
       `SELECT room_id,projection_key,analysis_epoch,version,GREATEST(0,version-1) AS base_version,complete_through_seq,
-              watermark_event_time,algorithm_version,parameter_hash,requires_replay,algorithm,schema_version,payload,created_at
+              watermark_event_time,algorithm_version,parameter_hash,requires_replay,algorithm,schema_version,
+              warnings,warnings_sha256,payload,created_at
        FROM analysis_projection_snapshots
        WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3 AND version=$4`,
       [roomId, projectionKey, analysisEpoch, first - 1],
@@ -424,33 +448,87 @@ export class AnalyticsRepository {
       if (snapshot.projectionKey.startsWith("echo.")) analyticsContract.parseEchoSnapshot(wire);
       else analyticsContract.parseTrace(wire);
     } catch { throw new AnalyticsRepositoryError(); }
-    await client.query(
-      `INSERT INTO analysis_projection_snapshots(
-         snapshot_id,room_id,algorithm,projection_key,analysis_epoch,version,
-         complete_through_seq,watermark_event_time,requires_replay,schema_version,
-         algorithm_version,parameter_hash,payload,content_sha256)
-       VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11,$12)
-       ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING`,
-      [snapshot.roomId, snapshot.projectionKey.startsWith("echo.") ? "ECHO-CM" : "TRACE-AI",
-        snapshot.projectionKey, snapshot.analysisEpoch, snapshot.version,
-        snapshot.completeThroughRoomSeq, snapshot.watermarkEventTime, snapshot.requiresReplay,
-        snapshot.algorithmVersion, snapshot.parameterHash, snapshot.payload,
-        contentHash(snapshot.payload)],
-    );
     if (patch) {
       if (patch.roomId !== snapshot.roomId || patch.projectionKey !== snapshot.projectionKey
         || patch.analysisEpoch !== snapshot.analysisEpoch || patch.baseVersion !== snapshot.baseVersion
         || patch.version !== snapshot.version) throw new AnalyticsRepositoryError();
-      await client.query(
+      patchWire(patch);
+    }
+    const assertPersistedSnapshot = async (): Promise<void> => {
+      const persisted = await client.query<{
+        complete_through_seq: string;
+        watermark_event_time: string | Date;
+        requires_replay: boolean;
+        algorithm_version: string;
+        parameter_hash: string;
+        warnings: unknown;
+        warnings_sha256: string;
+        payload: unknown;
+        content_sha256: string;
+      }>(
+        `SELECT complete_through_seq,watermark_event_time,requires_replay,
+                algorithm_version,parameter_hash,warnings,warnings_sha256,
+                payload,content_sha256
+           FROM analysis_projection_snapshots
+          WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3 AND version=$4`,
+        [snapshot.roomId, snapshot.projectionKey, snapshot.analysisEpoch, snapshot.version],
+      );
+      const row = persisted.rows[0];
+      const persistedWatermark = row ? new Date(row.watermark_event_time) : new Date(Number.NaN);
+      const expectedWatermark = new Date(snapshot.watermarkEventTime);
+      if (!row
+        || numberField(row.complete_through_seq, "complete_through_seq") !== snapshot.completeThroughRoomSeq
+        || !Number.isFinite(persistedWatermark.getTime())
+        || persistedWatermark.toISOString() !== expectedWatermark.toISOString()
+        || row.requires_replay !== snapshot.requiresReplay
+        || row.algorithm_version !== snapshot.algorithmVersion
+        || row.parameter_hash !== snapshot.parameterHash
+        || row.warnings_sha256 !== contentHash(snapshot.warnings)
+        || contentHash(row.warnings) !== row.warnings_sha256
+        || row.content_sha256 !== contentHash(snapshot.payload)
+        || contentHash(row.payload) !== row.content_sha256) {
+        throw new AnalyticsRepositoryError();
+      }
+    };
+    const insertedSnapshot = await client.query<{ snapshot_id: string }>(
+      `INSERT INTO analysis_projection_snapshots(
+         snapshot_id,room_id,algorithm,projection_key,analysis_epoch,version,
+         complete_through_seq,watermark_event_time,requires_replay,schema_version,
+         algorithm_version,parameter_hash,warnings,warnings_sha256,payload,content_sha256)
+       VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING
+       RETURNING snapshot_id`,
+      [snapshot.roomId, snapshot.projectionKey.startsWith("echo.") ? "ECHO-CM" : "TRACE-AI",
+        snapshot.projectionKey, snapshot.analysisEpoch, snapshot.version,
+        snapshot.completeThroughRoomSeq, snapshot.watermarkEventTime, snapshot.requiresReplay,
+        snapshot.algorithmVersion, snapshot.parameterHash, snapshot.warnings,
+        contentHash(snapshot.warnings), snapshot.payload, contentHash(snapshot.payload)],
+    );
+    if (!insertedSnapshot.rows[0]) await assertPersistedSnapshot();
+    if (patch) {
+      const insertedPatch = await client.query<{ patch_id: string }>(
         `INSERT INTO analysis_projection_patches(
            patch_id,room_id,projection_key,analysis_epoch,base_version,version,
            complete_through_seq,algorithm_version,parameter_hash,payload,content_sha256)
          VALUES(gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING`,
+         ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING
+         RETURNING patch_id`,
         [patch.roomId, patch.projectionKey, patch.analysisEpoch, patch.baseVersion, patch.version,
           patch.completeThroughRoomSeq, patch.algorithmVersion, patch.parameterHash, patch.payload,
           contentHash(patch.payload)],
       );
+      if (!insertedPatch.rows[0]) {
+        const persistedPatch = await client.query<{ payload: unknown; content_sha256: string }>(
+          `SELECT payload,content_sha256 FROM analysis_projection_patches
+            WHERE room_id=$1 AND projection_key=$2 AND analysis_epoch=$3 AND version=$4`,
+          [patch.roomId, patch.projectionKey, patch.analysisEpoch, patch.version],
+        );
+        const row = persistedPatch.rows[0];
+        if (!row || row.content_sha256 !== contentHash(patch.payload)
+          || contentHash(row.payload) !== row.content_sha256) {
+          throw new AnalyticsRepositoryError();
+        }
+      }
     }
     const head = await client.query<{ version: string }>(
       "SELECT version FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2 FOR UPDATE",

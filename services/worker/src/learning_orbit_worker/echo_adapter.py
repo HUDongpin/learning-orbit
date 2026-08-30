@@ -98,7 +98,13 @@ def project_echo_snapshot(internal: Mapping[str, Any], metadata: Mapping[str, An
         projected = {"edgeId": wire_id, "head": edge["head"], "predicate": edge["predicate"], "tail": edge["tail"], "relationFamily": edge["relationFamily"], "evidenceStatus": edge["status"], "reviewStatus": "approved" if wire_id in approved_edge_ids else "unreviewed", "displayStatus": visual_status(edge["status"], wire_id in approved_edge_ids), "channels": channels, "activityScore": max(channels.values()), "evidenceRefs": evidence_refs}
         teacher_edges.append(projected)
         if wire_id in approved_edge_ids:
-            student_edges.append(projected)
+            student_edges.append({
+                key: projected[key]
+                for key in (
+                    "edgeId", "head", "predicate", "tail", "relationFamily",
+                    "evidenceStatus", "reviewStatus", "displayStatus",
+                )
+            })
             endpoints.update((edge["head"], edge["tail"]))
     student_ids = set(approved_node_ids) | endpoints
     teacher_nodes: list[dict[str, Any]] = []
@@ -112,7 +118,7 @@ def project_echo_snapshot(internal: Mapping[str, Any], metadata: Mapping[str, An
         if node_id in student_ids:
             student_nodes.append(projected)
     common = {"schemaVersion": 1, "roomId": metadata["roomId"], "analysisEpoch": metadata["analysisEpoch"], "algorithmVersion": metadata.get("algorithmVersion", ADAPTER_VERSION), "parameterHash": metadata["parameterHash"], "projectionVersion": int(metadata["projectionVersion"]), "baseVersion": int(metadata.get("baseVersion", 0)), "completeThroughRoomSeq": int(metadata.get("completeThroughRoomSeq", 0)), "watermarkEventTime": metadata["watermarkEventTime"], "requiresReplay": bool(metadata.get("requiresReplay", False)), "evidenceStatus": "requires_replay" if metadata.get("requiresReplay") else "active", "warnings": list(metadata.get("warnings", ())) }
-    return {"teacher": {**common, "projectionKey": "echo.teacher_shadow", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow", "payload": {"nodes": teacher_nodes, "edges": teacher_edges}}, "student": {**common, "projectionKey": "echo.student_approved", "reviewStatus": "approved", "displayStatus": "student_approved", "payload": {"nodes": student_nodes, "edges": student_edges}}}
+    return {"teacher": {**common, "projectionKey": "echo.teacher_shadow", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow", "payload": {"nodes": teacher_nodes, "edges": teacher_edges}}, "student": {**common, "projectionKey": "echo.student_approved", "reviewStatus": "approved" if student_nodes or student_edges else "unreviewed", "displayStatus": "student_approved", "payload": {"nodes": student_nodes, "edges": student_edges}}}
 
 
 def diff_echo_snapshots(previous: Mapping[str, Any], current: Mapping[str, Any], metadata: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,4 +136,7 @@ def diff_echo_snapshots(previous: Mapping[str, Any], current: Mapping[str, Any],
             refs[(ref["eventId"], ref["start"], ref["end"])] = ref
     changed = len(added_nodes) + len(updated_nodes) + len(prev_nodes.keys() - cur_nodes) + len(added_edges) + len(updated_edges) + len(prev_edges.keys() - cur_edges)
     denominator = max(1, len(prev_nodes) + len(prev_edges))
-    return {"analysisEpoch": metadata["analysisEpoch"], "algorithmVersion": metadata["algorithmVersion"], "parameterHash": metadata["parameterHash"], "projectionVersion": metadata["projectionVersion"], "baseVersion": metadata.get("baseVersion", 0), "completeThroughRoomSeq": metadata.get("completeThroughRoomSeq", 0), "requiresReplay": bool(metadata.get("requiresReplay", False)), "warnings": list(metadata.get("warnings", ())), "nodesAdded": added_nodes, "nodesUpdated": updated_nodes, "nodesHidden": sorted(prev_nodes.keys() - cur_nodes), "edgesAdded": added_edges, "edgesUpdated": updated_edges, "edgesHidden": sorted(prev_edges.keys() - cur_edges), "positionUpdates": [{"nodeId": n["nodeId"], "x": n["position"]["x"], "y": n["position"]["y"]} for n in added_nodes + updated_nodes], "changeScore": min(1.0, changed / denominator), "reasonCodes": list(metadata.get("reasonCodes", ())), "evidenceRefs": [refs[k] for k in sorted(refs)]}
+    patch = {"analysisEpoch": metadata["analysisEpoch"], "algorithmVersion": metadata["algorithmVersion"], "parameterHash": metadata["parameterHash"], "projectionVersion": metadata["projectionVersion"], "baseVersion": metadata.get("baseVersion", 0), "completeThroughRoomSeq": metadata.get("completeThroughRoomSeq", 0), "requiresReplay": bool(metadata.get("requiresReplay", False)), "warnings": list(metadata.get("warnings", ())), "nodesAdded": added_nodes, "nodesUpdated": updated_nodes, "nodesHidden": sorted(prev_nodes.keys() - cur_nodes), "edgesAdded": added_edges, "edgesUpdated": updated_edges, "edgesHidden": sorted(prev_edges.keys() - cur_edges), "positionUpdates": [{"nodeId": n["nodeId"], "x": n["position"]["x"], "y": n["position"]["y"]} for n in added_nodes + updated_nodes], "changeScore": min(1.0, changed / denominator), "reasonCodes": list(metadata.get("reasonCodes", ())) }
+    if current.get("projectionKey") != "echo.student_approved":
+        patch["evidenceRefs"] = [refs[k] for k in sorted(refs)]
+    return patch

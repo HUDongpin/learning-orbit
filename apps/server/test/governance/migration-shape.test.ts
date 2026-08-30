@@ -22,4 +22,13 @@ describe("pilot governance migrations", () => {
     expect(migration).toContain("extraction_artifact_room_artifact_fk");
     expect(migration).toContain("NOT VALID");
   });
+
+  it("persists immutable projection snapshot warnings instead of relying on a fabricated default", async () => {
+    const migration = await readFile(new URL("../../../../infra/postgres/migrations/010_projection_snapshot_warnings.sql", import.meta.url), "utf8");
+    expect(migration).toContain("ADD COLUMN warnings jsonb NOT NULL");
+    expect(migration).toContain("ADD COLUMN warnings_sha256 char(64) NOT NULL");
+    expect(migration).toContain("jsonb_typeof(warnings) = 'array'");
+    expect(migration).toContain("ALTER COLUMN warnings DROP DEFAULT");
+    expect(migration).toContain("ALTER COLUMN warnings_sha256 DROP DEFAULT");
+  });
 });

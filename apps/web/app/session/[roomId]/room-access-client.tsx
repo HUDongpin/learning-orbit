@@ -13,6 +13,8 @@ import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
 import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
 import { ChatPanel } from "../../../src/lib/chat/chat-panel";
 import { parseStorageBrowserOrigins } from "../../../src/lib/media/media-upload";
+import { EchoPanel } from "../../../src/lib/analytics/echo-panel";
+import { TracePanel } from "../../../src/lib/analytics/trace-panel";
 
 type AccessMode = "student" | "teacher";
 type AccessAuthority = Readonly<{ api: SessionGateway; mode: AccessMode; roomId: string }>;
@@ -215,6 +217,8 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
   }
   const details = hydrated.room;
   const liveState = hydrated.sessionState;
+  const echoProjectionKey = isTeacher ? "echo.teacher_shadow" as const : "echo.student_approved" as const;
+  const traceProjectionKey = isTeacher ? "trace.teacher_bundle" as const : "trace.student_bundle" as const;
   return (
     <main className="room-gate-shell">
       <a className="skip-link" href="#classroom-workspace">跳到共學工作區</a>
@@ -242,19 +246,20 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
         </div>
         <div className="room-hydration-notice" role="status">
           <h2>房間權限已確認</h2>
-          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。沒有使用 Seed Message、固定指標或 Fixture。</p>
+          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
         </div>
         <div className="orbit-grid room-workspace" id="classroom-workspace" tabIndex={-1}>
           <ChatPanel runtime={hydrated} mediaGateway={api} allowedUploadOrigins={MEDIA_UPLOAD_ORIGINS} />
           <div className="analysis-column" aria-label="伺服器分析區">
-            <section className="orbit-panel analysis-panel" aria-labelledby="echo-pending-title">
-              <header className="panel-head"><div><span className="panel-kicker">ECHO-CM</span><h2 className="panel-title" id="echo-pending-title">概念與論證</h2></div></header>
-              <div className="room-analysis-unavailable" role="status">尚未收到角色允許的伺服器 Projection；不顯示本地關鍵字圖或固定指標。</div>
-            </section>
-            <section className="orbit-panel analysis-panel" aria-labelledby="trace-pending-title">
-              <header className="panel-head"><div><span className="panel-kicker">TRACE-AI</span><h2 className="panel-title" id="trace-pending-title">互動網絡</h2></div></header>
-              <div className="room-analysis-unavailable" role="status">尚未收到角色允許的伺服器 Projection；不推算個人分數、排名或假 SNA 指標。</div>
-            </section>
+            <EchoPanel
+              slot={hydrated.projections.slot(echoProjectionKey)}
+              onLoadTimeline={() => hydrated.loadConceptTimeline(echoProjectionKey)}
+              onRetry={() => void hydrated.refreshProjection(echoProjectionKey)}
+            />
+            <TracePanel
+              slot={hydrated.projections.slot(traceProjectionKey)}
+              onRetry={() => void hydrated.refreshProjection(traceProjectionKey)}
+            />
           </div>
         </div>
       </section>

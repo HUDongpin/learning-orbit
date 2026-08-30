@@ -133,7 +133,13 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
                 "projectionVersion", "baseVersion", "completeThroughRoomSeq",
                 "requiresReplay", "warnings", "nodesAdded", "nodesUpdated",
                 "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden",
-                "positionUpdates", "changeScore", "reasonCodes", "evidenceRefs"}
+                "positionUpdates", "changeScore", "reasonCodes"}
+    student_patch = snapshot.get("projectionKey") == "echo.student_approved"
+    if student_patch:
+        if "evidenceRefs" in patch:
+            raise ValueError("INVALID_PROJECTION_PATCH")
+    else:
+        required.add("evidenceRefs")
     optional = {"roomId", "projectionKey"}
     if set(patch) - required - optional or not required <= set(patch):
         raise ValueError("INVALID_PROJECTION_PATCH")
@@ -157,7 +163,10 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
         raise ValueError("INVALID_PROJECTION_PATCH")
     if not isinstance(patch["parameterHash"], str) or not _SHA256.fullmatch(patch["parameterHash"]):
         raise ValueError("INVALID_PROJECTION_PATCH")
-    for key in ("warnings", "nodesAdded", "nodesUpdated", "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates", "reasonCodes", "evidenceRefs"):
+    list_fields = ["warnings", "nodesAdded", "nodesUpdated", "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates", "reasonCodes"]
+    if not student_patch:
+        list_fields.append("evidenceRefs")
+    for key in list_fields:
         if not isinstance(patch[key], list):
             raise ValueError("INVALID_PROJECTION_PATCH")
     for item in patch["positionUpdates"]:
@@ -170,16 +179,25 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
         if not isinstance(item, Mapping) or not isinstance(item.get("nodeId"), str) \
                 or not isinstance(item.get("label"), str) or not isinstance(item.get("position"), Mapping):
             raise ValueError("INVALID_PROJECTION_PATCH")
+        if student_patch and item.get("reviewStatus") != "approved":
+            raise ValueError("INVALID_PROJECTION_PATCH")
     for item in patch["edgesAdded"] + patch["edgesUpdated"]:
         if not isinstance(item, Mapping) or not isinstance(item.get("edgeId"), str) \
                 or not isinstance(item.get("head"), str) or not isinstance(item.get("tail"), str) \
-                or not isinstance(item.get("predicate"), str) or not isinstance(item.get("evidenceRefs"), list):
+                or not isinstance(item.get("predicate"), str):
+            raise ValueError("INVALID_PROJECTION_PATCH")
+        if student_patch:
+            if item.get("reviewStatus") != "approved" \
+                    or any(field in item for field in ("channels", "activityScore", "evidenceRefs")):
+                raise ValueError("INVALID_PROJECTION_PATCH")
+        elif not isinstance(item.get("evidenceRefs"), list):
             raise ValueError("INVALID_PROJECTION_PATCH")
         try:
             UUID(str(item["edgeId"]))
         except (ValueError, AttributeError, TypeError):
             raise ValueError("INVALID_PROJECTION_PATCH") from None
-    if any(not isinstance(item, str) for item in patch["nodesHidden"] + patch["reasonCodes"] + patch["warnings"]):
+    if any(not isinstance(item, str) or len(item) > 160
+           for item in patch["nodesHidden"] + patch["reasonCodes"] + patch["warnings"]):
         raise ValueError("INVALID_PROJECTION_PATCH")
     for item in patch["edgesHidden"]:
         if not isinstance(item, str):
@@ -188,7 +206,7 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
             UUID(item)
         except (ValueError, AttributeError, TypeError):
             raise ValueError("INVALID_PROJECTION_PATCH") from None
-    for item in patch["evidenceRefs"]:
+    for item in patch.get("evidenceRefs", []):
         if not isinstance(item, Mapping) or set(item) != {"eventId", "start", "end"} or not isinstance(item["eventId"], str):
             raise ValueError("INVALID_PROJECTION_PATCH")
         try:
@@ -225,7 +243,8 @@ def _existing_snapshot_matches(
     names = (
         "snapshot_id", "room_id", "projection_key", "analysis_epoch", "version",
         "complete_through_seq", "watermark_event_time", "requires_replay",
-        "algorithm_version", "parameter_hash", "payload", "content_sha256",
+        "algorithm_version", "parameter_hash", "warnings", "warnings_sha256",
+        "payload", "content_sha256",
     )
     values = {name: _row_field(row, name, index) for index, name in enumerate(names)}
     try:
@@ -247,6 +266,8 @@ def _existing_snapshot_matches(
         and values["requires_replay"] == snapshot["requiresReplay"]
         and str(values["algorithm_version"]) == str(snapshot["algorithmVersion"])
         and str(values["parameter_hash"]) == str(snapshot["parameterHash"])
+        and values["warnings"] == snapshot["warnings"]
+        and str(values["warnings_sha256"]) == _content_hash(snapshot["warnings"])
         and values["payload"] == snapshot["payload"]
         and str(values["content_sha256"]) == payload_hash
     )
@@ -288,13 +309,15 @@ class ProjectionStore:
             """INSERT INTO analysis_projection_snapshots
                (snapshot_id,room_id,algorithm,projection_key,analysis_epoch,version,
                 complete_through_seq,watermark_event_time,requires_replay,schema_version,
-                algorithm_version,parameter_hash,payload,content_sha256)
-               VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s)
+                algorithm_version,parameter_hash,warnings,warnings_sha256,payload,content_sha256)
+               VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING""",
             (snapshot["roomId"], algorithm, snapshot["projectionKey"], snapshot["analysisEpoch"],
              snapshot["projectionVersion"], snapshot["completeThroughRoomSeq"],
              snapshot["watermarkEventTime"], snapshot["requiresReplay"],
-             snapshot["algorithmVersion"], snapshot["parameterHash"], _jsonb(snapshot["payload"]), payload_hash),
+             snapshot["algorithmVersion"], snapshot["parameterHash"],
+             _jsonb(snapshot["warnings"]), _content_hash(snapshot["warnings"]),
+             _jsonb(snapshot["payload"]), payload_hash),
         )
         if patch is not None:
             if patch_hash is None:
@@ -350,7 +373,7 @@ class ProjectionStore:
         if snapshot_id is None:
             return None
         row = self.connection.execute(
-            "SELECT projection_key,analysis_epoch,version,complete_through_seq,watermark_event_time,requires_replay,algorithm_version,parameter_hash,payload FROM analysis_projection_snapshots WHERE snapshot_id=%s",
+            "SELECT projection_key,analysis_epoch,version,complete_through_seq,watermark_event_time,requires_replay,algorithm_version,parameter_hash,warnings,payload FROM analysis_projection_snapshots WHERE snapshot_id=%s",
             (snapshot_id,),
         ).fetchone()
         if row is None:
@@ -359,7 +382,7 @@ class ProjectionStore:
             return dict(row)
         names = ("projection_key", "analysis_epoch", "version", "complete_through_seq",
                  "watermark_event_time", "requires_replay", "algorithm_version",
-                 "parameter_hash", "payload")
+                 "parameter_hash", "warnings", "payload")
         return dict(zip(names, row, strict=True))
 
     def persist_and_advance(
@@ -393,7 +416,7 @@ class ProjectionStore:
             existing = self.connection.execute(
                 """SELECT snapshot_id,room_id,projection_key,analysis_epoch,version,
                           complete_through_seq,watermark_event_time,requires_replay,
-                          algorithm_version,parameter_hash,payload,content_sha256
+                          algorithm_version,parameter_hash,warnings,warnings_sha256,payload,content_sha256
                    FROM analysis_projection_snapshots
                   WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
                 (room_id, key, snapshot["analysisEpoch"], version),
@@ -419,13 +442,14 @@ class ProjectionStore:
             """INSERT INTO analysis_projection_snapshots
                (snapshot_id,room_id,algorithm,projection_key,analysis_epoch,version,
                 complete_through_seq,watermark_event_time,requires_replay,schema_version,
-                algorithm_version,parameter_hash,payload,content_sha256)
-               VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s)
+                algorithm_version,parameter_hash,warnings,warnings_sha256,payload,content_sha256)
+               VALUES (gen_random_uuid(),%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING
                RETURNING snapshot_id""",
             (room_id, algorithm, key, snapshot["analysisEpoch"], version,
              snapshot["completeThroughRoomSeq"], snapshot["watermarkEventTime"],
              snapshot["requiresReplay"], snapshot["algorithmVersion"], snapshot["parameterHash"],
+             _jsonb(snapshot["warnings"]), _content_hash(snapshot["warnings"]),
              _jsonb(snapshot["payload"]), payload_hash),
         ).fetchone()
         snapshot_id = inserted[0] if inserted else None
@@ -433,7 +457,7 @@ class ProjectionStore:
             current = self.connection.execute(
                 """SELECT snapshot_id,room_id,projection_key,analysis_epoch,version,
                           complete_through_seq,watermark_event_time,requires_replay,
-                          algorithm_version,parameter_hash,payload,content_sha256
+                          algorithm_version,parameter_hash,warnings,warnings_sha256,payload,content_sha256
                    FROM analysis_projection_snapshots
                   WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
                 (room_id, key, snapshot["analysisEpoch"], version),

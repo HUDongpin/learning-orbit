@@ -2,6 +2,7 @@ import {
   realtimeContract,
   type AgentCurrentState,
   type AgentStatusFrame,
+  type AnalyticsTimelineResponse,
   type AuthSession,
   type MediaStatusFrame,
   type RoomDetails,
@@ -9,16 +10,25 @@ import {
   type ServerFrame,
   type ServerPresence,
   type ServerTyping,
+  type ProjectionFrame,
 } from "@learning-orbit/contracts";
 
 import { RoomSocket, roomWebSocketUrl, type SocketLike } from "../realtime/room-socket";
 import { EventLedger, type LedgerMessage } from "./event-ledger";
 import { ProjectionSync, type ProjectionAcceptResult } from "./projection-sync";
 import { makeSessionCommandBus, type RoomCommandIntent, type SessionCommandBus } from "./session-command-bus";
-import { SessionGatewayError, type SessionGateway } from "./session-gateway";
+import {
+  SessionGatewayError,
+  type EchoProjectionKey,
+  type ProjectionKey,
+  type SessionGateway,
+} from "./session-gateway";
 import { createSessionState, sessionReducer, type SessionState } from "./session-store";
 
-type EventGateway = Pick<SessionGateway, "getRoomEvents"> & Partial<Pick<SessionGateway, "getAgentCurrent">>;
+type EventGateway = Pick<SessionGateway, "getRoomEvents"> & Partial<Pick<
+  SessionGateway,
+  "getAgentCurrent" | "getProjectionLatest" | "getProjectionPatches" | "getConceptTimeline"
+>>;
 type AckFrame = Extract<ServerFrame, { type: "ack" }>;
 type RejectFrame = Extract<ServerFrame, { type: "reject" }>;
 type DegradedFrame = Extract<ServerFrame, { type: "degraded" }>;
@@ -38,6 +48,11 @@ const AGENT_HEALTH_RANK: Readonly<Record<AgentStatusFrame["serviceHealth"], numb
   unavailable: 2,
 };
 const DEFAULT_AGENT_STATUS_TIMEOUT_MS = 1_500;
+const PROJECTION_AUTHORITY_LOSS_CODES = new Set([
+  "PROJECTION_FORBIDDEN",
+  "RETENTION_POLICY_EXPIRED",
+  "ROOM_DELETION_IN_PROGRESS",
+]);
 
 function agentFrameIdentityIsValid(frame: AgentStatusFrame): boolean {
   return frame.state === "idle"
@@ -135,6 +150,13 @@ export class HydratedSessionState {
   #agentRefreshGeneration = 0;
   #agentLiveVersion = 0;
   #agentStatusTimeoutMs: number;
+  readonly #projectionRefreshes = new Map<ProjectionKey, Promise<void>>();
+  readonly #projectionRefreshAbort = new Map<ProjectionKey, AbortController>();
+  readonly #projectionRefreshGeneration = new Map<ProjectionKey, number>();
+  readonly #timelineRequests = new Map<EchoProjectionKey, Readonly<{
+    controller: AbortController;
+    task: Promise<AnalyticsTimelineResponse>;
+  }>>();
   readonly #listeners = new Set<() => void>();
   #session: AuthSession | undefined;
   #room: RoomDetails | undefined;
@@ -215,6 +237,7 @@ export class HydratedSessionState {
   static async create(options: HydratedSessionOptions): Promise<HydratedSessionState> {
     const hydrated = new HydratedSessionState(options.session, options.room, options.gateway, options);
     await hydrated.recoverEvents();
+    void hydrated.refreshProjections();
     return hydrated;
   }
 
@@ -315,10 +338,85 @@ export class HydratedSessionState {
       if (this.#agentRefresh === refresh) break;
       refresh = this.#agentRefresh;
     }
+    for (;;) {
+      const projectionTasks = [...this.#projectionRefreshes.values()];
+      if (projectionTasks.length === 0) break;
+      await Promise.all(projectionTasks);
+      if (projectionTasks.every((task) => ![...this.#projectionRefreshes.values()].includes(task))) continue;
+    }
   }
 
   refreshAgentCurrent(): Promise<void> {
     return this.#refreshAgentCurrent();
+  }
+
+  refreshProjections(): Promise<void> {
+    if (!this.gateway.getProjectionLatest || !this.#room) return Promise.resolve();
+    return Promise.all(this.projections.allowedKeys().map((key) => this.#refreshProjectionLatest(key))).then(() => undefined);
+  }
+
+  refreshProjection(key: ProjectionKey): Promise<void> {
+    if (!this.projections.allowedKeys().includes(key)) return Promise.reject(new Error("PROJECTION_ROLE_FORBIDDEN"));
+    return this.#refreshProjectionLatest(key);
+  }
+
+  loadConceptTimeline(key: EchoProjectionKey, limit = 50): Promise<AnalyticsTimelineResponse> {
+    if (!this.projections.allowedKeys().includes(key)) return Promise.reject(new Error("PROJECTION_ROLE_FORBIDDEN"));
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+      return Promise.reject(new Error("ANALYTICS_TIMELINE_LIMIT_INVALID"));
+    }
+    if (!this.gateway.getConceptTimeline || !this.#room || !this.#session) {
+      return Promise.reject(new Error("ANALYTICS_TIMELINE_UNAVAILABLE"));
+    }
+    const snapshot = this.projections.slot(key).snapshot;
+    if (!snapshot || snapshot.projectionKey !== key) {
+      return Promise.reject(new Error("ANALYTICS_TIMELINE_BASE_MISSING"));
+    }
+    this.#timelineRequests.get(key)?.controller.abort();
+    const controller = new AbortController();
+    const roomId = this.#room.roomId;
+    const analysisEpoch = snapshot.analysisEpoch;
+    let task!: Promise<AnalyticsTimelineResponse>;
+    task = (async () => {
+      try {
+        const result = await this.gateway.getConceptTimeline!(
+          roomId,
+          key,
+          { analysisEpoch, limit },
+          { signal: controller.signal },
+        );
+        const active = this.#timelineRequests.get(key);
+        if (active?.task !== task || !this.#room || !this.#session) {
+          throw new Error("ANALYTICS_TIMELINE_STALE");
+        }
+        const current = this.projections.slot(key).snapshot;
+        if (!current || current.projectionKey !== key || current.analysisEpoch !== result.analysisEpoch) {
+          throw new Error("ANALYTICS_TIMELINE_EPOCH_CHANGED");
+        }
+        return result;
+      } catch (error) {
+        if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
+          this.clearForSessionExpiry();
+        } else if (error instanceof SessionGatewayError && error.code === "ROOM_NOT_FOUND") {
+          this.clearForRoomUnavailable();
+        } else if (error instanceof SessionGatewayError && error.code === "STUDENT_ANALYTICS_NOT_PROMOTED"
+          && this.#room && this.#session) {
+          this.#cancelTimelineRequest(key);
+          this.projections.markPolicyUnavailable(key);
+          this.#notify();
+        } else if (error instanceof SessionGatewayError && PROJECTION_AUTHORITY_LOSS_CODES.has(error.code)
+          && this.#room && this.#session) {
+          this.#cancelTimelineRequest(key);
+          this.projections.markAuthorityUnavailable(key, error.code);
+          this.#notify();
+        }
+        throw error;
+      } finally {
+        if (this.#timelineRequests.get(key)?.task === task) this.#timelineRequests.delete(key);
+      }
+    })();
+    this.#timelineRequests.set(key, { controller, task });
+    return task;
   }
 
   progress(now: number): Readonly<{ elapsedSeconds: number; ratio: number }> {
@@ -415,6 +513,7 @@ export class HydratedSessionState {
       }
       if (frame.type === "resume_complete") {
         void this.#refreshAgentCurrent();
+        void this.refreshProjections();
         return;
       }
       if (frame.type === "ack") {
@@ -454,10 +553,22 @@ export class HydratedSessionState {
         }
         return;
       }
-      if (frame.type === "projection") { this.lastProjectionResult = this.projections.accept(frame); return; }
+      if (frame.type === "projection") {
+        this.lastProjectionResult = this.projections.accept(frame);
+        if (this.lastProjectionResult === "epoch_changed") this.#cancelTimelineRequest(frame.projectionKey);
+        if (this.lastProjectionResult !== "duplicate" && this.lastProjectionResult !== "stale") {
+          void this.#reconcileProjectionFrame(frame, this.lastProjectionResult);
+        }
+        return;
+      }
       if (frame.type === "degraded") {
         this.degraded.set(`${frame.scope}:${frame.projectionKey ?? "all"}`, frame);
         this.degraded.set(frame.scope, frame);
+        if (frame.scope === "analytics" && frame.code === "STUDENT_ANALYTICS_NOT_PROMOTED" && frame.projectionKey) {
+          this.#cancelProjectionRefresh(frame.projectionKey);
+          this.#cancelTimelineRequest(frame.projectionKey);
+          this.projections.markPolicyUnavailable(frame.projectionKey);
+        }
         return;
       }
       if (frame.type === "heartbeat" && "serverTime" in frame) this.lastServerTime = frame.serverTime;
@@ -471,6 +582,11 @@ export class HydratedSessionState {
     this.#agentRefreshAbort?.abort();
     this.#agentRefreshAbort = undefined;
     this.#agentRefresh = undefined;
+    for (const key of this.projections.allowedKeys()) this.#cancelProjectionRefresh(key);
+    for (const request of this.#timelineRequests.values()) request.controller.abort();
+    this.#timelineRequests.clear();
+    this.#projectionRefreshes.clear();
+    this.#projectionRefreshAbort.clear();
     this.socket.destroy();
     this.ledger.destroy();
     this.projections.clearAuthority();
@@ -638,5 +754,125 @@ export class HydratedSessionState {
     })();
     this.#agentRefresh = task;
     return task;
+  }
+
+  #cancelProjectionRefresh(key: ProjectionKey): void {
+    this.#projectionRefreshGeneration.set(key, (this.#projectionRefreshGeneration.get(key) ?? 0) + 1);
+    this.#projectionRefreshAbort.get(key)?.abort();
+    this.#projectionRefreshAbort.delete(key);
+    this.#projectionRefreshes.delete(key);
+  }
+
+  #cancelTimelineRequest(key: ProjectionKey): void {
+    if (!key.startsWith("echo.")) return;
+    const request = this.#timelineRequests.get(key as EchoProjectionKey);
+    request?.controller.abort();
+    this.#timelineRequests.delete(key as EchoProjectionKey);
+  }
+
+  #projectionTask(
+    key: ProjectionKey,
+    work: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
+    if (!this.#room || !this.#session) return Promise.resolve();
+    const generation = (this.#projectionRefreshGeneration.get(key) ?? 0) + 1;
+    this.#projectionRefreshGeneration.set(key, generation);
+    this.#projectionRefreshAbort.get(key)?.abort();
+    const controller = new AbortController();
+    this.#projectionRefreshAbort.set(key, controller);
+    this.projections.markLoading(key);
+    this.#notify();
+    let task!: Promise<void>;
+    task = (async () => {
+      try {
+        await work(controller.signal);
+        if (generation !== this.#projectionRefreshGeneration.get(key) || !this.#room || !this.#session) return;
+        this.#notify();
+      } catch (error) {
+        if (generation !== this.#projectionRefreshGeneration.get(key) || !this.#room || !this.#session) return;
+        if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
+          this.clearForSessionExpiry();
+          return;
+        }
+        if (error instanceof SessionGatewayError && error.code === "ROOM_NOT_FOUND") {
+          this.clearForRoomUnavailable();
+          return;
+        }
+        if (error instanceof SessionGatewayError && error.code === "STUDENT_ANALYTICS_NOT_PROMOTED") {
+          this.#cancelTimelineRequest(key);
+          this.projections.markPolicyUnavailable(key);
+        } else if (error instanceof SessionGatewayError && error.code === "ANALYTICS_NOT_READY") {
+          this.projections.markNotReady(key);
+        } else if (error instanceof SessionGatewayError && PROJECTION_AUTHORITY_LOSS_CODES.has(error.code)) {
+          this.#cancelTimelineRequest(key);
+          this.projections.markAuthorityUnavailable(key, error.code);
+        } else {
+          const code = error instanceof SessionGatewayError
+            ? error.code
+            : error instanceof Error && /^[A-Z0-9_]{1,80}$/u.test(error.message)
+              ? error.message
+              : "PROJECTION_SYNC_FAILED";
+          this.projections.markFailed(key, code);
+        }
+        this.#notify();
+      } finally {
+        if (generation === this.#projectionRefreshGeneration.get(key)) {
+          this.#projectionRefreshAbort.delete(key);
+          if (this.#projectionRefreshes.get(key) === task) this.#projectionRefreshes.delete(key);
+        }
+      }
+    })();
+    this.#projectionRefreshes.set(key, task);
+    return task;
+  }
+
+  #refreshProjectionLatest(key: ProjectionKey): Promise<void> {
+    if (!this.gateway.getProjectionLatest || !this.#room) return Promise.resolve();
+    const roomId = this.#room.roomId;
+    return this.#projectionTask(key, async (signal) => {
+      const previous = this.projections.slot(key).snapshot;
+      const snapshot = await this.gateway.getProjectionLatest!(roomId, key, { signal });
+      if (previous && previous.analysisEpoch !== snapshot.analysisEpoch) this.#cancelTimelineRequest(key);
+      this.projections.replaceSnapshot(snapshot);
+    });
+  }
+
+  #reconcileProjectionFrame(frame: ProjectionFrame, result: ProjectionAcceptResult): Promise<void> {
+    if (!this.gateway.getProjectionLatest || !this.#room) return Promise.resolve();
+    const key = frame.projectionKey;
+    const roomId = this.#room.roomId;
+    return this.#projectionTask(key, async (signal) => {
+      const slot = this.projections.slot(key);
+      const current = slot.snapshot;
+      if (result === "accepted" && key.startsWith("echo.") && this.gateway.getProjectionPatches
+        && current && current.projectionKey === key
+        && current.analysisEpoch === frame.analysisEpoch
+        && current.projectionVersion + 1 === frame.projectionVersion) {
+        try {
+          const page = await this.gateway.getProjectionPatches(
+            roomId,
+            key as EchoProjectionKey,
+            { analysisEpoch: frame.analysisEpoch, afterProjectionVersion: current.projectionVersion },
+            { signal },
+          );
+          this.projections.applyEchoPatches(key as EchoProjectionKey, page.patches, frame);
+          return;
+        } catch (error) {
+          if (error instanceof SessionGatewayError && [
+            "AUTH_REQUIRED", "ROOM_NOT_FOUND", "STUDENT_ANALYTICS_NOT_PROMOTED",
+          ].includes(error.code)) throw error;
+          // A 409, malformed window, reducer baseline mismatch, replay marker,
+          // or incomplete cursor always falls back to the already validated
+          // canonical latest route for this exact room and key.
+        }
+      }
+      const snapshot = await this.gateway.getProjectionLatest!(roomId, key, { signal });
+      if (snapshot.analysisEpoch === frame.analysisEpoch
+        && (snapshot.projectionVersion < frame.projectionVersion
+          || snapshot.completeThroughRoomSeq < frame.completeThroughRoomSeq)) {
+        throw new Error("PROJECTION_SNAPSHOT_BEHIND_FRAME");
+      }
+      this.projections.replaceSnapshot(snapshot);
+    });
   }
 }

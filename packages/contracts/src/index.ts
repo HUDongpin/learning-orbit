@@ -21,9 +21,17 @@ export type {
   AnalysisProjectionEnvelope,
   ConceptMapPatch,
   ConceptMapSnapshot,
+  StudentConceptMapPatch,
+  StudentConceptMapSnapshot,
+  TeacherConceptMapPatch,
+  TeacherConceptMapSnapshot,
   SnaProjectionBundle,
   AnalyticsPatchPage,
+  StudentAnalyticsPatchPage,
+  TeacherAnalyticsPatchPage,
   AnalyticsTimelineResponse,
+  StudentAnalyticsTimelineResponse,
+  TeacherAnalyticsTimelineResponse,
   AnalyticsResyncResponse,
 } from "./analytics.js";
 export {

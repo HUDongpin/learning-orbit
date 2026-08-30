@@ -3,7 +3,14 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthSession, RoomDetails } from "@learning-orbit/contracts";
+import {
+  analyticsContract,
+  type AuthSession,
+  type RoomDetails,
+  type StudentConceptMapSnapshot,
+} from "@learning-orbit/contracts";
+import goldenEcho from "../../../../../packages/test-fixtures/analytics/golden-echo-projection.json" with { type: "json" };
+import goldenTrace from "../../../../../packages/test-fixtures/analytics/golden-trace-projections.json" with { type: "json" };
 import type { SessionGateway } from "../../../src/lib/session/session-gateway.js";
 import { SessionGatewayError } from "../../../src/lib/session/session-gateway.js";
 import { RoomAccessClient } from "./room-access-client.js";
@@ -50,6 +57,49 @@ const room: RoomDetails = {
     { actorId: "00000000-0000-4000-8000-000000000016", pseudonym: "探索者 D", actorKind: "human", actorRole: "student" },
   ],
 };
+
+function studentEcho(): StudentConceptMapSnapshot {
+  return analyticsContract.parseStudentEchoSnapshot({
+    ...goldenEcho,
+    projectionKey: "echo.student_approved",
+    reviewStatus: "approved",
+    displayStatus: "student_approved",
+    payload: {
+      nodes: goldenEcho.payload.nodes.map((node) => ({ ...node, reviewStatus: "approved" })),
+      edges: goldenEcho.payload.edges.map(({ channels: _channels, activityScore: _score, evidenceRefs: _refs, ...edge }) => ({
+        ...edge,
+        reviewStatus: "approved",
+      })),
+    },
+  });
+}
+
+function studentTrace() {
+  const observedNodes = [
+    { nodeId: "p-1111111111111111", label: "探索者 A" as const, kind: "learner" as const },
+    { nodeId: "p-2222222222222222", label: "探索者 B" as const, kind: "learner" as const },
+  ];
+  const observed = {
+    nodes: observedNodes,
+    edges: [{ sourceNodeId: observedNodes[0]!.nodeId, targetNodeId: observedNodes[1]!.nodeId, layer: "communication" as const }],
+    metrics: { participationBalance: 0.5, reciprocity: 0.25, agentShare: 0, semanticCoverage: 0.75 },
+    warnings: ["small_group_interpretation_warning" as const],
+  };
+  const lineageAdjusted = {
+    ...observed,
+    edges: [{ sourceNodeId: observedNodes[0]!.nodeId, targetNodeId: observedNodes[1]!.nodeId, layer: "uptake" as const }],
+  };
+  return analyticsContract.parseTrace({
+    ...goldenTrace.student,
+    payload: {
+      ...goldenTrace.student.payload,
+      windows: {
+        recent_10m: { ...goldenTrace.student.payload.windows.recent_10m, views: { observed, human_only: observed, lineage_adjusted: lineageAdjusted } },
+        session_45m: { ...goldenTrace.student.payload.windows.session_45m, views: { observed, human_only: observed, lineage_adjusted: lineageAdjusted } },
+      },
+    },
+  });
+}
 
 function messageEventFrame(roomSeq: number) {
   return {
@@ -126,6 +176,40 @@ describe("room route access guard", () => {
     expect(api.getRoomEvents).toHaveBeenCalledWith(roomId, 0, 500);
     expect(screen.getByText(/已按伺服器 roomSeq 同步 0 個 RoomEvent/)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/本地演示|模擬即時|太陽是生態系統/);
+  });
+
+  it("renders only the student's server-approved ECHO and aggregate TRACE projections", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    const getProjectionLatest = vi.fn(async (_requestedRoomId: string, key: string) => {
+      if (key === "echo.student_approved") return studentEcho();
+      if (key === "trace.student_bundle") return studentTrace();
+      throw new SessionGatewayError("PROJECTION_FORBIDDEN");
+    });
+    const api = gateway(student, { getProjectionLatest });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+
+    expect(await screen.findByRole("list", { name: "概念關係等價列表" })).toHaveTextContent("provides energy to");
+    expect(await screen.findByRole("definition", { name: "群體參與平衡" })).toHaveTextContent("50%");
+    expect(screen.getByLabelText("輸入訊息")).toBeInTheDocument();
+    expect(getProjectionLatest).toHaveBeenCalledWith(roomId, "echo.student_approved", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(getProjectionLatest).toHaveBeenCalledWith(roomId, "trace.student_bundle", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(getProjectionLatest).not.toHaveBeenCalledWith(roomId, "echo.teacher_shadow", expect.anything());
+    expect(document.body.textContent).not.toMatch(/activityScore|evidenceRefs|能力分數\s*[:：]|個人排名\s*[:：]/iu);
+  });
+
+  it("keeps chat and the other projection available when one student projection is denied by policy", async () => {
+    vi.stubGlobal("WebSocket", undefined);
+    const api = gateway(student, {
+      getProjectionLatest: vi.fn(async (_requestedRoomId: string, key: string) => {
+        if (key === "echo.student_approved") throw new SessionGatewayError("STUDENT_ANALYTICS_NOT_PROMOTED");
+        return studentTrace();
+      }),
+    });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+
+    expect(await screen.findByText(/not_available_by_policy/u)).toBeInTheDocument();
+    expect(await screen.findByRole("definition", { name: "群體參與平衡" })).toHaveTextContent("50%");
+    expect(screen.getByLabelText("輸入訊息")).toBeInTheDocument();
   });
 
   it("keeps text chat available while the Agent status endpoint fails closed", async () => {

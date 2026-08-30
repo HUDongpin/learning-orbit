@@ -363,9 +363,11 @@ export class FetchSessionGateway implements SessionGateway {
     if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
     try {
       const body = await jsonBody(response);
-      const snapshot = projectionKey.startsWith("echo.")
-        ? analyticsContract.parseEchoSnapshot(body)
-        : analyticsContract.parseTrace(body);
+      const snapshot = projectionKey === "echo.student_approved"
+        ? analyticsContract.parseStudentEchoSnapshot(body)
+        : projectionKey === "echo.teacher_shadow"
+          ? analyticsContract.parseTeacherEchoSnapshot(body)
+          : analyticsContract.parseTrace(body);
       if (snapshot.roomId !== roomId || snapshot.projectionKey !== projectionKey) responseInvalid();
       return snapshot;
     } catch (error) {
@@ -393,13 +395,15 @@ export class FetchSessionGateway implements SessionGateway {
     }
     if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
     try {
-      const page = analyticsHttpContract.parsePatchPage(await jsonBody(response));
+      const page = projectionKey === "echo.student_approved"
+        ? analyticsHttpContract.parseStudentPatchPage(await jsonBody(response))
+        : analyticsHttpContract.parseTeacherPatchPage(await jsonBody(response));
+      if (page.roomId !== roomId || page.projectionKey !== projectionKey
+        || page.analysisEpoch !== query.analysisEpoch) responseInvalid();
       for (const patch of page.patches) {
-        analyticsContract.parseEchoPatch(patch);
+        if (projectionKey === "echo.student_approved") analyticsContract.parseStudentEchoPatch(patch);
+        else analyticsContract.parseTeacherEchoPatch(patch);
         if (patch.analysisEpoch !== query.analysisEpoch) responseInvalid();
-        if (projectionKey === "echo.student_approved"
-          && [...patch.nodesAdded, ...patch.nodesUpdated, ...patch.edgesAdded, ...patch.edgesUpdated]
-            .some(({ reviewStatus }) => reviewStatus !== "approved")) responseInvalid();
       }
       const first = page.patches[0];
       if (first && first.baseVersion !== (query.afterProjectionVersion ?? 0)) responseInvalid();
@@ -429,17 +433,19 @@ export class FetchSessionGateway implements SessionGateway {
     }
     if (response.status !== 200) return legalError(response, ANALYTICS_ERROR_ALLOWLIST);
     try {
-      const timeline = analyticsHttpContract.parseTimeline(await jsonBody(response));
+      const timeline = projectionKey === "echo.student_approved"
+        ? analyticsHttpContract.parseStudentTimeline(await jsonBody(response))
+        : analyticsHttpContract.parseTeacherTimeline(await jsonBody(response));
+      if (timeline.roomId !== roomId || timeline.projectionKey !== projectionKey
+        || timeline.analysisEpoch !== query.analysisEpoch) responseInvalid();
       if (timeline.baseSnapshot
         && (timeline.baseSnapshot.roomId !== roomId
           || timeline.baseSnapshot.projectionKey !== projectionKey
           || timeline.baseSnapshot.analysisEpoch !== query.analysisEpoch)) responseInvalid();
       for (const patch of timeline.patches) {
-        analyticsContract.parseEchoPatch(patch);
+        if (projectionKey === "echo.student_approved") analyticsContract.parseStudentEchoPatch(patch);
+        else analyticsContract.parseTeacherEchoPatch(patch);
         if (patch.analysisEpoch !== query.analysisEpoch) responseInvalid();
-        if (projectionKey === "echo.student_approved"
-          && [...patch.nodesAdded, ...patch.nodesUpdated, ...patch.edgesAdded, ...patch.edgesUpdated]
-            .some(({ reviewStatus }) => reviewStatus !== "approved")) responseInvalid();
       }
       return timeline;
     } catch (error) {

@@ -108,7 +108,7 @@ const echoLatest = {
   watermarkEventTime: "2026-08-31T01:00:00.000Z",
   requiresReplay: false,
   evidenceStatus: "active" as const,
-  reviewStatus: "approved" as const,
+  reviewStatus: "unreviewed" as const,
   displayStatus: "student_approved" as const,
   warnings: [],
   payload: { nodes: [], edges: [] },
@@ -131,7 +131,6 @@ const echoPatch = {
   positionUpdates: [],
   changeScore: 0,
   reasonCodes: [],
-  evidenceRefs: [],
 };
 const traceView = {
   nodes: [],
@@ -144,6 +143,7 @@ const traceLatest = {
   projectionKey: "trace.student_bundle" as const,
   algorithmVersion: "trace-v1",
   parameterHash: "c".repeat(64),
+  reviewStatus: "approved" as const,
   displayStatus: "student_aggregate" as const,
   warnings: ["small_group_interpretation_warning"],
   payload: {
@@ -397,12 +397,19 @@ describe("typed SessionGateway", () => {
   });
 
   it("parses generated ECHO patch pages and validates a 409 resync URL exactly", async () => {
-    const fetch = vi.fn().mockResolvedValue(json({ patches: [echoPatch] }));
+    const patchPage = {
+      schemaVersion: 1 as const,
+      roomId: createdRoom.room.roomId,
+      projectionKey: "echo.student_approved" as const,
+      analysisEpoch: analyticsEpoch,
+      patches: [echoPatch],
+    };
+    const fetch = vi.fn().mockResolvedValue(json(patchPage));
     await expect(new FetchSessionGateway({ fetch }).getProjectionPatches(
       createdRoom.room.roomId,
       "echo.student_approved",
       { analysisEpoch: analyticsEpoch, afterProjectionVersion: 1 },
-    )).resolves.toEqual({ patches: [echoPatch] });
+    )).resolves.toEqual(patchPage);
     expect(fetch).toHaveBeenCalledWith(
       `/v1/rooms/${createdRoom.room.roomId}/analytics/echo.student_approved/patches?analysisEpoch=${analyticsEpoch}&afterProjectionVersion=1`,
       expect.objectContaining({ method: "GET", credentials: "include" }),
@@ -436,7 +443,16 @@ describe("typed SessionGateway", () => {
     await expect(notPromoted.getProjectionLatest(createdRoom.room.roomId, "trace.student_bundle"))
       .rejects.toEqual(new SessionGatewayError("STUDENT_ANALYTICS_NOT_PROMOTED"));
 
-    const timeline = { baseSnapshot: echoLatest, patches: [echoPatch], truncatedBeforeVersion: 1, headVersion: 2 };
+    const timeline = {
+      schemaVersion: 1 as const,
+      roomId: createdRoom.room.roomId,
+      projectionKey: "echo.student_approved" as const,
+      analysisEpoch: analyticsEpoch,
+      baseSnapshot: echoLatest,
+      patches: [echoPatch],
+      truncatedBeforeVersion: 1,
+      headVersion: 2,
+    };
     const fetch = vi.fn().mockResolvedValue(json(timeline));
     await expect(new FetchSessionGateway({ fetch }).getConceptTimeline(
       createdRoom.room.roomId,

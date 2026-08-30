@@ -8,37 +8,63 @@
     { "$ref": "#/$defs/ResyncResponse" }
   ],
   "$defs": {
-    "PatchPage": {
+    "TeacherPatchPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["patches"],
+      "required": ["schemaVersion", "roomId", "projectionKey", "analysisEpoch", "patches"],
       "properties": {
+        "schemaVersion": { "const": 1 },
+        "roomId": { "type": "string", "format": "uuid" },
+        "projectionKey": { "const": "echo.teacher_shadow" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
         "patches": {
           "type": "array",
           "maxItems": 200,
-          "items": {
-            "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapPatch"
-          }
+          "items": { "$ref": "echo-concept-projection.v1.json#/$defs/TeacherConceptMapPatch" }
         }
       }
     },
-    "TimelineResponse": {
+    "StudentPatchPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseSnapshot", "patches", "truncatedBeforeVersion", "headVersion"],
+      "required": ["schemaVersion", "roomId", "projectionKey", "analysisEpoch", "patches"],
       "properties": {
+        "schemaVersion": { "const": 1 },
+        "roomId": { "type": "string", "format": "uuid" },
+        "projectionKey": { "const": "echo.student_approved" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
+        "patches": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "echo-concept-projection.v1.json#/$defs/StudentConceptMapPatch" }
+        }
+      }
+    },
+    "PatchPage": {
+      "anyOf": [
+        { "$ref": "#/$defs/TeacherPatchPage" },
+        { "$ref": "#/$defs/StudentPatchPage" }
+      ]
+    },
+    "TeacherTimelineResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "roomId", "projectionKey", "analysisEpoch", "baseSnapshot", "patches", "truncatedBeforeVersion", "headVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "roomId": { "type": "string", "format": "uuid" },
+        "projectionKey": { "const": "echo.teacher_shadow" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
         "baseSnapshot": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapSnapshot" }
+            { "$ref": "echo-concept-projection.v1.json#/$defs/TeacherConceptMapSnapshot" }
           ]
         },
         "patches": {
           "type": "array",
           "maxItems": 200,
-          "items": {
-            "$ref": "echo-concept-projection.v1.json#/$defs/ConceptMapPatch"
-          }
+          "items": { "$ref": "echo-concept-projection.v1.json#/$defs/TeacherConceptMapPatch" }
         },
         "truncatedBeforeVersion": {
           "oneOf": [
@@ -48,6 +74,41 @@
         },
         "headVersion": { "type": "integer", "minimum": 0 }
       }
+    },
+    "StudentTimelineResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "roomId", "projectionKey", "analysisEpoch", "baseSnapshot", "patches", "truncatedBeforeVersion", "headVersion"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "roomId": { "type": "string", "format": "uuid" },
+        "projectionKey": { "const": "echo.student_approved" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
+        "baseSnapshot": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "echo-concept-projection.v1.json#/$defs/StudentConceptMapSnapshot" }
+          ]
+        },
+        "patches": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "echo-concept-projection.v1.json#/$defs/StudentConceptMapPatch" }
+        },
+        "truncatedBeforeVersion": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 1 }
+          ]
+        },
+        "headVersion": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "TimelineResponse": {
+      "anyOf": [
+        { "$ref": "#/$defs/TeacherTimelineResponse" },
+        { "$ref": "#/$defs/StudentTimelineResponse" }
+      ]
     },
     "ResyncResponse": {
       "type": "object",

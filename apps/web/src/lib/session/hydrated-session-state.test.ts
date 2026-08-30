@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AuthSession, RoomDetails, RoomEventEnvelope } from "@learning-orbit/contracts";
+import type {
+  AuthSession,
+  RoomDetails,
+  RoomEventEnvelope,
+  SnaProjectionBundle,
+  StudentConceptMapPatch,
+  StudentConceptMapSnapshot,
+} from "@learning-orbit/contracts";
 import { HydratedSessionState } from "./hydrated-session-state.js";
 import { SessionGatewayError } from "./session-gateway.js";
 
@@ -30,6 +37,51 @@ const room: RoomDetails = {
     { actorId: "00000000-0000-4000-8000-000000000016", pseudonym: "探索者 D", actorKind: "human", actorRole: "student" },
   ],
 };
+const EPOCH = "00000000-0000-4000-8000-000000000601";
+const HASH = "b".repeat(64);
+
+function echoSnapshot(version = 1, completeThroughRoomSeq = 4): StudentConceptMapSnapshot {
+  return {
+    schemaVersion: 1, projectionKey: "echo.student_approved", roomId: ROOM_ID,
+    analysisEpoch: EPOCH, algorithmVersion: "echo-v1", parameterHash: HASH,
+    projectionVersion: version, baseVersion: version - 1, completeThroughRoomSeq,
+    watermarkEventTime: AT, requiresReplay: false, evidenceStatus: "active",
+    reviewStatus: "unreviewed", displayStatus: "student_approved", warnings: [],
+    payload: { nodes: [], edges: [] },
+  };
+}
+
+function echoPatch(version = 2, completeThroughRoomSeq = 5): StudentConceptMapPatch {
+  return {
+    analysisEpoch: EPOCH, algorithmVersion: "echo-v1", parameterHash: HASH,
+    projectionVersion: version, baseVersion: version - 1, completeThroughRoomSeq,
+    requiresReplay: false, warnings: [], nodesAdded: [], nodesUpdated: [], nodesHidden: [],
+    edgesAdded: [], edgesUpdated: [], edgesHidden: [], positionUpdates: [], changeScore: 0, reasonCodes: [],
+  };
+}
+
+const traceView = {
+  nodes: [], edges: [],
+  metrics: { participationBalance: 0, reciprocity: 0, agentShare: 0, semanticCoverage: 0 },
+  warnings: ["small_group_interpretation_warning" as const],
+};
+function traceSnapshot(): Extract<SnaProjectionBundle, { projectionKey: "trace.student_bundle" }> {
+  return {
+    schemaVersion: 1, projectionKey: "trace.student_bundle", roomId: ROOM_ID,
+    analysisEpoch: EPOCH, algorithmVersion: "trace-v1", parameterHash: "c".repeat(64),
+    projectionVersion: 1, baseVersion: 0, completeThroughRoomSeq: 4,
+    watermarkEventTime: AT, requiresReplay: false, evidenceStatus: "active",
+    reviewStatus: "approved", displayStatus: "student_aggregate",
+    warnings: ["small_group_interpretation_warning"],
+    payload: {
+      windows: {
+        recent_10m: { windowStartEventTime: "2026-08-30T08:50:00.000Z", windowEndEventTime: AT, views: { observed: traceView, human_only: traceView, lineage_adjusted: traceView } },
+        session_45m: { windowStartEventTime: "2026-08-30T08:15:00.000Z", windowEndEventTime: AT, views: { observed: traceView, human_only: traceView, lineage_adjusted: traceView } },
+      },
+      interpretation: "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。",
+    },
+  };
+}
 
 function event(seq: number, kind: "open" | "message" = "message"): RoomEventEnvelope {
   const common = {
@@ -71,6 +123,220 @@ function event(seq: number, kind: "open" | "message" = "message"): RoomEventEnve
 }
 
 describe("HydratedSessionState", () => {
+  it("hydrates both role-owned projections independently after event recovery", async () => {
+    const getProjectionLatest = vi.fn(async (_roomId: string, key: string) => {
+      if (key === "echo.student_approved") return echoSnapshot();
+      throw new SessionGatewayError("STUDENT_ANALYTICS_NOT_PROMOTED");
+    });
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest,
+      },
+    });
+    await hydrated.whenIdle();
+    expect(getProjectionLatest.mock.calls.map(([, key]) => key).sort()).toEqual([
+      "echo.student_approved", "trace.student_bundle",
+    ]);
+    expect(hydrated.projections.slot("echo.student_approved")).toMatchObject({
+      availability: "ready", snapshot: { projectionVersion: 1 },
+    });
+    expect(hydrated.projections.slot("trace.student_bundle")).toEqual({ availability: "not_available_by_policy" });
+    expect(hydrated.sessionState.roomId).toBe(ROOM_ID);
+  });
+
+  it("uses a contiguous ECHO patch and falls back to latest for a version gap", async () => {
+    let echoLatestCalls = 0;
+    const getProjectionLatest = vi.fn(async (_roomId: string, key: string) => {
+      if (key === "trace.student_bundle") throw new SessionGatewayError("ANALYTICS_NOT_READY");
+      echoLatestCalls += 1;
+      return echoLatestCalls === 1 ? echoSnapshot() : echoSnapshot(4, 7);
+    });
+    const getProjectionPatches = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      roomId: ROOM_ID,
+      projectionKey: "echo.student_approved" as const,
+      analysisEpoch: EPOCH,
+      patches: [echoPatch()],
+    }));
+    const hydrated = await HydratedSessionState.create({
+      session: student, room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest,
+        getProjectionPatches,
+      },
+    });
+    await hydrated.whenIdle();
+    hydrated.receiveFrame({
+      type: "projection", roomId: ROOM_ID, projectionKey: "echo.student_approved",
+      analysisEpoch: EPOCH, projectionVersion: 2, completeThroughRoomSeq: 5,
+      snapshotUrl: `/v1/rooms/${ROOM_ID}/analytics/echo.student_approved/latest`,
+    });
+    await hydrated.whenIdle();
+    expect(getProjectionPatches).toHaveBeenCalledWith(
+      ROOM_ID, "echo.student_approved", { analysisEpoch: EPOCH, afterProjectionVersion: 1 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(hydrated.projections.slot("echo.student_approved").snapshot)
+      .toMatchObject({ projectionVersion: 2, completeThroughRoomSeq: 5 });
+
+    hydrated.receiveFrame({
+      type: "projection", roomId: ROOM_ID, projectionKey: "echo.student_approved",
+      analysisEpoch: EPOCH, projectionVersion: 4, completeThroughRoomSeq: 7,
+      snapshotUrl: `/v1/rooms/${ROOM_ID}/analytics/echo.student_approved/latest`,
+    });
+    await hydrated.whenIdle();
+    expect(getProjectionPatches).toHaveBeenCalledTimes(1);
+    expect(hydrated.projections.slot("echo.student_approved").snapshot)
+      .toMatchObject({ projectionVersion: 4, completeThroughRoomSeq: 7 });
+  });
+
+  it("loads an ECHO timeline through the role-owned key and current analysis epoch", async () => {
+    const getConceptTimeline = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      roomId: ROOM_ID,
+      projectionKey: "echo.student_approved" as const,
+      analysisEpoch: EPOCH,
+      baseSnapshot: echoSnapshot(),
+      patches: [echoPatch()],
+      truncatedBeforeVersion: 1,
+      headVersion: 2,
+    }));
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest: vi.fn(async (_roomId: string, key: string) => key === "echo.student_approved"
+          ? echoSnapshot() : Promise.reject(new SessionGatewayError("ANALYTICS_NOT_READY"))),
+        getConceptTimeline,
+      },
+    });
+    await hydrated.whenIdle();
+
+    await expect(hydrated.loadConceptTimeline("echo.student_approved", 40)).resolves.toMatchObject({ headVersion: 2 });
+    expect(getConceptTimeline).toHaveBeenCalledWith(
+      ROOM_ID,
+      "echo.student_approved",
+      { analysisEpoch: EPOCH, limit: 40 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    await expect(hydrated.loadConceptTimeline("echo.teacher_shadow" as never)).rejects.toThrow("PROJECTION_ROLE_FORBIDDEN");
+  });
+
+  it("aborts an in-flight ECHO timeline and makes its result inert after authority is cleared", async () => {
+    let timelineSignal: AbortSignal | undefined;
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest: vi.fn(async (_roomId: string, key: string) => key === "echo.student_approved"
+          ? echoSnapshot() : Promise.reject(new SessionGatewayError("ANALYTICS_NOT_READY"))),
+        getConceptTimeline: vi.fn(async (_roomId: string, _key: string, _query: unknown, options?: { signal?: AbortSignal }) => {
+          timelineSignal = options?.signal;
+          return await new Promise<never>((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+          });
+        }),
+      },
+    });
+    await hydrated.whenIdle();
+    const pending = hydrated.loadConceptTimeline("echo.student_approved");
+    await Promise.resolve();
+    hydrated.dispose();
+
+    expect(timelineSignal?.aborted).toBe(true);
+    await expect(pending).rejects.toThrow();
+    expect(hydrated.projections.references()).toEqual([]);
+  });
+
+  it("aborts only the matching Timeline request when a student projection is revoked", async () => {
+    let timelineSignal: AbortSignal | undefined;
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest: vi.fn(async (_roomId: string, key: string) => key === "echo.student_approved"
+          ? echoSnapshot() : traceSnapshot()),
+        getConceptTimeline: vi.fn(async (_roomId: string, _key: string, _query: unknown, options?: { signal?: AbortSignal }) => {
+          timelineSignal = options?.signal;
+          return await new Promise<never>((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+          });
+        }),
+      },
+    });
+    await hydrated.whenIdle();
+    const pending = hydrated.loadConceptTimeline("echo.student_approved");
+    await Promise.resolve();
+    hydrated.receiveFrame({
+      type: "degraded",
+      scope: "analytics",
+      code: "STUDENT_ANALYTICS_NOT_PROMOTED",
+      projectionKey: "echo.student_approved",
+      updatedAt: AT,
+    });
+
+    expect(timelineSignal?.aborted).toBe(true);
+    await expect(pending).rejects.toThrow();
+    expect(hydrated.projections.slot("echo.student_approved")).toEqual({ availability: "not_available_by_policy" });
+    expect(hydrated.projections.slot("trace.student_bundle").snapshot).toBeDefined();
+  });
+
+  it("clears only a targeted policy-revoked projection and ignores late hydration after dispose", async () => {
+    let resolveEcho!: (value: StudentConceptMapSnapshot) => void;
+    const pendingEcho = new Promise<StudentConceptMapSnapshot>((resolve) => { resolveEcho = resolve; });
+    const getProjectionLatest = vi.fn(async (_roomId: string, key: string) => key === "echo.student_approved"
+      ? await pendingEcho : traceSnapshot());
+    const hydrated = await HydratedSessionState.create({
+      session: student, room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })), getProjectionLatest },
+    });
+    hydrated.receiveFrame({
+      type: "degraded", scope: "analytics", code: "STUDENT_ANALYTICS_NOT_PROMOTED",
+      projectionKey: "echo.student_approved", updatedAt: AT,
+    });
+    expect(hydrated.projections.slot("echo.student_approved")).toEqual({ availability: "not_available_by_policy" });
+    await Promise.resolve();
+    expect(hydrated.projections.slot("trace.student_bundle")).toMatchObject({ availability: "ready" });
+    hydrated.dispose();
+    resolveEcho(echoSnapshot());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hydrated.projections.references()).toEqual([]);
+  });
+
+  it.each(["PROJECTION_FORBIDDEN", "RETENTION_POLICY_EXPIRED", "ROOM_DELETION_IN_PROGRESS"] as const)(
+    "removes a last-good projection when server authority is revoked with %s",
+    async (code) => {
+      let echoCalls = 0;
+      const hydrated = await HydratedSessionState.create({
+        session: student,
+        room,
+        gateway: {
+          getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+          getProjectionLatest: vi.fn(async (_roomId: string, key: string) => {
+            if (key === "trace.student_bundle") throw new SessionGatewayError("ANALYTICS_NOT_READY");
+            echoCalls += 1;
+            if (echoCalls === 1) return echoSnapshot();
+            throw new SessionGatewayError(code);
+          }),
+        },
+      });
+      await hydrated.whenIdle();
+      expect(hydrated.projections.slot("echo.student_approved").snapshot).toBeDefined();
+
+      await hydrated.refreshProjection("echo.student_approved");
+      expect(hydrated.projections.slot("echo.student_approved")).toEqual({ availability: "failed", errorCode: code });
+      expect(hydrated.sessionState.roomId).toBe(ROOM_ID);
+    },
+  );
+
   it("hydrates generated Agent current state and keeps endpoint unavailability explicit", async () => {
     const gateway = { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) };
     const hydrated = await HydratedSessionState.create({

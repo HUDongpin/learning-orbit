@@ -1,21 +1,71 @@
 /* generated; source is JSON Schema */
 
 export type AnalyticsHttpResponse = PatchPage | TimelineResponse | ResyncResponse;
-export type ConceptMapSnapshot = Common & {
+export type PatchPage = TeacherPatchPage | StudentPatchPage;
+export type TimelineResponse = TeacherTimelineResponse | StudentTimelineResponse;
+export type TeacherConceptMapSnapshot = Common & {
+  projectionKey: "echo.teacher_shadow";
+  displayStatus: "teacher_shadow";
   payload: {
-    nodes: ConceptNode[];
-    edges: ConceptEdge[];
+    nodes: TeacherConceptNode[];
+    edges: TeacherConceptEdge[];
+  };
+  [k: string]: unknown;
+};
+export type EmptyStudentConceptMapSnapshot = Common & {
+  projectionKey: "echo.student_approved";
+  reviewStatus: "unreviewed";
+  displayStatus: "student_approved";
+  payload: {
+    /**
+     * @maxItems 0
+     */
+    nodes: [];
+    /**
+     * @maxItems 0
+     */
+    edges: [];
+  };
+  [k: string]: unknown;
+};
+export type ApprovedStudentNodesConceptMapSnapshot = Common & {
+  projectionKey: "echo.student_approved";
+  reviewStatus: "approved";
+  displayStatus: "student_approved";
+  payload: {
+    /**
+     * @minItems 1
+     */
+    nodes: [StudentConceptNode, ...StudentConceptNode[]];
+    edges: StudentConceptEdge[];
+  };
+  [k: string]: unknown;
+};
+export type ApprovedStudentEdgesConceptMapSnapshot = Common & {
+  projectionKey: "echo.student_approved";
+  reviewStatus: "approved";
+  displayStatus: "student_approved";
+  payload: {
+    nodes: StudentConceptNode[];
+    /**
+     * @minItems 1
+     */
+    edges: [StudentConceptEdge, ...StudentConceptEdge[]];
   };
   [k: string]: unknown;
 };
 
-export interface PatchPage {
+export interface TeacherPatchPage {
+  schemaVersion: 1;
+  roomId: string;
+  projectionKey: "echo.teacher_shadow";
+  analysisEpoch: string;
   /**
    * @maxItems 200
    */
-  patches: ConceptMapPatch[];
+  patches: TeacherConceptMapPatch[];
 }
-export interface ConceptMapPatch {
+export interface TeacherConceptMapPatch {
   analysisEpoch: string;
   algorithmVersion: string;
   parameterHash: string;
@@ -24,18 +74,18 @@ export interface ConceptMapPatch {
   completeThroughRoomSeq: number;
   requiresReplay: boolean;
   warnings: string[];
-  nodesAdded: ConceptNode[];
-  nodesUpdated: ConceptNode[];
+  nodesAdded: TeacherConceptNode[];
+  nodesUpdated: TeacherConceptNode[];
   nodesHidden: string[];
-  edgesAdded: ConceptEdge[];
-  edgesUpdated: ConceptEdge[];
+  edgesAdded: TeacherConceptEdge[];
+  edgesUpdated: TeacherConceptEdge[];
   edgesHidden: string[];
   positionUpdates: PositionUpdate[];
   changeScore: number;
   reasonCodes: string[];
   evidenceRefs: EvidenceRef[];
 }
-export interface ConceptNode {
+export interface TeacherConceptNode {
   nodeId: string;
   label: string;
   nodeKind: "concept";
@@ -49,7 +99,7 @@ export interface Position {
   x: number;
   y: number;
 }
-export interface ConceptEdge {
+export interface TeacherConceptEdge {
   edgeId: string;
   head: string;
   predicate: string;
@@ -82,12 +132,66 @@ export interface PositionUpdate {
   x: number;
   y: number;
 }
-export interface TimelineResponse {
-  baseSnapshot: null | ConceptMapSnapshot;
+export interface StudentPatchPage {
+  schemaVersion: 1;
+  roomId: string;
+  projectionKey: "echo.student_approved";
+  analysisEpoch: string;
   /**
    * @maxItems 200
    */
-  patches: ConceptMapPatch[];
+  patches: StudentConceptMapPatch[];
+}
+export interface StudentConceptMapPatch {
+  analysisEpoch: string;
+  algorithmVersion: string;
+  parameterHash: string;
+  projectionVersion: number;
+  baseVersion: number;
+  completeThroughRoomSeq: number;
+  requiresReplay: boolean;
+  warnings: string[];
+  nodesAdded: StudentConceptNode[];
+  nodesUpdated: StudentConceptNode[];
+  nodesHidden: string[];
+  edgesAdded: StudentConceptEdge[];
+  edgesUpdated: StudentConceptEdge[];
+  edgesHidden: string[];
+  positionUpdates: PositionUpdate[];
+  changeScore: number;
+  reasonCodes: string[];
+}
+export interface StudentConceptNode {
+  nodeId: string;
+  label: string;
+  nodeKind: "concept";
+  evidenceStatus:
+    "supported" | "challenged" | "uncertain" | "disputed" | "retracted" | "superseded" | "requires_replay";
+  reviewStatus: "approved";
+  displayStatus: "confirmed" | "provisional" | "disputed" | "inactive";
+  position: Position;
+}
+export interface StudentConceptEdge {
+  edgeId: string;
+  head: string;
+  predicate: string;
+  tail: string;
+  relationFamily: string;
+  evidenceStatus:
+    "supported" | "challenged" | "uncertain" | "disputed" | "retracted" | "superseded" | "requires_replay";
+  reviewStatus: "approved";
+  displayStatus: "confirmed" | "provisional" | "disputed" | "inactive";
+}
+export interface TeacherTimelineResponse {
+  schemaVersion: 1;
+  roomId: string;
+  projectionKey: "echo.teacher_shadow";
+  analysisEpoch: string;
+  baseSnapshot: null | TeacherConceptMapSnapshot;
+  /**
+   * @maxItems 200
+   */
+  patches: TeacherConceptMapPatch[];
   truncatedBeforeVersion: null | number;
   headVersion: number;
 }
@@ -108,6 +212,24 @@ export interface Common {
   displayStatus: "hidden" | "teacher_shadow" | "student_approved";
   warnings: string[];
   [k: string]: unknown;
+}
+export interface StudentTimelineResponse {
+  schemaVersion: 1;
+  roomId: string;
+  projectionKey: "echo.student_approved";
+  analysisEpoch: string;
+  baseSnapshot:
+    | null
+    | (
+        | EmptyStudentConceptMapSnapshot
+        | (ApprovedStudentNodesConceptMapSnapshot | ApprovedStudentEdgesConceptMapSnapshot)
+      );
+  /**
+   * @maxItems 200
+   */
+  patches: StudentConceptMapPatch[];
+  truncatedBeforeVersion: null | number;
+  headVersion: number;
 }
 export interface ResyncResponse {
   code: "SNAPSHOT_RESYNC_REQUIRED";

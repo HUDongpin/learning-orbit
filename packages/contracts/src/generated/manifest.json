@@ -39,7 +39,7 @@
     {
       "file": "analytics-http.v1.json",
       "id": "https://learning-orbit.local/schemas/analytics-http.v1.json",
-      "sha256": "5228caa204a672bf47486b0a9069b39fc484e959aa0bca5d62a32aa315f71980"
+      "sha256": "30cef5d7f272b0ce38ee5f7cb4c6d5df7ea83a02fc22d66d24a9b578d083ded0"
     },
     {
       "file": "analytics-review-command.v1.json",
@@ -89,7 +89,7 @@
     {
       "file": "echo-concept-projection.v1.json",
       "id": "https://learning-orbit.local/schemas/echo-concept-projection.v1.json",
-      "sha256": "3d175a7b2fe7d8ae48f929f3cc17f7acc097e469140d79707fd55ba00e46aa14"
+      "sha256": "951eded83d646f3ceb1a5613aaca3899a0e9e9711d6bdea4222c6afa766260d3"
     },
     {
       "file": "media-attachment-view.v1.json",
@@ -159,7 +159,7 @@
     {
       "file": "trace-projection.v1.json",
       "id": "https://learning-orbit.local/schemas/trace-projection.v1.json",
-      "sha256": "3cd2a3292ac5ae5b2e2debeab20af6fd25497b4c24d26e10c2f54f4b0a21f1ce"
+      "sha256": "6a7a228643c469333b92d1c74d2eb1d6bdb65dfe349beb564c715ed7b4b3a198"
     }
   ],
   "generatedModules": [

@@ -10,15 +10,7 @@ export type TeacherBundle = Meta & {
       session_45m: TeacherWindow;
     };
     actorMapping: {
-      /**
-       * This interface was referenced by `undefined`'s JSON-Schema definition
-       * via the `patternProperty` "^[a-zA-Z0-9_-]{1,160}$".
-       */
-      [k: string]: {
-        actorId: string;
-        pseudonym: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D" | "Nova Agent" | "共學聊天室";
-        kind: "learner" | "agent" | "room";
-      };
+      [k: string]: TeacherActorMappingEntry;
     };
   };
   [k: string]: unknown;
@@ -48,6 +40,26 @@ export type EvidenceRef = {
   end: number | null;
   basis: "text_span" | "event_metadata";
 };
+/**
+ * This interface was referenced by `undefined`'s JSON-Schema definition
+ * via the `patternProperty` "^[a-zA-Z0-9_-]{1,160}$".
+ */
+export type TeacherActorMappingEntry =
+  | {
+      actorId: string;
+      pseudonym: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D";
+      kind: "learner";
+    }
+  | {
+      actorId: string;
+      pseudonym: "Nova Agent";
+      kind: "agent";
+    }
+  | {
+      roomId: string;
+      pseudonym: "共學聊天室";
+      kind: "room";
+    };
 export type StudentBundle = Meta & {
   projectionKey: "trace.student_bundle";
   reviewStatus: "approved";
@@ -99,7 +111,7 @@ export interface TeacherView {
 }
 export interface TeacherNode {
   nodeId: string;
-  label: string;
+  label: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D" | "Nova Agent" | "共學聊天室";
   kind: "learner" | "agent" | "room";
 }
 export interface TeacherEdge {
@@ -133,7 +145,7 @@ export interface HumanView {
 }
 export interface HumanNode {
   nodeId: string;
-  label: string;
+  label: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D";
   kind: "learner";
 }
 export interface HumanEdge {

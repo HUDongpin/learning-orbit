@@ -296,7 +296,7 @@ def _pseudonym_index(connection: Any, room_id: str) -> tuple[dict[str, dict[str,
         students[nova] = {"nodeId": scoped_node_id(key, room_id, "EPOCH_PLACEHOLDER", nova), "label": "Nova Agent", "kind": "agent"}
         students["ROOM"] = {"nodeId": scoped_node_id(key, room_id, "EPOCH_PLACEHOLDER", "ROOM"), "label": "共學聊天室", "kind": "room"}
         mapping[nova] = {"actorId": nova, "pseudonym": "Nova Agent", "kind": "agent"}
-        mapping["ROOM"] = {"actorId": nova, "pseudonym": "共學聊天室", "kind": "room"}
+        mapping["ROOM"] = {"roomId": room_id, "pseudonym": "共學聊天室", "kind": "room"}
     return students, mapping
 
 

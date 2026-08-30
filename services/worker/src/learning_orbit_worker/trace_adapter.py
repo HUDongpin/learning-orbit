@@ -27,21 +27,34 @@ def scoped_node_id(room_pseudonym_key: bytes, room_id: str, analysis_epoch: str,
     return "p-" + digest[:16]
 
 
-def _finite(value: Any, default: float = 0.0) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return default
-    return result if math.isfinite(result) else default
-
-
 def _metrics(snapshot: Mapping[str, Any]) -> dict[str, float]:
-    raw = snapshot.get("metrics", {})
+    raw = snapshot.get("metrics")
+    if not isinstance(raw, Mapping):
+        raise ValueError("INVALID_TRACE_METRICS")
+
+    def bounded(*names: str) -> float:
+        marker = object()
+        value: Any = marker
+        for name in names:
+            if name in raw:
+                value = raw[name]
+                break
+        if value is marker or isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("INVALID_TRACE_METRICS")
+        result = float(value)
+        if not math.isfinite(result) or not 0.0 <= result <= 1.0:
+            raise ValueError("INVALID_TRACE_METRICS")
+        return result
+
+    reciprocity = bounded("weightedReciprocity", "reciprocity")
+    if "weightedReciprocity" in raw and "reciprocity" in raw \
+            and reciprocity != bounded("reciprocity"):
+        raise ValueError("INVALID_TRACE_METRICS")
     return {
-        "participationBalance": min(1.0, max(0.0, _finite(raw.get("participationBalance"), 0.0))),
-        "reciprocity": min(1.0, max(0.0, _finite(raw.get("weightedReciprocity", raw.get("reciprocity")), 0.0))),
-        "agentShare": min(1.0, max(0.0, _finite(raw.get("agentShare"), 0.0))),
-        "semanticCoverage": min(1.0, max(0.0, _finite(raw.get("semanticCoverage"), 0.0))),
+        "participationBalance": bounded("participationBalance"),
+        "reciprocity": reciprocity,
+        "agentShare": bounded("agentShare"),
+        "semanticCoverage": bounded("semanticCoverage"),
     }
 
 
@@ -81,10 +94,24 @@ def _normalize_view(snapshot: Mapping[str, Any], view: str, evidence_index: Mapp
             evidence_refs.append({"eventId": str(source_ref["eventId"]), "start": start, "end": end, "basis": basis})
         if view == "lineage_adjusted" and not evidence_refs:
             continue
-        channels = {key: max(0.0, _finite(edge.get("channels", {}).get(key), 0.0)) for key in ("positive", "challenge", "uncertain")}
-        weight = max(0.0, _finite(edge.get("weight"), sum(channels.values())))
-        if weight <= 0:
-            continue
+        raw_channels = edge.get("channels")
+        if not isinstance(raw_channels, Mapping):
+            raise ValueError("INVALID_TRACE_EDGE")
+        channels: dict[str, float] = {}
+        for key in ("positive", "challenge", "uncertain"):
+            value = raw_channels.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("INVALID_TRACE_EDGE")
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric < 0:
+                raise ValueError("INVALID_TRACE_EDGE")
+            channels[key] = numeric
+        raw_weight = edge.get("weight")
+        if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
+            raise ValueError("INVALID_TRACE_EDGE")
+        weight = float(raw_weight)
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError("INVALID_TRACE_EDGE")
         # Always issue a room-scoped UUID.  Passing through an upstream string
         # would allow non-UUID IDs and could collide across projection views.
         edges.append({"edgeId": trace_wire_edge_id(room_id, edge), "sourceId": src, "targetId": dst, "layer": layer, "channels": channels, "weight": weight, "evidenceRefs": evidence_refs})
@@ -122,6 +149,9 @@ def _single(reference: Mapping[str, Any], window_name: str, metadata: Mapping[st
     views = {name: _normalize_view(reference, name, evidence_index, str(metadata["roomId"])) for name in ("observed", "human_only", "lineage_adjusted")}
     validate_internal_views(views)
     teacher_views, student_views = {}, {}
+    teacher_actor_mapping = metadata.get("teacherActorMapping")
+    if not isinstance(teacher_actor_mapping, Mapping):
+        raise ValueError("INVALID_TRACE_ACTOR_MAPPING")
     for name, internal in views.items():
         warnings = list(internal["warnings"])
         if window_name == "recent_10m" and "recent_group_interaction_only" not in warnings:
@@ -131,7 +161,18 @@ def _single(reference: Mapping[str, Any], window_name: str, metadata: Mapping[st
         teacher_nodes = []
         for node in internal["nodes"]:
             actor = node.get("actorKind", node.get("kind", "human"))
-            teacher_nodes.append({"nodeId": node["nodeId"], "label": node.get("label", node["nodeId"]), "kind": "learner" if actor in {"human", "learner"} else actor})
+            node_id = node.get("nodeId")
+            mapping = teacher_actor_mapping.get(node_id) if isinstance(node_id, str) else None
+            expected_kind = "learner" if actor in {"human", "learner"} else actor
+            if not isinstance(mapping, Mapping) or mapping.get("kind") != expected_kind \
+                    or not isinstance(mapping.get("pseudonym"), str) \
+                    or not 1 <= len(mapping["pseudonym"]) <= 160:
+                raise ValueError("INVALID_TRACE_ACTOR_MAPPING")
+            teacher_nodes.append({
+                "nodeId": node_id,
+                "label": mapping["pseudonym"],
+                "kind": expected_kind,
+            })
         teacher_views[name] = {"nodes": teacher_nodes, "edges": internal["edges"], "metrics": internal["metrics"], "warnings": warnings}
         # The student branch is intentionally narrower than the teacher
         # observed view.  A teacher may inspect the virtual ROOM and Nova
@@ -182,7 +223,18 @@ def project_trace(reference_snapshots: Mapping[str, Mapping[str, Any]], window_b
     common = {"schemaVersion": 1, "roomId": metadata["roomId"], "analysisEpoch": metadata["analysisEpoch"], "algorithmVersion": metadata["algorithmVersion"], "parameterHash": metadata["parameterHash"], "projectionVersion": metadata["projectionVersion"], "baseVersion": metadata.get("baseVersion", 0), "completeThroughRoomSeq": metadata.get("completeThroughRoomSeq", 0), "watermarkEventTime": metadata["watermarkEventTime"], "requiresReplay": bool(metadata.get("requiresReplay", False)), "evidenceStatus": "requires_replay" if metadata.get("requiresReplay") else "active"}
     actor_mapping = {}
     for actor_id, value in (metadata.get("teacherActorMapping", metadata.get("actorMapping", {})) or {}).items():
-        actor_mapping[str(actor_id)] = {"actorId": str(value["actorId"]), "pseudonym": str(value["pseudonym"]), "kind": str(value["kind"])}
+        if value.get("kind") == "room":
+            actor_mapping[str(actor_id)] = {
+                "roomId": str(value["roomId"]),
+                "pseudonym": str(value["pseudonym"]),
+                "kind": "room",
+            }
+        else:
+            actor_mapping[str(actor_id)] = {
+                "actorId": str(value["actorId"]),
+                "pseudonym": str(value["pseudonym"]),
+                "kind": str(value["kind"]),
+            }
     teacher = {**common, "projectionKey": "trace.teacher_bundle", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow", "warnings": list(metadata.get("warnings", ())), "payload": {"windows": teacher_windows, "actorMapping": actor_mapping}}
     student_warnings = [w for w in metadata.get("warnings", ()) if w in STUDENT_WARNINGS]
     if human_count < 5 and "small_group_interpretation_warning" not in student_warnings:
