@@ -35,9 +35,13 @@ ajv.addSchema(envelopeSchema);
 const envelopeValidator = ajv.getSchema(envelopeSchema.$id) as ValidateFunction<RoomEventEnvelope>;
 if (!envelopeValidator) throw new Error("ROOM_EVENT_SCHEMA_REGISTRATION_FAILED");
 
-export function parseCoreRoomEvent(input: unknown): CoreRoomEvent | null {
+export function parseRoomEventEnvelope(input: unknown): RoomEventEnvelope {
   if (!envelopeValidator(input)) throw new Error("INVALID_ROOM_EVENT");
-  const envelope = input as RoomEventEnvelope;
+  return input;
+}
+
+export function parseCoreRoomEvent(input: unknown): CoreRoomEvent | null {
+  const envelope = parseRoomEventEnvelope(input);
   if (!coreTypeSet.has(envelope.type)) return null;
   corePayloads.assert(envelope.type, envelope.payload);
   return envelope as unknown as CoreRoomEvent;

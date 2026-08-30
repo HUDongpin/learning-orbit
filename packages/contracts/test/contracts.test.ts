@@ -4,7 +4,12 @@ import envelopeSchema from "../schemas/room-event-envelope.v1.json" with { type:
 import httpSchema from "../schemas/room-http.v1.json" with { type: "json" };
 import realtimeSchema from "../schemas/realtime-frame.v1.json" with { type: "json" };
 import { makeSchemaAjv } from "../src/schema-ajv.js";
-import { realtimeContract, routes } from "../src/index.js";
+import {
+  parseCoreRoomEvent,
+  parseRoomEventEnvelope,
+  realtimeContract,
+  routes,
+} from "../src/index.js";
 
 const uuid = "11111111-1111-4111-8111-111111111111";
 const laterUuid = "22222222-2222-4222-8222-222222222222";
@@ -64,6 +69,23 @@ describe("strict schema compilation and command behavior", () => {
 });
 
 describe("envelope, HTTP catalog, and realtime behavior", () => {
+  it("parses strict extension envelopes without pretending they are core events", () => {
+    const extension = {
+      ...event("human", "teacher", { changeKind: "review" }),
+      type: "analytics.review.recorded.v1",
+    };
+
+    expect(parseRoomEventEnvelope(extension)).toEqual(extension);
+    expect(parseCoreRoomEvent(extension)).toBeNull();
+    expect(() => parseRoomEventEnvelope({
+      ...extension,
+      actorKind: "agent",
+      actorRole: "teacher",
+    })).toThrow("INVALID_ROOM_EVENT");
+    expect(() => parseRoomEventEnvelope({ ...extension, extra: true }))
+      .toThrow("INVALID_ROOM_EVENT");
+  });
+
   it("enforces event grammar, metadata bounds, and every legal actor pairing", () => {
     const validate = ajvWithRoomSchemas().getSchema(envelopeSchema.$id)!;
     for (const [kind, role] of [["human", "teacher"], ["human", "student"], ["agent", "socratic_facilitator"], ["system", "room_clock"], ["system", "system_worker"]]) {

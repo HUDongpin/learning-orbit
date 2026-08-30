@@ -1,5 +1,5 @@
 export { EventPayloadRegistry, createCoreEventPayloadRegistry } from "./event-payload-registry.js";
-export { parseCoreRoomEvent } from "./core-room-event.js";
+export { parseCoreRoomEvent, parseRoomEventEnvelope } from "./core-room-event.js";
 export type { CoreRoomEvent } from "./core-room-event.js";
 export { routes } from "./routes.js";
 export { realtimeContract } from "./realtime.js";
