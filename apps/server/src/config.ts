@@ -5,6 +5,7 @@ export interface ServerConfig {
   databaseUrl?: string | undefined;
   publicBaseOrigin: string;
   allowedOrigins: readonly string[];
+  storageBrowserOrigins: readonly string[];
   trustedProxyCidrs: readonly string[];
   trustProxy: false | readonly string[];
   smtpHost?: string | undefined;
@@ -26,6 +27,16 @@ function origin(value: string, code: string): string {
     if (parsed.origin !== value || !["http:", "https:"].includes(parsed.protocol)) throw new Error();
     return parsed.origin;
   } catch { throw new Error(code); }
+}
+
+function storageBrowserOrigin(value: string): string {
+  try {
+    const parsed = new URL(value);
+    const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "[::1]";
+    if (parsed.origin !== value || parsed.username || parsed.password
+      || (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback))) throw new Error();
+    return parsed.origin;
+  } catch { throw new Error("LO_STORAGE_BROWSER_ORIGINS_INVALID"); }
 }
 
 function cidr(value: string): string {
@@ -92,6 +103,7 @@ export function loadServerConfig(env = process.env): ServerConfig {
   const publicBaseOrigin = origin(env.LO_PUBLIC_BASE_ORIGIN ?? "", "LO_PUBLIC_BASE_ORIGIN_REQUIRED");
   const allowedOrigins = csv(env, "LO_ALLOWED_ORIGINS").map((value) => origin(value, "LO_ALLOWED_ORIGINS_INVALID"));
   if (!allowedOrigins.length) throw new Error("LO_ALLOWED_ORIGINS_REQUIRED");
+  const storageBrowserOrigins = csv(env, "LO_STORAGE_BROWSER_ORIGINS").map(storageBrowserOrigin);
   const trustedProxyCidrs = csv(env, "LO_TRUSTED_PROXY_CIDRS").map(cidr);
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL_REQUIRED");
@@ -104,7 +116,7 @@ export function loadServerConfig(env = process.env): ServerConfig {
   const workerAssertionPrivateKeyFile = externalPath(env.LO_WORKER_ASSERTION_PRIVATE_KEY_FILE, "LO_WORKER_ASSERTION_PRIVATE_KEY_FILE_INVALID");
   const pepperConfig = roomCodePepperConfig(env);
   return {
-    databaseUrl, publicBaseOrigin, allowedOrigins, trustedProxyCidrs,
+    databaseUrl, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs,
     trustProxy: trustedProxyCidrs.length ? trustedProxyCidrs : false,
     smtpHost, smtpPort, smtpFrom, serviceAssertionTrustFile, workerAssertionPrivateKeyFile,
     ...pepperConfig,
@@ -113,8 +125,9 @@ export function loadServerConfig(env = process.env): ServerConfig {
 
 export function testServerConfig(override: Partial<ServerConfig> = {}): ServerConfig {
   const allowedOrigins = override.allowedOrigins ?? ["https://app.learning-orbit.test"];
+  const storageBrowserOrigins = override.storageBrowserOrigins ?? [];
   const publicBaseOrigin = override.publicBaseOrigin ?? allowedOrigins[0]!;
   const trustedProxyCidrs = override.trustedProxyCidrs ?? [];
   const trustProxy = override.trustProxy ?? (trustedProxyCidrs.length ? trustedProxyCidrs : false);
-  return { ...override, publicBaseOrigin, allowedOrigins, trustedProxyCidrs, trustProxy };
+  return { ...override, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs, trustProxy };
 }

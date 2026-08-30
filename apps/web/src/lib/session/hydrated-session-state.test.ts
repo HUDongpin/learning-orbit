@@ -201,7 +201,7 @@ describe("HydratedSessionState", () => {
     expect(hydrated.acks.get(commandId)?.revision).toBe(1);
     expect(hydrated.presence.get(actorId)?.state).toBe("active");
     expect(hydrated.typing.get(actorId)?.active).toBe(true);
-    expect(hydrated.mediaStatuses.get("00000000-0000-4000-8000-000000000701")?.state).toBe("processing");
+    expect(hydrated.mediaStatuses.has("00000000-0000-4000-8000-000000000701")).toBe(false);
     expect(hydrated.agentStatus?.serviceHealth).toBe("unavailable");
     expect(hydrated.projections.current("echo.student_approved")?.projectionVersion).toBe(1);
     expect(hydrated.degraded.get("media")?.code).toBe("PROVIDER_UNAVAILABLE");
@@ -209,6 +209,78 @@ describe("HydratedSessionState", () => {
     hydrated.socket.onClose(4400);
     expect(hydrated.recoveryError).toBe("REALTIME_PROTOCOL_ERROR");
     expect(hydrated.ledger.lastRoomSeq).toBe(0);
+  });
+
+  it("bounds media status to server-confirmed active message attachments and prunes it on retract", async () => {
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+    });
+    for (let index = 0; index < 1_000; index += 1) {
+      hydrated.receiveFrame({
+        type: "media_status",
+        mediaId: `00000000-0000-4000-8007-${String(index).padStart(12, "0")}`,
+        state: "processing",
+        failureCode: null,
+        updatedAt: AT,
+      });
+    }
+    expect(hydrated.mediaStatuses.size).toBe(0);
+    expect(hydrated.ledger.lastRoomSeq).toBe(0);
+
+    const mediaId = "00000000-0000-4000-8000-000000000701";
+    const equalTimestampMediaId = "00000000-0000-4000-8000-000000000702";
+    const added = {
+      ...event(1),
+      payload: { ...(event(1).payload as Record<string, unknown>), mediaIds: [mediaId, equalTimestampMediaId] },
+    } as RoomEventEnvelope;
+    hydrated.receiveFrame({ type: "event", event: added });
+    hydrated.receiveFrame({ type: "media_status", mediaId, state: "processing", failureCode: null, updatedAt: AT });
+    hydrated.receiveFrame({
+      type: "media_status",
+      mediaId: "00000000-0000-4000-8000-000000000799",
+      state: "ready",
+      failureCode: null,
+      updatedAt: AT,
+    });
+    expect([...hydrated.mediaStatuses.keys()]).toEqual([mediaId]);
+
+    hydrated.receiveFrame({
+      type: "media_status", mediaId, state: "quarantined", failureCode: "POLICY",
+      updatedAt: "2026-08-30T09:02:00.000Z",
+    });
+    hydrated.receiveFrame({
+      type: "media_status", mediaId, state: "ready", failureCode: null,
+      updatedAt: "2026-08-30T09:01:00.000Z",
+    });
+    hydrated.receiveFrame({
+      type: "media_status", mediaId, state: "processing", failureCode: null,
+      updatedAt: "2026-08-30T09:02:00.000Z",
+    });
+    expect(hydrated.mediaStatuses.get(mediaId)).toMatchObject({ state: "quarantined", failureCode: "POLICY" });
+    hydrated.receiveFrame({
+      type: "media_status", mediaId: equalTimestampMediaId, state: "ready", failureCode: null,
+      updatedAt: "2026-08-30T09:03:00.000Z",
+    });
+    hydrated.receiveFrame({
+      type: "media_status", mediaId: equalTimestampMediaId, state: "quarantined", failureCode: "POLICY",
+      updatedAt: "2026-08-30T09:03:00.000Z",
+    });
+    expect(hydrated.mediaStatuses.get(equalTimestampMediaId)).toMatchObject({ state: "quarantined", failureCode: "POLICY" });
+
+    hydrated.receiveFrame({
+      type: "event",
+      event: {
+        ...event(2),
+        type: "message.retracted",
+        revision: 2,
+        operation: "retract",
+        payload: { messageId: (added.payload as { messageId: string }).messageId },
+      },
+    });
+    expect(hydrated.mediaStatuses.size).toBe(0);
+    expect(hydrated.ledger.lastRoomSeq).toBe(2);
   });
 
   it("fails closed on a malformed page sequence and clears all state on session expiry", async () => {

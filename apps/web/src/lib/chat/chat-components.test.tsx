@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AuthSession, RoomDetails } from "@learning-orbit/contracts";
+import type { AuthSession, RoomDetails, ServerFrame } from "@learning-orbit/contracts";
 import type { LedgerMessage } from "../session/event-ledger.js";
 import { ChatPanel } from "./chat-panel.js";
 import { Composer } from "./composer.js";
@@ -15,6 +15,7 @@ const STUDENT_ACTOR = "00000000-0000-4000-8000-000000000012";
 const OTHER_ACTOR = "00000000-0000-4000-8000-000000000014";
 const NOVA_ACTOR = "00000000-0000-4000-8000-000000000013";
 const MESSAGE_ID = "00000000-0000-4000-8000-000000000501";
+type RejectFrameView = Pick<Extract<ServerFrame, { type: "reject" }>, "code" | "commandId" | "retryable">;
 
 const student: Extract<AuthSession, { role: "student" }> = {
   role: "student",
@@ -218,7 +219,7 @@ describe("event-backed chat components", () => {
     const oldId = "00000000-0000-4000-8000-000000000209";
     const nextId = "00000000-0000-4000-8000-000000000210";
     const acks = new Map<string, unknown>();
-    const rejects: Array<{ commandId: string; code: string }> = [{ commandId: oldId, code: "ROOM_NOT_OPEN" }];
+    const rejects: RejectFrameView[] = [{ commandId: oldId, code: "ROOM_NOT_OPEN", retryable: false }];
     const runtime = {
       session: student,
       room,
@@ -239,6 +240,145 @@ describe("event-backed chat components", () => {
     acks.set(nextId, { commandId: nextId });
     rerender(<ChatPanel runtime={runtime} />);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("sends a server-completed media-only message and clears that exact draft on ACK", async () => {
+    const commandId = "00000000-0000-4000-8000-000000000211";
+    const mediaId = "00000000-0000-4000-8000-000000000701";
+    const acks = new Map<string, unknown>();
+    const runtime = {
+      session: student,
+      room,
+      sessionState: { status: "open" as const, connected: true },
+      messages: () => [],
+      pendingCommandIds: () => [commandId],
+      rejects: [],
+      sendIntent: vi.fn(() => commandId),
+      acks,
+    };
+    const mediaGateway = {
+      createMediaUpload: vi.fn(), completeMediaUpload: vi.fn(), getMedia: vi.fn(), getMediaDownloadGrant: vi.fn(),
+    };
+    const props = {
+      runtime,
+      mediaGateway,
+      allowedUploadOrigins: ["https://storage.learning-orbit.test"],
+      mediaUpload: vi.fn(async () => ({ mediaId, state: "processing" as const })),
+      mediaObjectUrls: { create: () => "blob:audio", revoke: vi.fn() },
+    };
+    const { rerender } = render(<ChatPanel {...props} />);
+    await userEvent.upload(screen.getByLabelText("本地媒體檔案"), new File(["abc"], "note.webm", { type: "audio/webm" }));
+    await userEvent.click(screen.getByRole("button", { name: "上傳並由伺服器確認" }));
+    expect(await screen.findByText(/1 個媒體項目已通過 Complete/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上傳並由伺服器確認" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "發送訊息" }));
+    expect(runtime.sendIntent).toHaveBeenCalledWith({ type: "message.add", text: "", replyTo: null, mentions: [], mediaIds: [mediaId] });
+    await waitFor(() => expect(props.mediaObjectUrls.revoke).toHaveBeenCalledWith("blob:audio"));
+    acks.set(commandId, { commandId });
+    rerender(<ChatPanel {...props} />);
+    await waitFor(() => expect(screen.queryByText(/1 個媒體項目已通過 Complete/)).not.toBeInTheDocument());
+  });
+
+  it("keeps concurrent media submissions correlated across late ACK and Reject ordering", async () => {
+    const firstCommandId = "00000000-0000-4000-8000-000000000211";
+    const secondCommandId = "00000000-0000-4000-8000-000000000212";
+    const retryCommandId = "00000000-0000-4000-8000-000000000213";
+    const firstMediaId = "00000000-0000-4000-8000-000000000701";
+    const secondMediaId = "00000000-0000-4000-8000-000000000702";
+    const acks = new Map<string, unknown>();
+    const rejects: RejectFrameView[] = [];
+    const runtime = {
+      session: student,
+      room,
+      sessionState: { status: "open" as const, connected: true },
+      messages: () => [],
+      pendingCommandIds: () => [],
+      rejects,
+      sendIntent: vi.fn()
+        .mockReturnValueOnce(firstCommandId)
+        .mockReturnValueOnce(secondCommandId)
+        .mockReturnValueOnce(retryCommandId),
+      acks,
+    };
+    const mediaGateway = {
+      createMediaUpload: vi.fn(), completeMediaUpload: vi.fn(), getMedia: vi.fn(), getMediaDownloadGrant: vi.fn(),
+    };
+    const upload = vi.fn()
+      .mockResolvedValueOnce({ mediaId: firstMediaId, state: "processing" as const })
+      .mockResolvedValueOnce({ mediaId: secondMediaId, state: "processing" as const });
+    const props = {
+      runtime,
+      mediaGateway,
+      allowedUploadOrigins: ["https://storage.learning-orbit.test"],
+      mediaUpload: upload,
+      mediaObjectUrls: { create: vi.fn(() => "blob:local"), revoke: vi.fn() },
+    };
+    const rendered = render(<ChatPanel {...props} />);
+
+    await userEvent.upload(screen.getByLabelText("本地媒體檔案"), new File(["one"], "one.webm", { type: "audio/webm" }));
+    await userEvent.click(screen.getByRole("button", { name: "上傳並由伺服器確認" }));
+    await userEvent.click(await screen.findByRole("button", { name: "發送訊息" }));
+    await waitFor(() => expect(screen.queryByText("本地音訊預覽；沒有產生或顯示轉寫。")).not.toBeInTheDocument());
+
+    await userEvent.upload(screen.getByLabelText("本地媒體檔案"), new File(["two"], "two.webm", { type: "audio/webm" }));
+    await userEvent.click(screen.getByRole("button", { name: "上傳並由伺服器確認" }));
+    await userEvent.click(await screen.findByRole("button", { name: "發送訊息" }));
+    expect(runtime.sendIntent).toHaveBeenNthCalledWith(1, expect.objectContaining({ mediaIds: [firstMediaId] }));
+    expect(runtime.sendIntent).toHaveBeenNthCalledWith(2, expect.objectContaining({ mediaIds: [secondMediaId] }));
+
+    rejects.push({ commandId: secondCommandId, code: "INTERNAL", retryable: true });
+    rendered.rerender(<ChatPanel {...props} />);
+    expect(await screen.findByText(/原指令與媒體仍鎖定/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 個媒體項目已通過 Complete/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "發送訊息" })).toBeDisabled();
+
+    acks.set(firstCommandId, { commandId: firstCommandId });
+    rendered.rerender(<ChatPanel {...props} />);
+    rejects.push({ commandId: secondCommandId, code: "INVALID_COMMAND" });
+    rendered.rerender(<ChatPanel {...props} />);
+    await waitFor(() => expect(screen.getByText(/1 個媒體項目已通過 Complete/)).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "發送訊息" }));
+    expect(runtime.sendIntent).toHaveBeenNthCalledWith(3, expect.objectContaining({ mediaIds: [secondMediaId] }));
+    expect(runtime.sendIntent).not.toHaveBeenNthCalledWith(3, expect.objectContaining({ mediaIds: [firstMediaId] }));
+  });
+
+  it("hydrates only server-confirmed message media and never exposes the media identifier", async () => {
+    const mediaId = "00000000-0000-4000-8000-000000000701";
+    const message = { ...ownMessage, mediaIds: [mediaId] };
+    const mediaGateway = {
+      createMediaUpload: vi.fn(),
+      completeMediaUpload: vi.fn(),
+      getMedia: vi.fn(async () => ({
+        mediaId,
+        kind: "audio" as const,
+        state: "processing" as const,
+        detectedMime: null,
+        sizeBytes: 3,
+        altText: null,
+        caption: "水聲觀察",
+        failureCode: null,
+        createdAt: "2026-08-31T01:05:00.000Z",
+        updatedAt: "2026-08-31T01:05:00.000Z",
+      })),
+      getMediaDownloadGrant: vi.fn(),
+    };
+    const runtime = {
+      session: student,
+      room,
+      sessionState: { status: "open" as const, connected: true },
+      messages: () => [message],
+      pendingCommandIds: () => [],
+      rejects: [],
+      sendIntent: vi.fn(),
+      acks: new Map(),
+      mediaStatuses: new Map(),
+    };
+    render(<ChatPanel runtime={runtime} mediaGateway={mediaGateway} allowedUploadOrigins={["https://storage.learning-orbit.test"]} />);
+    expect(await screen.findByText("水聲觀察")).toBeInTheDocument();
+    expect(screen.getByText(/仍在伺服器處理中/)).toBeInTheDocument();
+    expect(mediaGateway.getMedia).toHaveBeenCalledWith(ROOM_ID, mediaId);
+    expect(mediaGateway.getMediaDownloadGrant).not.toHaveBeenCalled();
+    expect(document.body.innerHTML).not.toContain(mediaId);
   });
 
   it("lets a teacher retract but never revise student text and renders no composer", () => {

@@ -22,8 +22,9 @@ import {
   uploadExpiryDecision,
 } from "./media-upload-expiry.js";
 import { MediaError } from "./media-errors.js";
-import type { MediaKind, MediaState, MediaAssetRecord } from "./media-asset-record.js";
-import { MediaRepository, type LockedMedia, type UploadGrantRow } from "./media-repository.js";
+import { serializeMediaAttachment, type MediaKind, type MediaState, type MediaAssetRecord } from "./media-asset-record.js";
+import { safeDerivativeObjectKey } from "./media-object-keys.js";
+import { MediaRepository, type LockedMedia, type SafeMediaDerivative, type UploadGrantRow } from "./media-repository.js";
 import type { MediaStore, StoreCallControl } from "./media-store.js";
 import { hexSha256ToBase64 } from "./media-store.js";
 import type { RoomWriteGate } from "./room-write-gate.js";
@@ -32,6 +33,8 @@ import { DatabaseRoomWriteGate } from "./room-write-gate.js";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+const IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/webp"]);
+const AUDIO_MIME = new Set(["audio/webm", "audio/mpeg", "audio/mp4", "audio/wav", "audio/ogg"]);
 const SIGNATURE_TTL_MS = 300_000;
 const DEFAULT_MAX_UPLOAD_MS = 120_000;
 const DEFAULT_MAX_PRESIGN_MS = 5_000;
@@ -100,6 +103,19 @@ export interface MediaDeps {
 
 function resolvedConfig(deps: MediaDeps): MediaServiceConfig {
   return Object.freeze({ ...defaultConfig, ...(deps.config ?? {}) });
+}
+
+export function validateStorageBrowserUrl(value: string, allowedOrigins: readonly string[]): string {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new MediaError("STORAGE_ORIGIN_NOT_ALLOWED", 502); }
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.username || url.password
+    || (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    || !allowedOrigins.includes(url.origin)) {
+    throw new MediaError("STORAGE_ORIGIN_NOT_ALLOWED", 502);
+  }
+  return value;
 }
 
 function resolvedRepo(deps: MediaDeps): MediaRepository {
@@ -280,6 +296,7 @@ function normalizedUploadBody(value: unknown): {
   const caption = parsed.caption;
   if (kind !== "image" && kind !== "audio") throw new MediaError("INVALID_MEDIA_COMMAND", 400);
   if (typeof originalFileName !== "string" || typeof mime !== "string" || typeof sha256 !== "string" || typeof sizeBytes !== "number") throw new MediaError("INVALID_MEDIA_COMMAND", 400);
+  if (!(kind === "image" ? IMAGE_MIME : AUDIO_MIME).has(mime)) throw new MediaError("INVALID_MEDIA_COMMAND", 400);
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1 || sizeBytes > (kind === "image" ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES)) throw new MediaError("SIZE_OUT_OF_RANGE", 422);
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new MediaError("INVALID_MEDIA_COMMAND", 400);
   if (kind === "image" && (typeof altText !== "string" || altText.trim().length === 0)) throw new MediaError("ALT_REQUIRED", 422);
@@ -316,9 +333,9 @@ export async function createUploadGrant(deps: MediaDeps, request: UploadRequest 
         await lockRoomInTransaction(client, roomId);
         const room = await client.query<{ status: string; closes_at: Date | null }>("SELECT status, closes_at FROM classroom_room WHERE room_id = $1 FOR UPDATE", [roomId]);
         const closesAt = room.rows[0]?.closes_at;
-        if (!room.rows[0] || !["open", "paused"].includes(room.rows[0].status)
+        if (!room.rows[0] || room.rows[0].status !== "open"
           || (closesAt instanceof Date && Number.isFinite(closesAt.getTime()) && closesAt.getTime() <= now(clock).getTime())) {
-          throw new MediaError("ROOM_DELETION_IN_PROGRESS", 409);
+          throw new MediaError(room.rows[0] ? "ROOM_NOT_OPEN" : "ROOM_DELETION_IN_PROGRESS", 409);
         }
         await writeGate.assertWritable(client, roomId);
         return repo.insertPendingAssetAndIssuingGrant(client, {
@@ -339,9 +356,7 @@ export async function createUploadGrant(deps: MediaDeps, request: UploadRequest 
         expiresSeconds: SIGNATURE_TTL_MS / 1_000,
       }, makeControl(clock, config.maxPresignMs));
       if (signed.requiredHeaders["x-amz-checksum-sha256"] !== hexSha256ToBase64(body.sha256)) throw new MediaError("STORAGE_CHECKSUM_BINDING_MISMATCH", 502);
-      let origin: string;
-      try { origin = new URL(signed.url).origin; } catch { throw new MediaError("STORAGE_ORIGIN_NOT_ALLOWED", 502); }
-      if (!config.storageBrowserOrigins.includes(origin)) throw new MediaError("STORAGE_ORIGIN_NOT_ALLOWED", 502);
+      validateStorageBrowserUrl(signed.url, config.storageBrowserOrigins);
       assertExactSignedWindow(signed, SIGNATURE_TTL_MS / 1_000, issuing.grant.reservedAt, config.maxPresignMs, config.maxSignerDbClockSkewMs);
 
       const activated = await transaction(client, async () => {
@@ -386,9 +401,9 @@ export async function finalizeUpload(deps: MediaDeps, input: FinalizeInput): Pro
       await writeGate.assertWritable(client, input.roomId);
       const room = await client.query<{ status: string; closes_at: Date | null }>("SELECT status, closes_at FROM classroom_room WHERE room_id = $1 FOR UPDATE", [input.roomId]);
       const closesAt = room.rows[0]?.closes_at;
-      if (!room.rows[0] || !["open", "paused"].includes(room.rows[0].status)
+      if (!room.rows[0] || room.rows[0].status !== "open"
         || (closesAt instanceof Date && Number.isFinite(closesAt.getTime()) && closesAt.getTime() <= now(clock).getTime())) {
-        throw new MediaError("ROOM_DELETION_IN_PROGRESS", 409);
+        throw new MediaError(room.rows[0] ? "ROOM_NOT_OPEN" : "ROOM_DELETION_IN_PROGRESS", 409);
       }
       locked = await repo.lockOwnedMediaAndGrant(client, input.mediaId, input.roomId, member.actorId);
     });
@@ -459,7 +474,15 @@ export async function getMediaAttachment(
 ): Promise<MediaAttachmentView | null> {
   await requireRoomMember(deps, input);
   if (!UUID.test(input.mediaId)) return null;
-  return resolvedRepo(deps).getPublicMedia(input.mediaId, input.roomId);
+  const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId);
+  if (!record) return null;
+  if (record.state !== "ready") return serializeMediaAttachment(record);
+  const derivative = await verifiedSafeDerivative(deps, record, resolvedConfig(deps));
+  return serializeMediaAttachment({
+    ...record,
+    detectedMime: derivative.mime,
+    sizeBytes: derivative.sizeBytes,
+  });
 }
 
 export async function createDownloadGrant(
@@ -471,9 +494,57 @@ export async function createDownloadGrant(
   const config = resolvedConfig(deps);
   const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId);
   if (!record) throw new MediaError("MEDIA_NOT_FOUND", 404);
-  if (record.state !== "ready" || !record.objectKey) throw new MediaError("MEDIA_NOT_READY", 409);
-  const url = await deps.store.createDownloadUrl({ objectKey: record.objectKey, expiresSeconds: config.storeDownloadTtlSeconds }, makeControl(deps.clock ?? systemClock, config.storeHeadTimeoutMs));
-  return mediaCommandContract.parseDownloadGrant({ downloadUrl: url, expiresAt: new Date(now(deps.clock ?? systemClock).getTime() + config.storeDownloadTtlSeconds * 1_000).toISOString() });
+  if (record.state !== "ready") throw new MediaError("MEDIA_NOT_READY", 409);
+  const derivative = await verifiedSafeDerivative(deps, record, config);
+  const clock = deps.clock ?? systemClock;
+  const requestedAt = now(clock);
+  const signed = await deps.store.createDownloadUrl(
+      { objectKey: derivative.objectKey, expiresSeconds: config.storeDownloadTtlSeconds },
+      makeControl(clock, config.maxPresignMs),
+    );
+  assertExactSignedWindow(
+    signed,
+    config.storeDownloadTtlSeconds,
+    requestedAt,
+    config.maxPresignMs,
+    config.maxSignerDbClockSkewMs,
+  );
+  const url = validateStorageBrowserUrl(signed.url, config.storageBrowserOrigins);
+  return mediaCommandContract.parseDownloadGrant({ downloadUrl: url, expiresAt: signed.expiresAt.toISOString() });
+}
+
+function assertSafeDerivative(record: MediaAssetRecord, derivative: SafeMediaDerivative): void {
+  const expectedKind = record.kind === "image" ? "sanitized_image" : "playback_audio";
+  const expectedKey = safeDerivativeObjectKey(record.roomId, record.mediaId, expectedKind);
+  const mimeAllowed = record.kind === "image" ? IMAGE_MIME.has(derivative.mime) : AUDIO_MIME.has(derivative.mime);
+  const maxBytes = record.kind === "image" ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
+  if (derivative.mediaId !== record.mediaId || derivative.roomId !== record.roomId
+    || derivative.kind !== expectedKind || derivative.objectKey !== expectedKey
+    || !mimeAllowed || !Number.isSafeInteger(derivative.sizeBytes)
+    || derivative.sizeBytes < 1 || derivative.sizeBytes > maxBytes
+    || !/^[a-f0-9]{64}$/u.test(derivative.sha256)) {
+    throw new MediaError("INVALID_MEDIA_STATE", 500);
+  }
+}
+
+async function verifiedSafeDerivative(
+  deps: MediaDeps,
+  record: MediaAssetRecord,
+  config: MediaServiceConfig,
+): Promise<SafeMediaDerivative> {
+  assertCapabilities(deps.store, config);
+  const derivative = await resolvedRepo(deps).getSafeDerivative(record.mediaId, record.roomId, record.kind);
+  if (!derivative) throw new MediaError("MEDIA_NOT_READY", 409);
+  assertSafeDerivative(record, derivative);
+  const stored = await deps.store.stat(
+    derivative.objectKey,
+    makeControl(deps.clock ?? systemClock, config.storeHeadTimeoutMs),
+  );
+  if (stored.objectKey !== derivative.objectKey || stored.sizeBytes !== derivative.sizeBytes
+    || stored.sha256 !== derivative.sha256 || stored.detectedMime !== derivative.mime) {
+    throw new MediaError("STORAGE_DERIVATIVE_IDENTITY_MISMATCH", 503);
+  }
+  return derivative;
 }
 
 export { MediaError } from "./media-errors.js";

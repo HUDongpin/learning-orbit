@@ -22,6 +22,8 @@ type RejectFrame = Extract<ServerFrame, { type: "reject" }>;
 type DegradedFrame = Extract<ServerFrame, { type: "degraded" }>;
 const MAX_ACK_HISTORY = 500;
 const MAX_REJECT_HISTORY = 100;
+const MAX_MEDIA_STATUS_HISTORY = 500;
+const TERMINAL_MEDIA_STATES = new Set<MediaStatusFrame["state"]>(["quarantined", "failed", "deleted"]);
 
 export type HydratedSessionOptions = Readonly<{
   session: AuthSession;
@@ -305,6 +307,10 @@ export class HydratedSessionState {
   #acceptEvent(event: RoomEventEnvelope): void {
     const result = this.ledger.append(event);
     if (result !== "appended") throw new Error(`ROOM_EVENT_LEDGER_${result.toUpperCase()}`);
+    const activeMediaIds = this.ledger.activeMediaIds();
+    for (const mediaId of this.mediaStatuses.keys()) {
+      if (!activeMediaIds.has(mediaId)) this.mediaStatuses.delete(mediaId);
+    }
     this.#state = sessionReducer(this.#state, { type: "cursor", roomSeq: event.roomSeq });
     const status = statusFromEvent(event.type);
     if (status !== undefined) this.#state = sessionReducer(this.#state, { type: "status", status });
@@ -347,7 +353,23 @@ export class HydratedSessionState {
       }
       if (frame.type === "presence" && "actorId" in frame) { this.presence.set(frame.actorId, frame); return; }
       if (frame.type === "typing" && "actorId" in frame) { this.typing.set(frame.actorId, frame); return; }
-      if (frame.type === "media_status") { this.mediaStatuses.set(frame.mediaId, frame); return; }
+      if (frame.type === "media_status") {
+        if (!this.ledger.activeMediaIds().has(frame.mediaId)) return;
+        const previous = this.mediaStatuses.get(frame.mediaId);
+        if (previous) {
+          const previousTime = Date.parse(previous.updatedAt);
+          const nextTime = Date.parse(frame.updatedAt);
+          if (nextTime < previousTime
+            || (TERMINAL_MEDIA_STATES.has(previous.state) && !TERMINAL_MEDIA_STATES.has(frame.state))
+            || (nextTime === previousTime && previous.state !== frame.state
+              && !(TERMINAL_MEDIA_STATES.has(frame.state) && !TERMINAL_MEDIA_STATES.has(previous.state)))) return;
+        }
+        if (!this.mediaStatuses.has(frame.mediaId) && this.mediaStatuses.size >= MAX_MEDIA_STATUS_HISTORY) {
+          this.mediaStatuses.delete(this.mediaStatuses.keys().next().value!);
+        }
+        this.mediaStatuses.set(frame.mediaId, frame);
+        return;
+      }
       if (frame.type === "agent_status") {
         if (frame.roomId !== this.room.roomId) throw new Error("AGENT_STATUS_ROOM_MISMATCH");
         this.agentStatus = frame;

@@ -49,7 +49,7 @@
     {
       "file": "api-error.v1.json",
       "id": "https://learning-orbit.local/schemas/api-error.v1.json",
-      "sha256": "c9111e295d6a766bc86bd4d3f2513e20f3e02972d55da003debdd6ea00169c4a"
+      "sha256": "5effca996f8a317f2002bb8892e12798a504527daa82f18b519b9f964ea27797"
     },
     {
       "file": "auth-http.v1.json",

@@ -46,7 +46,7 @@ export interface MediaStore {
   createDownloadUrl(
     input: { objectKey: string; expiresSeconds: number },
     control: StoreCallControl,
-  ): Promise<string>;
+  ): Promise<{ url: string; signedAt: Date; expiresAt: Date }>;
   stat(
     objectKey: string,
     control: StoreCallControl,
@@ -73,7 +73,7 @@ export function assertStoreCallControl(control: StoreCallControl): void {
   const current = control.now?.() ?? new Date();
   if (!(current instanceof Date) || !Number.isFinite(current.getTime())) throw new Error("STORE_CALL_CONTROL_REQUIRED");
   if (control.signal.aborted || control.deadline.getTime() <= current.getTime()) {
-    throw new Error("STORE_DEADLINE_EXCEEDED");
+    throw new Error("STORAGE_DEADLINE_EXCEEDED");
   }
 }
 

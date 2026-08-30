@@ -283,13 +283,14 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     });
   }
 
-  if (dependencies.media) {
-    await registerMediaRoutes(app, {
-      media: dependencies.media,
-      sessions: dependencies.sessions,
-      internalReconcile: dependencies.mediaInternalReconcile,
-    });
-  }
+  // Public media routes remain present when no reviewed Provider is configured
+  // so authenticated clients receive a stable, content-free 503 rather than a
+  // misleading route-level 404. The boundary performs no database media write.
+  await registerMediaRoutes(app, {
+    media: dependencies.media,
+    sessions: dependencies.sessions,
+    internalReconcile: dependencies.mediaInternalReconcile,
+  });
 
   if (dependencies.analytics && dependencies.sessions) {
     const analyticsKey = (value: unknown): ProjectionKey | null => (

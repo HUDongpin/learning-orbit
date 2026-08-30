@@ -33,7 +33,6 @@ import { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery
 import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
 import { MediaRepository } from "./modules/media/media-repository.js";
-import { S3MediaStore } from "./modules/media/s3-media-store.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
 import type { MediaStore } from "./modules/media/media-store.js";
 import { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
@@ -83,6 +82,9 @@ function resolvedConfig(options: BuildAppOptions): ServerConfig {
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const config = resolvedConfig(options);
+  if (options.mediaStore && config.storageBrowserOrigins.length === 0) {
+    throw new Error("LO_STORAGE_BROWSER_ORIGINS_REQUIRED");
+  }
   const pool = options.pool ?? (config.databaseUrl ? (options.createPool ?? createDatabasePool)(config.databaseUrl) : undefined);
   const ownsPool = Boolean(pool && !options.pool);
   const smtp = !options.sendMagicLink && !options.mailTransport && config.smtpHost && config.smtpPort && config.smtpFrom
@@ -153,13 +155,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
   })() : undefined);
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
-  const media: MediaDeps | undefined = options.media ?? (pool ? {
-    pool,
-    store: options.mediaStore ?? new S3MediaStore(),
-    repo: new MediaRepository(pool, clock),
-    clock,
-    config: { storageBrowserOrigins: [config.publicBaseOrigin] },
-  } : undefined);
+  const media: MediaDeps | undefined = config.storageBrowserOrigins.length === 0
+    ? undefined
+    : options.media
+      ? {
+        ...options.media,
+        config: { ...(options.media.config ?? {}), storageBrowserOrigins: config.storageBrowserOrigins },
+      }
+      : pool && options.mediaStore ? {
+        pool,
+        store: options.mediaStore,
+        repo: new MediaRepository(pool, clock),
+        clock,
+        config: { storageBrowserOrigins: config.storageBrowserOrigins },
+      } : undefined;
   const mediaInternalReconcile = pool && media && assertionTrust
     ? new MediaInternalReconcileRoute(
       lifecycle?.events ?? new RoomEventRepository(pool, eventPayloadRegistry, clock),

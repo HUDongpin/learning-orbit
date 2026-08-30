@@ -8,6 +8,11 @@ export default function nextConfig(phase: string): NextConfig {
   }
 
   return {
+    env: {
+      // One non-secret canonical value feeds both Fastify validation and the
+      // browser bundle; an independently supplied NEXT_PUBLIC value is ignored.
+      NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS: process.env.LO_STORAGE_BROWSER_ORIGINS ?? "",
+    },
     async rewrites() {
       if (!localProxyEnabled) {
         return [];

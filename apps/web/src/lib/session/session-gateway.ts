@@ -1,6 +1,8 @@
 import {
   apiErrorContract,
   authContract,
+  mediaAttachmentContract,
+  mediaCommandContract,
   roomHttpContract,
   routes,
   teacherRoomListContract,
@@ -8,7 +10,12 @@ import {
   type AuthSession,
   type CreateRoomRequest,
   type CreateRoomResponse,
+  type CompleteMediaUploadResponse,
+  type CreateMediaUploadInput,
   type JoinRoomRequest,
+  type MediaAttachmentView,
+  type MediaDownloadGrant,
+  type MediaUploadGrant,
   type RoomDetails,
   type RoomEventPage,
   type TeacherMagicLinkAccepted,
@@ -26,6 +33,10 @@ export interface SessionGateway {
   createRoom(input: CreateRoomRequest): Promise<CreateRoomResponse>;
   getRoom(roomId: string): Promise<RoomDetails>;
   getRoomEvents(roomId: string, afterSeq: number, limit?: number): Promise<RoomEventPage>;
+  createMediaUpload(roomId: string, input: CreateMediaUploadInput): Promise<MediaUploadGrant>;
+  completeMediaUpload(roomId: string, mediaId: string): Promise<CompleteMediaUploadResponse>;
+  getMedia(roomId: string, mediaId: string): Promise<MediaAttachmentView>;
+  getMediaDownloadGrant(roomId: string, mediaId: string): Promise<MediaDownloadGrant>;
   logout(): Promise<void>;
 }
 
@@ -83,6 +94,7 @@ export class FetchSessionGateway implements SessionGateway {
         ...init,
         credentials: "include",
         cache: "no-store",
+        redirect: "error",
         headers: {
           Accept: "application/json",
           ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -222,6 +234,72 @@ export class FetchSessionGateway implements SessionGateway {
     } catch {
       return responseInvalid();
     }
+  }
+
+  async createMediaUpload(roomId: string, input: CreateMediaUploadInput): Promise<MediaUploadGrant> {
+    let body: Record<string, unknown>;
+    try { body = mediaCommandContract.parseCreateUpload(input); }
+    catch { return responseInvalid(); }
+    const response = await this.#request(routes.media.upload(roomId), { method: "POST", body: JSON.stringify(body) });
+    if (response.status !== 201) {
+      return legalError(response, {
+        400: ["INVALID_MEDIA_COMMAND"],
+        401: ["AUTH_REQUIRED"],
+        404: ["MEDIA_NOT_FOUND"],
+        409: ["ROOM_DELETION_IN_PROGRESS", "ROOM_NOT_OPEN"],
+        422: ["ALT_REQUIRED", "SIZE_OUT_OF_RANGE"],
+        500: ["INTERNAL"],
+        503: ["MEDIA_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return mediaCommandContract.parseUploadGrant(await jsonBody(response)); }
+    catch { return responseInvalid(); }
+  }
+
+  async completeMediaUpload(roomId: string, mediaId: string): Promise<CompleteMediaUploadResponse> {
+    const response = await this.#request(routes.media.complete(roomId, mediaId), { method: "POST", body: "{}" });
+    if (response.status !== 200) {
+      return legalError(response, {
+        400: ["INVALID_MEDIA_COMMAND"],
+        401: ["AUTH_REQUIRED"],
+        404: ["MEDIA_NOT_FOUND", "MEDIA_UPLOAD_NOT_FOUND"],
+        409: ["MEDIA_UPLOAD_EXPIRED", "MEDIA_UPLOAD_NOT_SETTLED", "MEDIA_QUARANTINED", "MEDIA_FAILED", "MEDIA_DELETED", "ROOM_DELETION_IN_PROGRESS", "ROOM_NOT_OPEN"],
+        500: ["INTERNAL"],
+        503: ["MEDIA_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return mediaCommandContract.parseComplete(await jsonBody(response)); }
+    catch { return responseInvalid(); }
+  }
+
+  async getMedia(roomId: string, mediaId: string): Promise<MediaAttachmentView> {
+    const response = await this.#request(routes.media.get(roomId, mediaId), { method: "GET" });
+    if (response.status !== 200) {
+      return legalError(response, {
+        401: ["AUTH_REQUIRED"],
+        404: ["MEDIA_NOT_FOUND"],
+        409: ["MEDIA_NOT_READY"],
+        500: ["INTERNAL"],
+        503: ["MEDIA_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return mediaAttachmentContract.parse(await jsonBody(response)); }
+    catch { return responseInvalid(); }
+  }
+
+  async getMediaDownloadGrant(roomId: string, mediaId: string): Promise<MediaDownloadGrant> {
+    const response = await this.#request(routes.media.download(roomId, mediaId), { method: "GET" });
+    if (response.status !== 200) {
+      return legalError(response, {
+        401: ["AUTH_REQUIRED"],
+        404: ["MEDIA_NOT_FOUND"],
+        409: ["MEDIA_NOT_READY", "MEDIA_QUARANTINED", "MEDIA_FAILED", "MEDIA_DELETED", "ROOM_DELETION_IN_PROGRESS"],
+        500: ["INTERNAL"],
+        503: ["MEDIA_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return mediaCommandContract.parseDownloadGrant(await jsonBody(response)); }
+    catch { return responseInvalid(); }
   }
 
   async logout(): Promise<void> {

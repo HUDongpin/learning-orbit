@@ -6,13 +6,23 @@ import { inTransaction } from "../../db/transactions.js";
 import { lockRoomInTransaction, withRoomSessionLock } from "../rooms/room-lock.js";
 import { systemClock, type Clock } from "../../clock.js";
 import type { MediaKind, MediaState, MediaAssetRecord } from "./media-asset-record.js";
-import { serializeMediaAttachment } from "./media-asset-record.js";
 import { MediaError } from "./media-errors.js";
+import { safeDerivativeObjectKey, type SafeDerivativeKind } from "./media-object-keys.js";
 import { effectiveWriteNotAfter } from "./media-upload-expiry.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STAGING_KEY_PATTERN = /^rooms\/([0-9a-f-]{36})\/staging\/([0-9a-f-]{36})$/i;
 const ORIGINAL_KEY_PATTERN = /^rooms\/([0-9a-f-]{36})\/original\/([0-9a-f-]{36})$/i;
+
+export interface SafeMediaDerivative {
+  readonly mediaId: string;
+  readonly roomId: string;
+  readonly kind: SafeDerivativeKind;
+  readonly objectKey: string;
+  readonly mime: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
 
 export interface LockedMedia {
   readonly record: MediaAssetRecord;
@@ -94,6 +104,17 @@ interface RoomRow extends QueryResultRow {
   room_id: string;
   status: "scheduled" | "open" | "paused" | "closed";
   closes_at: Date | null;
+}
+
+interface SafeMediaDerivativeDbRow extends QueryResultRow {
+  media_id: string;
+  room_id: string;
+  media_kind: MediaKind;
+  derivative_kind: SafeMediaDerivative["kind"];
+  object_key: string;
+  mime: string;
+  size_bytes: string;
+  sha256: string;
 }
 
 function requireUuid(value: string, code = "INVALID_MEDIA_COMMAND"): string {
@@ -348,9 +369,37 @@ export class MediaRepository {
     return result.rows[0] ? toRecord(result.rows[0]) : null;
   }
 
-  async getPublicMedia(mediaId: string, roomId: string) {
-    const record = await this.getMedia(mediaId, roomId);
-    return record ? serializeMediaAttachment(record) : null;
+  async getSafeDerivative(mediaId: string, roomId: string, mediaKind: MediaKind): Promise<SafeMediaDerivative | null> {
+    requireUuid(mediaId, "INVALID_MEDIA_COMMAND");
+    requireUuid(roomId, "INVALID_MEDIA_COMMAND");
+    const derivativeKind: SafeMediaDerivative["kind"] = mediaKind === "image" ? "sanitized_image" : "playback_audio";
+    const result = await this.pool.query<SafeMediaDerivativeDbRow>(
+      `SELECT m.media_id, m.room_id, m.kind AS media_kind,
+              d.kind AS derivative_kind, d.object_key, d.mime,
+              d.size_bytes::text AS size_bytes, d.sha256
+         FROM media_asset m
+         JOIN media_derivative d ON d.media_id = m.media_id
+        WHERE m.media_id = $1 AND m.room_id = $2 AND m.state = 'ready'
+          AND m.kind = $3 AND d.kind = $4`,
+      [mediaId, roomId, mediaKind, derivativeKind],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const expectedKey = safeDerivativeObjectKey(roomId, mediaId, derivativeKind);
+    if (row.media_id !== mediaId || row.room_id !== roomId || row.media_kind !== mediaKind
+      || row.derivative_kind !== derivativeKind || row.object_key !== expectedKey
+      || !/^[a-f0-9]{64}$/u.test(row.sha256)) {
+      throw new MediaError("INVALID_MEDIA_STATE", 500);
+    }
+    return Object.freeze({
+      mediaId,
+      roomId,
+      kind: derivativeKind,
+      objectKey: row.object_key,
+      mime: row.mime,
+      sizeBytes: toNumber(row.size_bytes),
+      sha256: row.sha256,
+    });
   }
 
   async getGrantForMedia(mediaId: string, roomId: string): Promise<UploadGrantRow | null> {

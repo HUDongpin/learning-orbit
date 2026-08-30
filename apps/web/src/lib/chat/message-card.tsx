@@ -1,8 +1,10 @@
 "use client";
 
-import type { AuthSession } from "@learning-orbit/contracts";
+import type { AuthSession, MediaStatusFrame } from "@learning-orbit/contracts";
 import React, { useEffect, useState } from "react";
 
+import { MediaAttachment } from "../media/media-attachment";
+import type { MediaGateway } from "../media/media-upload";
 import type { LedgerMessage } from "../session/event-ledger";
 import type { RoomCommandIntent } from "../session/session-command-bus";
 import type { SessionStatus } from "../session/session-store";
@@ -17,13 +19,30 @@ export interface MessageCardProps {
   readonly onReply: (messageId: string) => void;
   readonly replyLabel?: string;
   readonly onNavigateReply?: () => void;
+  readonly roomId?: string;
+  readonly mediaGateway?: MediaGateway;
+  readonly allowedDownloadOrigins?: readonly string[];
+  readonly mediaStatuses?: ReadonlyMap<string, MediaStatusFrame>;
 }
 
 function eventLabel(message: LedgerMessage): string {
   return `訊息 ${message.firstRoomSeq}`;
 }
 
-export function MessageCard({ message, roster, roomStatus, viewer, onCommand, onReply, replyLabel, onNavigateReply }: MessageCardProps) {
+export function MessageCard({
+  message,
+  roster,
+  roomStatus,
+  viewer,
+  onCommand,
+  onReply,
+  replyLabel,
+  onNavigateReply,
+  roomId,
+  mediaGateway,
+  allowedDownloadOrigins = [],
+  mediaStatuses,
+}: MessageCardProps) {
   const [edit, setEdit] = useState<{ text: string; baseRevision: number }>();
   const [actionError, setActionError] = useState<string>();
   const author = roster.find(({ actorId }) => actorId === message.actorId);
@@ -53,7 +72,20 @@ export function MessageCard({ message, roster, roomStatus, viewer, onCommand, on
         ) : null}
         <div className="bubble">
           {message.operation === "retract" ? <span>訊息已由伺服器標記為撤回</span> : <span>{message.text}</span>}
-          {message.mediaIds.length ? <p className="media-caption">媒體狀態等待伺服器確認</p> : null}
+          {message.operation !== "retract" && message.mediaIds.length && roomId && mediaGateway
+            ? message.mediaIds.map((mediaId) => (
+              <MediaAttachment
+                key={mediaId}
+                roomId={roomId}
+                mediaId={mediaId}
+                gateway={mediaGateway}
+                allowedDownloadOrigins={allowedDownloadOrigins}
+                {...(mediaStatuses?.get(mediaId) ? { liveStatus: mediaStatuses.get(mediaId)! } : {})}
+              />
+            ))
+            : message.operation !== "retract" && message.mediaIds.length
+              ? <p className="media-caption">媒體狀態等待伺服器確認</p>
+              : null}
         </div>
         <time className="message-time" dateTime={message.eventTime}>roomSeq {message.roomSeq} · 修訂 {message.revision}</time>
         {edit ? (

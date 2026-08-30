@@ -42,12 +42,37 @@ async function sessionIdentity(request: { cookies: Record<string, string | undef
   return sessionId ? { identity, sessionId } : null;
 }
 
-function routeError(error: unknown): { status: number; body: { code: string } } {
-  if (error instanceof MediaError) {
-    const status = error.code === "AUTH_REQUIRED" ? 401
-      : error.code === "MEDIA_NOT_FOUND" || error.code === "MEDIA_UPLOAD_NOT_FOUND" ? 404
-        : error.statusCode >= 400 && error.statusCode < 600 ? error.statusCode : 409;
-    return { status, body: { code: String(error.code) } };
+async function safeSessionIdentity(
+  request: { cookies: Record<string, string | undefined> },
+  sessions: SessionService | undefined,
+): Promise<{ identity: AuthSession; sessionId: string } | null | "failed"> {
+  try { return await sessionIdentity(request, sessions); }
+  catch { return "failed"; }
+}
+
+export function mediaRouteError(error: unknown): { status: number; body: { code: string } } {
+  const code = error instanceof MediaError ? String(error.code) : error instanceof Error ? error.message : "";
+  if (code === "STORAGE_NOT_CONFIGURED" || code.startsWith("STORAGE_")) {
+    return { status: 503, body: { code: "MEDIA_SERVICE_UNAVAILABLE" } };
+  }
+  const publicStatus: Readonly<Record<string, number>> = {
+    AUTH_REQUIRED: 401,
+    INVALID_MEDIA_COMMAND: 400,
+    MEDIA_NOT_FOUND: 404,
+    MEDIA_UPLOAD_NOT_FOUND: 404,
+    ALT_REQUIRED: 422,
+    SIZE_OUT_OF_RANGE: 422,
+    MEDIA_UPLOAD_EXPIRED: 409,
+    MEDIA_UPLOAD_NOT_SETTLED: 409,
+    MEDIA_QUARANTINED: 409,
+    MEDIA_FAILED: 409,
+    MEDIA_DELETED: 409,
+    MEDIA_NOT_READY: 409,
+    ROOM_DELETION_IN_PROGRESS: 409,
+    ROOM_NOT_OPEN: 409,
+  };
+  if (error instanceof MediaError && publicStatus[code] !== undefined) {
+    return { status: publicStatus[code]!, body: { code } };
   }
   if (error instanceof Error && ["INVALID_MEDIA_COMMAND", "ALT_REQUIRED", "SIZE_OUT_OF_RANGE"].includes(error.message)) {
     return { status: error.message === "INVALID_MEDIA_COMMAND" ? 400 : 422, body: { code: error.message } };
@@ -64,7 +89,9 @@ export async function registerMediaRoutes(
   dependencies: MediaRouteDependencies,
 ): Promise<void> {
   app.post(pathWithParams("/v1/rooms/:roomId/media/uploads"), async (request, reply) => {
-    const authenticated = await sessionIdentity(request, dependencies.sessions);
+    reply.header("Cache-Control", "no-store");
+    const authenticated = await safeSessionIdentity(request, dependencies.sessions);
+    if (authenticated === "failed") return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     if (!authenticated) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     const { identity, sessionId } = authenticated;
     if (!dependencies.media) return reply.code(503).type("application/json").send({ code: "MEDIA_SERVICE_UNAVAILABLE" });
@@ -88,13 +115,15 @@ export async function registerMediaRoutes(
       reply.header("Cache-Control", "no-store");
       return reply.code(201).type("application/json").send(JSON.parse(mediaCommandContract.encodeUploadGrant(grant)));
     } catch (error) {
-      const result = routeError(error);
+      const result = mediaRouteError(error);
       return reply.code(result.status).type("application/json").send(result.body);
     }
   });
 
   app.post(pathWithParams("/v1/rooms/:roomId/media/:mediaId/complete"), async (request, reply) => {
-    const authenticated = await sessionIdentity(request, dependencies.sessions);
+    reply.header("Cache-Control", "no-store");
+    const authenticated = await safeSessionIdentity(request, dependencies.sessions);
+    if (authenticated === "failed") return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     if (!authenticated) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     const { identity, sessionId } = authenticated;
     if (!dependencies.media) return reply.code(503).type("application/json").send({ code: "MEDIA_SERVICE_UNAVAILABLE" });
@@ -116,13 +145,15 @@ export async function registerMediaRoutes(
       reply.header("Cache-Control", "no-store");
       return reply.code(200).type("application/json").send(JSON.parse(mediaCommandContract.encodeComplete(result)));
     } catch (error) {
-      const result = routeError(error);
+      const result = mediaRouteError(error);
       return reply.code(result.status).type("application/json").send(result.body);
     }
   });
 
   app.get(pathWithParams("/v1/rooms/:roomId/media/:mediaId"), async (request, reply) => {
-    const authenticated = await sessionIdentity(request, dependencies.sessions);
+    reply.header("Cache-Control", "no-store");
+    const authenticated = await safeSessionIdentity(request, dependencies.sessions);
+    if (authenticated === "failed") return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     if (!authenticated) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     const { identity, sessionId } = authenticated;
     if (!dependencies.media) return reply.code(503).type("application/json").send({ code: "MEDIA_SERVICE_UNAVAILABLE" });
@@ -135,13 +166,15 @@ export async function registerMediaRoutes(
       reply.header("Cache-Control", "no-store");
       return reply.code(200).type("application/json").send(JSON.parse(mediaAttachmentJson(view)));
     } catch (error) {
-      const result = routeError(error);
-      return reply.code(result.status === 401 ? 401 : 404).type("application/json").send({ code: result.status === 401 ? result.body.code : "MEDIA_NOT_FOUND" });
+      const result = mediaRouteError(error);
+      return reply.code(result.status).type("application/json").send(result.body);
     }
   });
 
   app.get(pathWithParams("/v1/rooms/:roomId/media/:mediaId/download"), async (request, reply) => {
-    const authenticated = await sessionIdentity(request, dependencies.sessions);
+    reply.header("Cache-Control", "no-store").header("Referrer-Policy", "no-referrer");
+    const authenticated = await safeSessionIdentity(request, dependencies.sessions);
+    if (authenticated === "failed") return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     if (!authenticated) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     const { identity, sessionId } = authenticated;
     if (!dependencies.media) return reply.code(503).type("application/json").send({ code: "MEDIA_SERVICE_UNAVAILABLE" });
@@ -153,8 +186,8 @@ export async function registerMediaRoutes(
       reply.header("Cache-Control", "no-store").header("Referrer-Policy", "no-referrer");
       return reply.code(200).type("application/json").send(JSON.parse(mediaCommandContract.encodeDownloadGrant(grant)));
     } catch (error) {
-      const result = routeError(error);
-      return reply.code(result.status === 401 ? 401 : result.status === 404 ? 404 : result.status).type("application/json").send(result.body);
+      const result = mediaRouteError(error);
+      return reply.code(result.status).type("application/json").send(result.body);
     }
   });
 

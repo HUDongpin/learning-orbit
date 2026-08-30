@@ -27,7 +27,11 @@ export interface S3MediaStoreTransport {
     expectedSha256: string;
     ifDestinationAbsent: true;
   }, control: StoreCallControl): Promise<"created" | "already_present_same_hash">;
-  createDownloadUrl(input: { objectKey: string; expiresSeconds: number }, control: StoreCallControl): Promise<string>;
+  createDownloadUrl(input: { objectKey: string; expiresSeconds: number }, control: StoreCallControl): Promise<{
+    url: string;
+    signedAt: Date;
+    expiresAt: Date;
+  }>;
   stat(objectKey: string, control: StoreCallControl): Promise<{
     objectKey: string;
     sizeBytes: number;
@@ -50,8 +54,8 @@ const defaultCapabilities: MediaStoreCapabilities = Object.freeze({
 });
 
 export interface S3MediaStoreOptions {
-  readonly transport?: S3MediaStoreTransport;
-  readonly capabilities?: Partial<MediaStoreCapabilities>;
+  readonly transport: S3MediaStoreTransport;
+  readonly capabilities: MediaStoreCapabilities;
 }
 
 /**
@@ -60,41 +64,59 @@ export interface S3MediaStoreOptions {
  */
 export class S3MediaStore implements MediaStore {
   readonly capabilities: MediaStoreCapabilities;
-  private readonly transport: S3MediaStoreTransport | undefined;
+  private readonly transport: S3MediaStoreTransport;
 
-  constructor(options: S3MediaStoreOptions = {}) {
+  constructor(options: S3MediaStoreOptions) {
+    const capabilities = options?.capabilities;
+    if (!options?.transport || !capabilities
+      || capabilities.exactKeyHeadIsStronglyConsistent !== true
+      || capabilities.strongChecksumHead !== true
+      || capabilities.conditionalPromotion !== true
+      || capabilities.writeOnceDestination !== true
+      || !Number.isFinite(capabilities.maxPresignMs) || capabilities.maxPresignMs < 1 || capabilities.maxPresignMs > 30_000
+      || !Number.isFinite(capabilities.maxUploadRequestMs) || capabilities.maxUploadRequestMs < 1 || capabilities.maxUploadRequestMs > 300_000
+      || !Number.isFinite(capabilities.maxSignerDbClockSkewMs) || capabilities.maxSignerDbClockSkewMs < 0 || capabilities.maxSignerDbClockSkewMs > 60_000
+      || !Number.isFinite(capabilities.maxPostAbortSettlementMs) || capabilities.maxPostAbortSettlementMs < 0 || capabilities.maxPostAbortSettlementMs > 60_000) {
+      throw new Error("STORAGE_CAPABILITIES_UNPROVEN");
+    }
     this.transport = options.transport;
-    this.capabilities = Object.freeze({ ...defaultCapabilities, ...(options.capabilities ?? {}) });
+    this.capabilities = Object.freeze({ ...capabilities });
   }
 
   #requireTransport(): S3MediaStoreTransport {
-    if (!this.transport) throw new Error("STORAGE_NOT_CONFIGURED");
     return this.transport;
   }
 
-  async createUploadUrl(input: Parameters<MediaStore["createUploadUrl"]>[0], control: StoreCallControl) {
+  async #transportCall<T>(control: StoreCallControl, work: (transport: S3MediaStoreTransport) => Promise<T>): Promise<T> {
     assertStoreCallControl(control);
-    return this.#requireTransport().createUploadUrl(input, control);
+    const transport = this.#requireTransport();
+    try { return await work(transport); }
+    catch (error) {
+      if (control.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw new Error("STORAGE_DEADLINE_EXCEEDED");
+      }
+      throw new Error("STORAGE_PROVIDER_UNAVAILABLE");
+    }
+  }
+
+  async createUploadUrl(input: Parameters<MediaStore["createUploadUrl"]>[0], control: StoreCallControl) {
+    return this.#transportCall(control, (transport) => transport.createUploadUrl(input, control));
   }
 
   async promoteStagingObject(input: Parameters<MediaStore["promoteStagingObject"]>[0], control: StoreCallControl) {
-    assertStoreCallControl(control);
-    return this.#requireTransport().promoteStagingObject(input, control);
+    return this.#transportCall(control, (transport) => transport.promoteStagingObject(input, control));
   }
 
   async createDownloadUrl(input: Parameters<MediaStore["createDownloadUrl"]>[0], control: StoreCallControl) {
-    assertStoreCallControl(control);
-    return this.#requireTransport().createDownloadUrl(input, control);
+    return this.#transportCall(control, (transport) => transport.createDownloadUrl(input, control));
   }
 
   async stat(objectKey: string, control: StoreCallControl) {
-    assertStoreCallControl(control);
-    return this.#requireTransport().stat(objectKey, control);
+    return this.#transportCall(control, (transport) => transport.stat(objectKey, control));
   }
 
   async deleteObjects(objectKeys: string[], control: StoreCallControl) {
-    assertStoreCallControl(control);
-    return this.#requireTransport().deleteObjects(objectKeys, control);
+    return this.#transportCall(control, (transport) => transport.deleteObjects(objectKeys, control));
   }
 }
 
@@ -140,7 +162,12 @@ export class MemoryMediaStore implements MediaStore {
   async createDownloadUrl(input: Parameters<MediaStore["createDownloadUrl"]>[0], control: StoreCallControl) {
     this.#check(control);
     if (!this.objects.has(input.objectKey)) throw new Error("MEDIA_NOT_FOUND");
-    return `${this.browserOrigin}/download/${encodeURIComponent(input.objectKey)}?token=${randomUUID()}`;
+    const signedAt = control.now?.() ?? new Date();
+    return {
+      url: `${this.browserOrigin}/download/${encodeURIComponent(input.objectKey)}?token=${randomUUID()}`,
+      signedAt,
+      expiresAt: new Date(signedAt.getTime() + input.expiresSeconds * 1_000),
+    };
   }
 
   async stat(objectKey: string, control: StoreCallControl) {

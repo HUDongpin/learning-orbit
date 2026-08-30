@@ -67,6 +67,25 @@ const roomDetails = {
     actorRole: "student" as const,
   })),
 };
+const mediaId = "00000000-0000-4000-8000-000000000701";
+const uploadGrant = {
+  mediaId,
+  uploadUrl: "https://storage.learning-orbit.test/upload/signed",
+  requiredHeaders: { "x-amz-checksum-sha256": "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=" },
+  expiresAt: "2026-08-31T01:05:00.000Z",
+};
+const mediaView = {
+  mediaId,
+  kind: "image" as const,
+  state: "processing" as const,
+  detectedMime: "image/png",
+  sizeBytes: 3,
+  altText: "池塘草圖",
+  caption: null,
+  failureCode: null,
+  createdAt: "2026-08-31T01:00:00.000Z",
+  updatedAt: "2026-08-31T01:01:00.000Z",
+};
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -222,5 +241,41 @@ describe("typed SessionGateway", () => {
       .rejects.toThrow("SESSION_RESPONSE_INVALID");
     const invalid = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...page, secret: true })) });
     await expect(invalid.getRoomEvents(createdRoom.room.roomId, 4)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("uses only generated media routes, requests, grants, status views, and downloads", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json(uploadGrant, 201))
+      .mockResolvedValueOnce(json({ mediaId, state: "processing", enqueued: true }))
+      .mockResolvedValueOnce(json(mediaView))
+      .mockResolvedValueOnce(json({ downloadUrl: "https://storage.learning-orbit.test/download/signed", expiresAt: "2026-08-31T01:05:00.000Z" }));
+    const gateway = new FetchSessionGateway({ fetch });
+    const input = {
+      kind: "image" as const,
+      originalFileName: "pond.png",
+      mime: "image/png",
+      sizeBytes: 3,
+      sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      altText: "池塘草圖",
+      caption: null,
+    };
+    await expect(gateway.createMediaUpload(createdRoom.room.roomId, input)).resolves.toEqual(uploadGrant);
+    await expect(gateway.completeMediaUpload(createdRoom.room.roomId, mediaId)).resolves.toEqual({ mediaId, state: "processing", enqueued: true });
+    await expect(gateway.getMedia(createdRoom.room.roomId, mediaId)).resolves.toEqual(mediaView);
+    await expect(gateway.getMediaDownloadGrant(createdRoom.room.roomId, mediaId)).resolves.toMatchObject({ downloadUrl: expect.stringMatching(/^https:/) });
+    expect(fetch).toHaveBeenNthCalledWith(1, `/v1/rooms/${createdRoom.room.roomId}/media/uploads`, expect.objectContaining({ method: "POST", body: JSON.stringify(input), credentials: "include" }));
+    expect(fetch).toHaveBeenNthCalledWith(2, `/v1/rooms/${createdRoom.room.roomId}/media/${mediaId}/complete`, expect.objectContaining({ method: "POST", body: "{}" }));
+    expect(fetch).toHaveBeenNthCalledWith(3, `/v1/rooms/${createdRoom.room.roomId}/media/${mediaId}`, expect.objectContaining({ method: "GET" }));
+    expect(fetch).toHaveBeenNthCalledWith(4, `/v1/rooms/${createdRoom.room.roomId}/media/${mediaId}/download`, expect.objectContaining({ method: "GET" }));
+    for (const [, init] of fetch.mock.calls) expect(init).toMatchObject({ redirect: "error", credentials: "include" });
+
+    const unavailable = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "MEDIA_SERVICE_UNAVAILABLE" }, 503)) });
+    await expect(unavailable.createMediaUpload(createdRoom.room.roomId, input))
+      .rejects.toEqual(new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"));
+    const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...uploadGrant, providerSecret: "no" }, 201)) });
+    await expect(leaked.createMediaUpload(createdRoom.room.roomId, input)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+    const derivativePending = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "MEDIA_NOT_READY" }, 409)) });
+    await expect(derivativePending.getMedia(createdRoom.room.roomId, mediaId))
+      .rejects.toEqual(new SessionGatewayError("MEDIA_NOT_READY"));
   });
 });

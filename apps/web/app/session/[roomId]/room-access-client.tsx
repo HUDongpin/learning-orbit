@@ -12,6 +12,7 @@ import {
 import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
 import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
 import { ChatPanel } from "../../../src/lib/chat/chat-panel";
+import { parseStorageBrowserOrigins } from "../../../src/lib/media/media-upload";
 
 type AccessMode = "student" | "teacher";
 type AccessState =
@@ -28,6 +29,7 @@ const STATUS_COPY: Readonly<Record<RoomDetails["status"], string>> = {
   paused: "已暫停",
   closed: "已結束",
 };
+const MEDIA_UPLOAD_ORIGINS = parseStorageBrowserOrigins(process.env.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS);
 
 export interface RoomAccessClientProps {
   gateway?: SessionGateway;
@@ -234,7 +236,7 @@ export function RoomAccessClient({ gateway, mode, roomId }: RoomAccessClientProp
           <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。沒有使用 Seed Message、固定指標或 Fixture。</p>
         </div>
         <div className="orbit-grid room-workspace" id="classroom-workspace" tabIndex={-1}>
-          <ChatPanel runtime={hydrated} />
+          <ChatPanel runtime={hydrated} mediaGateway={api} allowedUploadOrigins={MEDIA_UPLOAD_ORIGINS} />
           <div className="analysis-column" aria-label="伺服器分析區">
             <section className="orbit-panel analysis-panel" aria-labelledby="echo-pending-title">
               <header className="panel-head"><div><span className="panel-kicker">ECHO-CM</span><h2 className="panel-title" id="echo-pending-title">概念與論證</h2></div></header>

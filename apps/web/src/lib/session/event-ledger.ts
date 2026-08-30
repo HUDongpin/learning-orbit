@@ -83,6 +83,15 @@ export class EventLedger {
     return [...this.#messages.values()].sort((a, b) => a.firstRoomSeq - b.firstRoomSeq);
   }
 
+  activeMediaIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const message of this.#messages.values()) {
+      if (message.operation === "retract") continue;
+      for (const mediaId of message.mediaIds) ids.add(mediaId);
+    }
+    return ids;
+  }
+
   reset(): void {
     this.#events.clear();
     this.#messages.clear();

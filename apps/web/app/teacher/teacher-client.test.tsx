@@ -81,6 +81,10 @@ function gateway(overrides: Partial<SessionGateway> = {}): SessionGateway {
     createRoom: vi.fn(async () => createdRoom),
     getRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
     getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+    createMediaUpload: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
+    completeMediaUpload: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
+    getMedia: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
+    getMediaDownloadGrant: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };

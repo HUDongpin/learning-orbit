@@ -11,6 +11,8 @@ import nextConfig from "../next.config.js";
 
 const originalEnvironment = {
   LO_LOCAL_SAME_ORIGIN_PROXY: process.env.LO_LOCAL_SAME_ORIGIN_PROXY,
+  LO_STORAGE_BROWSER_ORIGINS: process.env.LO_STORAGE_BROWSER_ORIGINS,
+  NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS: process.env.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS,
   NODE_ENV: process.env.NODE_ENV,
 };
 
@@ -30,6 +32,8 @@ function setEnvironment(name: keyof typeof originalEnvironment, value: string | 
 
 afterEach(() => {
   setEnvironment("LO_LOCAL_SAME_ORIGIN_PROXY", originalEnvironment.LO_LOCAL_SAME_ORIGIN_PROXY);
+  setEnvironment("LO_STORAGE_BROWSER_ORIGINS", originalEnvironment.LO_STORAGE_BROWSER_ORIGINS);
+  setEnvironment("NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS", originalEnvironment.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS);
   setEnvironment("NODE_ENV", originalEnvironment.NODE_ENV);
 });
 
@@ -45,6 +49,15 @@ async function configuredRewrites(phase = PHASE_DEVELOPMENT_SERVER): Promise<rea
 }
 
 describe("Next.js local same-origin proxy", () => {
+  it("derives the public storage allowlist from the same canonical server variable", () => {
+    setEnvironment("LO_STORAGE_BROWSER_ORIGINS", "https://storage.learning-orbit.test");
+    setEnvironment("NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS", "https://hostile.example");
+
+    expect(configForPhase(PHASE_DEVELOPMENT_SERVER).env).toMatchObject({
+      NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS: "https://storage.learning-orbit.test",
+    });
+  });
+
   it.each([undefined, "", "0", "true", " 1", "1 "])(
     "returns no rewrites when LO_LOCAL_SAME_ORIGIN_PROXY is %s",
     async (flag) => {
