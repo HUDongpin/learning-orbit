@@ -1,6 +1,6 @@
-import RoomClient from "./room-client";
+import { redirect } from "next/navigation";
 
 export default async function RoomPage({ params }: { params: Promise<{ roomId: string }> }) {
   const { roomId } = await params;
-  return <RoomClient roomId={roomId} />;
+  redirect(`/session/${roomId}`);
 }

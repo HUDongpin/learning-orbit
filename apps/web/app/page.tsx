@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  redirect("/rooms/demo-room");
+  redirect("/session/demo-room");
 }
