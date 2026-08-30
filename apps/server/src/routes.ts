@@ -4,6 +4,7 @@ import { authContract, roomHttpContract } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
 import { RoomServiceError, type RoomService } from "./modules/rooms/room-service.js";
+import { RoomError } from "./modules/rooms/errors.js";
 import { normalizedRequestIp, ratePolicies } from "./modules/security/rate-policies.js";
 import type { RoomLifecycleService } from "./modules/rooms/lifecycle-service.js";
 import { InternalAutoCloseRoute } from "./modules/rooms/internal-auto-close-route.js";
@@ -14,6 +15,7 @@ import {
   type RoomInternalAutoCloseResponse,
 } from "@learning-orbit/contracts";
 import type { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
+import type { CommandService } from "./modules/rooms/command-service.js";
 
 interface AuthRouteDependencies {
   magicLinks: MagicLinkService | undefined;
@@ -22,6 +24,7 @@ interface AuthRouteDependencies {
   lifecycle: RoomLifecycleService | undefined;
   serviceAssertionTrust: ServiceAssertionTrust | undefined;
   jobClaims: JobClaimAuthority;
+  commands: CommandService | undefined;
 }
 
 const genericAccepted = { accepted: true };
@@ -126,6 +129,27 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
         return reply.code(403).type("application/json").send({ code: "JOIN_FORBIDDEN" });
       }
       throw error;
+    }
+  });
+
+  app.post("/v1/rooms/:roomId/commands", async (request, reply) => {
+    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
+    if (!identity) return reply.code(401).send({ code: "AUTH_REQUIRED" });
+    if (!dependencies.commands) return reply.code(503).send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+    const pathRoomId = (request.params as { roomId?: string }).roomId;
+    if (typeof pathRoomId !== "string" || (request.body as { roomId?: string })?.roomId !== pathRoomId) return reply.code(409).send({ code: "INVALID_COMMAND" });
+    try {
+      const result = await dependencies.commands.dispatch(identity, request.body);
+      return reply.code(200).send(result);
+    } catch (error) {
+      if (error instanceof RoomError) {
+        const body = error.currentRevision === undefined
+          ? { code: error.code }
+          : { code: error.code, currentRevision: error.currentRevision };
+        return reply.code(error.code === "FORBIDDEN" ? 403 : 409)
+          .type("application/json").send(body);
+      }
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     }
   });
 

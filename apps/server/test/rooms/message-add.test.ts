@@ -1,0 +1,22 @@
+import { randomUUID } from "node:crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createCoreEventPayloadRegistry, type AuthSession, type RoomCommand } from "@learning-orbit/contracts";
+import { runMigrations } from "../../src/db/migrate.js";
+import { resetBusinessTables } from "../db/reset.js";
+import { RoomEventRepository } from "../../src/modules/rooms/room-event-repository.js";
+import { MessageService } from "../../src/modules/rooms/message-service.js";
+import { RoomLifecycleService } from "../../src/modules/rooms/lifecycle-service.js";
+import { MutableClock, lifecycleDatabaseUrl, seedLifecycleRoom } from "./lifecycle-test-fixture.js";
+import { RoomError } from "../../src/modules/rooms/errors.js";
+const pool = new Pool({ connectionString: lifecycleDatabaseUrl, max: 8 }); let clock: MutableClock; let room: Awaited<ReturnType<typeof seedLifecycleRoom>>; let svc: MessageService;
+const student = (actorId: string, roomId: string, roomMemberId: string, novaActorId: string, pseudonym = "A"): AuthSession => ({ role:"student", actorId, roomId, roomMemberId, pseudonym, nova:{actorId:novaActorId,actorKind:"agent",actorRole:"socratic_facilitator",displayName:"Nova Agent"} });
+const realStudent = async (index = 0): Promise<AuthSession> => { const row = (await pool.query<{actor_id:string; room_member_id:string; pseudonym:string}>("select actor_id, room_member_id, pseudonym from room_member where room_id=$1 order by seat_index limit 1 offset $2",[room.roomId,index])).rows[0]!; return student(row.actor_id, room.roomId, row.room_member_id, room.novaActorId, row.pseudonym); };
+const command = (roomId: string, payload: Record<string, unknown>, id = randomUUID()): RoomCommand => ({ commandId:id, roomId, type:"message.add", clientTime:clock.now().toISOString(), payload } as RoomCommand);
+beforeAll(async()=>runMigrations(lifecycleDatabaseUrl,"infra/postgres/migrations")); beforeEach(async()=>{await resetBusinessTables(lifecycleDatabaseUrl); clock=new MutableClock(); room=await seedLifecycleRoom(pool); await new RoomLifecycleService(new RoomEventRepository(pool,createCoreEventPayloadRegistry(),clock),clock).open(room.roomId,room.teacherId,randomUUID()); svc=new MessageService(new RoomEventRepository(pool,createCoreEventPayloadRegistry(),clock),undefined,clock);}); afterAll(async()=>pool.end());
+describe("message.add",()=>{
+  it("stores text, reply and room-local mention",async()=>{const a=await realStudent(); const first=await svc.add(a,command(room.roomId,{text:"能量",mentions:[],mediaIds:[],replyTo:null})); const second=await svc.add(a,command(room.roomId,{text:"同意",mentions:[room.novaActorId],mediaIds:[],replyTo:first.payload.messageId})); expect(second.type).toBe("message.added");});
+  it("rejects cross-room mention and media",async()=>{const a=await realStudent(); await expect(svc.add(a,command(room.roomId,{text:"x",mentions:[randomUUID()],mediaIds:[],replyTo:null}))).rejects.toEqual(new RoomError("INVALID_COMMAND")); await expect(svc.add(a,command(room.roomId,{text:"",mentions:[],mediaIds:[randomUUID()],replyTo:null}))).rejects.toEqual(new RoomError("INVALID_COMMAND"));});
+  it("is idempotent by command id",async()=>{const a=await realStudent(); const c=command(room.roomId,{text:"once",mentions:[],mediaIds:[],replyTo:null}); const x=await svc.add(a,c); expect(await svc.add(a,c)).toEqual(x);});
+  it("rejects forged actor and closed room",async()=>{const a=student(randomUUID(),room.roomId,randomUUID(),room.novaActorId); await expect(svc.add(a,command(room.roomId,{text:"x",mentions:[],mediaIds:[],replyTo:null}))).rejects.toEqual(new RoomError("FORBIDDEN")); clock.set("2026-08-30T08:45:00Z"); await expect(svc.add(await realStudent(),command(room.roomId,{text:"x",mentions:[],mediaIds:[],replyTo:null}))).rejects.toEqual(new RoomError("ROOM_NOT_OPEN"));});
+});

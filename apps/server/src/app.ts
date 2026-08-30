@@ -19,6 +19,9 @@ import { RoomLifecycleService } from "./modules/rooms/lifecycle-service.js";
 import type { ServiceAssertionTrust } from "./modules/security/service-assertion.js";
 import { loadServiceAssertionTrust } from "./modules/security/service-assertion.js";
 import { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
+import { MessageService } from "./modules/rooms/message-service.js";
+import { CommandService } from "./modules/rooms/command-service.js";
+import { noAttachments } from "./modules/rooms/attachment-validator.js";
 import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { registerRoutes } from "./routes.js";
 
@@ -83,6 +86,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     lifecycle,
     serviceAssertionTrust: assertionTrust,
     jobClaims: options.jobClaims ?? new JobClaimAuthority(),
+    commands: pool && lifecycle ? new CommandService(new MessageService(lifecycle.events, noAttachments, clock), lifecycle) : undefined,
   });
   app.addHook("onClose", async () => {
     if (ownsPool) await pool?.end();

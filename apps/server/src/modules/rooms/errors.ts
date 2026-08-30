@@ -8,7 +8,7 @@ export type RoomErrorCode =
 export class RoomError extends Error {
   override readonly name = "RoomError";
 
-  constructor(readonly code: RoomErrorCode) {
+  constructor(readonly code: RoomErrorCode, readonly currentRevision?: number) {
     super(code);
   }
 }
