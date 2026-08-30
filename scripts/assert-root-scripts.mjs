@@ -14,7 +14,7 @@ const expectedScripts = {
   "test:web": "pnpm --filter @learning-orbit/web test",
   "db:migrate": "pnpm --filter @learning-orbit/server db:migrate",
   "db:migrate:test": "pnpm --filter @learning-orbit/server db:migrate:test",
-  playwright: "playwright test",
+  playwright: "playwright test --config apps/web/playwright.config.ts",
 };
 
 const manifest = JSON.parse(
