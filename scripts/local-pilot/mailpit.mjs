@@ -250,8 +250,13 @@ export class MailpitClient {
     if (!(response instanceof Response) || response.status !== 200) {
       fail("MAILPIT_REQUEST_FAILED");
     }
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-    if (contentType !== expectedContentType) fail("MAILPIT_CONTRACT_MISMATCH");
+    const contentTypeHeader = response.headers.get("content-type");
+    const contentType = contentTypeHeader?.split(";", 1)[0]?.trim().toLowerCase();
+    if (expectedContentType === null
+      ? contentTypeHeader !== null
+      : contentType !== expectedContentType) {
+      fail("MAILPIT_CONTRACT_MISMATCH");
+    }
     return response;
   }
 
@@ -268,8 +273,9 @@ export class MailpitClient {
   }
 
   async assertReady() {
-    const response = await this.#request(`${MAILPIT_BASE_URL}/readyz`, {}, "text/plain");
-    if ((await readBoundedResponseText(response, 64)).trim().toLowerCase() !== "ok") {
+    const response = await this.#request(`${MAILPIT_BASE_URL}/readyz`, {}, null);
+    if (response.headers.get("content-length") !== "0"
+      || await readBoundedResponseText(response, 64) !== "") {
       fail("MAILPIT_CONTRACT_MISMATCH");
     }
   }

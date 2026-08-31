@@ -97,7 +97,7 @@ describe("pinned Mailpit v1.31.0 contract", () => {
 
   it("queries one recipient, reads one ID, deletes by recipient, then proves no residue", async () => {
     const fetch = vi.fn()
-      .mockResolvedValueOnce(new Response("ok", { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-length": "0" } }))
       .mockResolvedValueOnce(jsonResponse(search))
       .mockResolvedValueOnce(jsonResponse(message))
       .mockResolvedValueOnce(new Response("ok", { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } }))
@@ -128,6 +128,12 @@ describe("pinned Mailpit v1.31.0 contract", () => {
       .findSingleMessage(recipient)).rejects.toThrow("MAILPIT_REQUEST_FAILED");
     await expect(new MailpitClient({ fetch: vi.fn() }).findSingleMessage("victim@example.com OR true"))
       .rejects.toThrow("MAILPIT_RECIPIENT_INVALID");
+    await expect(new MailpitClient({
+      fetch: vi.fn().mockResolvedValue(new Response("ok", {
+        status: 200,
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      })),
+    }).assertReady()).rejects.toThrow("MAILPIT_CONTRACT_MISMATCH");
   });
 
   it("rejects oversized bodies before buffering them", async () => {
