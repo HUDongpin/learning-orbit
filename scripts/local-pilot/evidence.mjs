@@ -173,11 +173,15 @@ export function assertContentFreeReceipt(receipt) {
 async function ownedReceiptDirectory(repository) {
   const root = await realDirectory(repository, "LOCAL_PILOT_RECEIPT_DIRECTORY_INVALID");
   let current = root;
-  for (const segment of ["test-results", "local-pilot"]) {
+  for (const [index, segment] of ["test-results", "local-pilot"].entries()) {
     const path = join(current, segment);
     try {
       const info = await lstat(path);
-      if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o700
+      const permissions = info.mode & 0o777;
+      const permissionsInvalid = index === 0
+        ? (permissions & 0o022) !== 0
+        : permissions !== 0o700;
+      if (!info.isDirectory() || info.isSymbolicLink() || permissionsInvalid
         || (typeof process.getuid === "function" && info.uid !== process.getuid())
         || await realpath(path) !== path) {
         fail("LOCAL_PILOT_RECEIPT_DIRECTORY_INVALID");

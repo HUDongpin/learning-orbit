@@ -112,4 +112,36 @@ describe("local pilot evidence and final cleanliness", () => {
       receipt: { ...receipt, runId: "fedcba9876543210" },
     })).rejects.toThrow("LOCAL_PILOT_RECEIPT_DIRECTORY_INVALID");
   });
+
+  it("accepts a safe shared report parent while keeping the pilot receipt directory owner-only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lo-receipt-parent-"));
+    roots.push(root);
+    const reportParent = join(root, "test-results");
+    await mkdir(reportParent, { mode: 0o755 });
+    await chmod(reportParent, 0o755);
+    const receipt = {
+      schemaVersion: 1,
+      runId: "0123456789abcdef",
+      sourceSha: "b".repeat(40),
+      status: "failed",
+      failureCode: "LOCAL_PILOT_DOCKER_UNAVAILABLE",
+      gates: [],
+      cleanup: [],
+    };
+
+    const receiptPath = await writeLocalPilotReceipt({ repository: root, receipt });
+    expect((await stat(reportParent)).mode & 0o777).toBe(0o755);
+    expect((await stat(join(reportParent, "local-pilot"))).mode & 0o777).toBe(0o700);
+    expect((await stat(receiptPath)).mode & 0o777).toBe(0o600);
+
+    const writableRoot = await mkdtemp(join(tmpdir(), "lo-receipt-writable-parent-"));
+    roots.push(writableRoot);
+    const writableParent = join(writableRoot, "test-results");
+    await mkdir(writableParent, { mode: 0o777 });
+    await chmod(writableParent, 0o777);
+    await expect(writeLocalPilotReceipt({
+      repository: writableRoot,
+      receipt: { ...receipt, runId: "fedcba9876543210" },
+    })).rejects.toThrow("LOCAL_PILOT_RECEIPT_DIRECTORY_INVALID");
+  });
 });
