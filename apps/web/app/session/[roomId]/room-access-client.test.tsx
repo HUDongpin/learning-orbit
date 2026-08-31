@@ -407,6 +407,7 @@ describe("room route access guard", () => {
     expect(screen.getAllByText("已結束").length).toBeGreaterThan(0);
     expect(getRoomEvents).toHaveBeenCalledWith(roomId, 0, 500);
     expect(WebSocketConstructor).not.toHaveBeenCalled();
+    expect(screen.getByText(/課堂已結束，不再建立即時連線/u)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下載 JSON" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "要求刪除" })).toBeDisabled();
   });
@@ -464,6 +465,12 @@ describe("room route access guard", () => {
   });
 
   it("recovers a deletion job after a teacher WebSocket receives room-unavailable", async () => {
+    let releaseDeletionLookup: ((value: {
+      deletionJobId: string;
+      status: "running";
+      nextPollAfterMs: null;
+      failureCode: null;
+    }) => void) | undefined;
     let closeListener: ((event: { code?: number }) => void) | undefined;
     class TestWebSocket {
       readonly readyState = 0;
@@ -482,7 +489,7 @@ describe("room route access guard", () => {
     };
     const getRoomDeletion = vi.fn()
       .mockRejectedValueOnce(new SessionGatewayError("ROOM_NOT_FOUND"))
-      .mockResolvedValue(status);
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseDeletionLookup = resolve; }));
     const api = gateway(teacher, {
       getRoomDeletion,
       getDeletionStatus: vi.fn(async () => status),
@@ -490,8 +497,11 @@ describe("room route access guard", () => {
     render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
     await screen.findByRole("heading", { name: "生態系統探究" });
     closeListener?.({ code: 4410 });
+    await waitFor(() => expect(getRoomDeletion).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("heading", { name: "生態系統探究" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在驗證 Session 與房間權限");
+    releaseDeletionLookup?.(status);
     expect(await screen.findByRole("heading", { name: "課堂刪除狀態" })).toBeInTheDocument();
-    expect(getRoomDeletion).toHaveBeenCalledTimes(2);
   });
 
   it("redirects an expired session to the correct login entry", async () => {
@@ -504,12 +514,27 @@ describe("room route access guard", () => {
   });
 
   it("revokes a hydrated student session before returning to login", async () => {
-    const api = gateway();
+    let releaseLogout: (() => void) | undefined;
+    const close = vi.fn();
+    class TestWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() { close(); }
+      addEventListener() {}
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    const api = gateway(student, {
+      logout: vi.fn(() => new Promise<void>((resolve) => { releaseLogout = resolve; })),
+    });
     render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
     await screen.findByRole("heading", { name: "生態系統探究" });
     await userEvent.click(screen.getByRole("button", { name: "登出" }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
-    expect(replace).toHaveBeenCalledWith("/login");
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("heading", { name: "生態系統探究" })).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+    releaseLogout?.();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
   });
 
   it("offers logout recovery instead of a login loop when room hydration is unavailable", async () => {

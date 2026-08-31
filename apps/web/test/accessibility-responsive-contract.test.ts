@@ -36,11 +36,33 @@ function expectMinimumTarget(selector: string) {
   expect(Number(width?.[1])).toBeGreaterThanOrEqual(44);
 }
 
+function relativeLuminance(hex: string): number {
+  const channels = hex.slice(1).match(/../gu)?.map((pair) => Number.parseInt(pair, 16) / 255) ?? [];
+  const [red, green, blue] = channels.map((channel) => (
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  ));
+  return 0.2126 * (red ?? 0) + 0.7152 * (green ?? 0) + 0.0722 * (blue ?? 0);
+}
+
+function contrastRatio(first: string, second: string): number {
+  const values = [relativeLuminance(first), relativeLuminance(second)].sort((a, b) => b - a);
+  return ((values[0] ?? 0) + 0.05) / ((values[1] ?? 0) + 0.05);
+}
+
 describe("static accessibility and responsive CSS contract", () => {
   it("provides authored focus visibility for links as well as form controls", () => {
     expect(css).toContain("a[href]:focus-visible");
     expect(css).toMatch(/outline:\s*3px\s+solid\s+#0b6e99/u);
     expect(css).toMatch(/outline-offset:\s*3px/u);
+    expect(css).toContain("--orbit-control-border: #6f8f78");
+    expect(contrastRatio("#6f8f78", "#ffffff")).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio("#6f8f78", "#fbfefb")).toBeGreaterThanOrEqual(3);
+    for (const selector of [
+      ".login-field input",
+      ".composer textarea",
+      ".teacher-secondary, .teacher-link-button",
+      ".teacher-form-grid input, .teacher-form-grid textarea, .teacher-form-grid select, .danger-zone input",
+    ]) expect(declarationBlock(selector)).toContain("var(--orbit-control-border)");
   });
 
   it("keeps every currently rendered compact control at least 44 by 44 CSS px", () => {

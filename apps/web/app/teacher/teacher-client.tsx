@@ -17,7 +17,9 @@ type WorkspaceState =
   | { kind: "checking" }
   | { kind: "ready"; session: Extract<AuthSession, { role: "teacher" }>; rooms: TeacherRoom[]; truncated: boolean }
   | { kind: "student"; roomId: string }
-  | { kind: "unavailable" };
+  | { kind: "unavailable" }
+  | { kind: "logging-out" }
+  | { kind: "logout-failed" };
 
 const STATUS_LABEL: Readonly<Record<TeacherRoom["status"], string>> = {
   scheduled: "尚未開始",
@@ -56,9 +58,9 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   const [savedRoomId, setSavedRoomId] = useState<string>();
   const [codesDismissed, setCodesDismissed] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [copyStatus, setCopyStatus] = useState<string>();
+  const authorityGeneration = useRef(0);
   const inviteHeading = useRef<HTMLHeadingElement>(null);
   const dismissedHeading = useRef<HTMLHeadingElement>(null);
   const actionErrorAlert = useRef<HTMLParagraphElement>(null);
@@ -77,7 +79,9 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   }, [actionError]);
 
   useEffect(() => {
-    if (workspace.kind === "student" || workspace.kind === "unavailable") recoveryHeading.current?.focus();
+    if (["student", "unavailable", "logging-out", "logout-failed"].includes(workspace.kind)) {
+      recoveryHeading.current?.focus();
+    }
   }, [workspace.kind]);
 
   useEffect(() => {
@@ -117,6 +121,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
 
   async function createClassroom() {
     if (workspace.kind !== "ready" || created) return;
+    const generation = authorityGeneration.current;
     setCreating(true);
     setCodesDismissed(false);
     setSavedRoomId(undefined);
@@ -124,11 +129,14 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
     setCopyStatus(undefined);
     try {
       const result = await api.createRoom({ topic: CLASS_TOPIC });
+      if (generation !== authorityGeneration.current) return;
       setCreated(result);
       try {
         const refreshed = await api.getTeacherRooms();
+        if (generation !== authorityGeneration.current) return;
         setWorkspace({ ...workspace, rooms: refreshed.rooms, truncated: refreshed.truncated });
       } catch (error) {
+        if (generation !== authorityGeneration.current) return;
         if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
           setCreated(undefined);
           setWorkspace({ kind: "checking" });
@@ -138,6 +146,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
         // The create response remains authoritative for this one-time invite view.
       }
     } catch (error) {
+      if (generation !== authorityGeneration.current) return;
       if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
         setCreated(undefined);
         setWorkspace({ kind: "checking" });
@@ -146,7 +155,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
       }
       setActionError("未能建立房間。沒有產生任何可用代碼，請稍後再試。");
     } finally {
-      setCreating(false);
+      if (generation === authorityGeneration.current) setCreating(false);
     }
   }
 
@@ -170,21 +179,50 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   }
 
   async function logout() {
-    setLoggingOut(true);
+    if (workspace.kind === "logging-out") return;
+    authorityGeneration.current += 1;
+    setCreated(undefined);
+    setSavedRoomId(undefined);
+    setCodesDismissed(false);
+    setCreating(false);
     setActionError(undefined);
+    setCopyStatus(undefined);
+    setWorkspace({ kind: "logging-out" });
     try {
       await api.logout();
-      setCreated(undefined);
-      setWorkspace({ kind: "checking" });
       router.replace("/login?role=teacher");
     } catch {
-      setActionError("未能完成登出。伺服器 Session 可能仍然有效，請稍後再試。");
-      setLoggingOut(false);
+      setWorkspace({ kind: "logout-failed" });
     }
   }
 
   if (workspace.kind === "checking") {
     return <main className="teacher-shell teacher-centered" aria-busy="true"><p role="status">正在驗證教師 Session…</p></main>;
+  }
+
+  if (workspace.kind === "logging-out") {
+    return (
+      <main className="teacher-shell teacher-centered" aria-busy="true">
+        <section className="teacher-recovery">
+          <p className="login-eyebrow">Session revocation</p>
+          <h1 ref={recoveryHeading} tabIndex={-1}>正在安全登出</h1>
+          <p role="status">教師工作台、房間入口與一次性代碼已從瀏覽器記憶清除；正在撤銷伺服器 Session。</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (workspace.kind === "logout-failed") {
+    return (
+      <main className="teacher-shell teacher-centered">
+        <section className="teacher-recovery">
+          <p className="login-eyebrow">Fail closed</p>
+          <h1 ref={recoveryHeading} tabIndex={-1}>未能確認登出</h1>
+          <p className="teacher-alert" role="alert">未能完成登出。伺服器 Session 可能仍然有效；教師工作台與一次性代碼保持關閉。</p>
+          <button className="teacher-link-button" onClick={() => void logout()} type="button">再次清除 Session</button>
+        </section>
+      </main>
+    );
   }
 
   if (workspace.kind === "student") {
@@ -208,8 +246,8 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           <h1 ref={recoveryHeading} tabIndex={-1}>暫時無法載入教師工作台</h1>
           <p>未能確認教師 Session 或房間清單；系統沒有載入任何模擬資料。</p>
           {actionError ? <p className="teacher-alert" ref={actionErrorAlert} role="alert" tabIndex={-1}>{actionError}</p> : null}
-          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
-            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+          <button className="teacher-link-button" onClick={() => void logout()} type="button">
+            清除 Session 並返回登入
           </button>
         </section>
       </main>
@@ -226,8 +264,8 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           </div>
           <div><p className="teacher-brand-name">Learning Orbit</p><p className="orbit-subtitle">教師控制台</p></div>
         </div>
-        <button className="teacher-secondary" disabled={loggingOut || Boolean(created)} onClick={() => void logout()} type="button">
-          {created ? "登出（請先保存代碼）" : loggingOut ? "正在登出…" : "登出"}
+        <button className="teacher-secondary" disabled={Boolean(created)} onClick={() => void logout()} type="button">
+          {created ? "登出（請先保存代碼）" : "登出"}
         </button>
       </header>
 

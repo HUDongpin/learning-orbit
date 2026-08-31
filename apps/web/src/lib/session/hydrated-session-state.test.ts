@@ -840,6 +840,32 @@ describe("HydratedSessionState", () => {
       room: { ...room, participants: [room.participants[0], room.participants[0], room.participants[2], room.participants[3]] },
       gateway: identityGateway,
     })).rejects.toThrow("HYDRATED_ROOM_ROSTER_INVALID");
+    await expect(HydratedSessionState.create({
+      session: student,
+      room: {
+        ...room,
+        participants: [
+          room.participants[0],
+          { ...room.participants[1], pseudonym: "探索者 A" },
+          room.participants[2],
+          room.participants[3],
+        ],
+      },
+      gateway: identityGateway,
+    })).rejects.toThrow("HYDRATED_ROOM_ROSTER_INVALID");
+    await expect(HydratedSessionState.create({
+      session: student,
+      room: {
+        ...room,
+        participants: [
+          room.participants[0],
+          room.participants[1],
+          room.participants[2],
+          { ...room.participants[3], pseudonym: "王同學" },
+        ],
+      } as unknown as RoomDetails,
+      gateway: identityGateway,
+    })).rejects.toThrow("HYDRATED_ROOM_ROSTER_INVALID");
 
     await expect(HydratedSessionState.create({
       session: student,

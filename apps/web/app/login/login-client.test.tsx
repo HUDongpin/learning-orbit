@@ -39,7 +39,7 @@ const roomDetails: RoomDetails = {
   closesAt: null,
   nova: student.nova,
   participants: [
-    { actorId: "00000000-0000-4000-8000-000000000020", pseudonym: "探索者 A", actorKind: "human", actorRole: "student" },
+    { actorId: student.actorId, pseudonym: "探索者 A", actorKind: "human", actorRole: "student" },
     { actorId: "00000000-0000-4000-8000-000000000021", pseudonym: "探索者 B", actorKind: "human", actorRole: "student" },
     { actorId: "00000000-0000-4000-8000-000000000022", pseudonym: "探索者 C", actorKind: "human", actorRole: "student" },
     { actorId: "00000000-0000-4000-8000-000000000023", pseudonym: "探索者 D", actorKind: "human", actorRole: "student" },
@@ -121,6 +121,35 @@ describe("unified login page", () => {
     }));
     expect(api.getRoom).toHaveBeenCalledWith(student.roomId);
     expect(replace).toHaveBeenCalledWith(`/session/${student.roomId}`);
+  });
+
+  it.each([
+    ["缺少本人座位", { ...roomDetails, participants: roomDetails.participants.slice(1) }],
+    ["匿名身份不一致", {
+      ...roomDetails,
+      participants: roomDetails.participants.map((participant, index) => (
+        index === 0 ? { ...participant, pseudonym: "探索者 B" as const } : participant
+      )),
+    }],
+    ["匿名 roster 含非规范名称", {
+      ...roomDetails,
+      participants: roomDetails.participants.map((participant, index) => (
+        index === 3 ? { ...participant, pseudonym: "王同學" } : participant
+      )),
+    }],
+    ["Nova 身份不一致", {
+      ...roomDetails,
+      nova: { ...roomDetails.nova, actorId: "00000000-0000-4000-8000-000000000099" },
+    }],
+  ])("does not navigate when server identity validation fails: %s", async (_label, inconsistentRoom) => {
+    const api = gateway({ getRoom: vi.fn(async () => inconsistentRoom as RoomDetails) });
+    render(<LoginClient gateway={api} initialRole="student" />);
+    await screen.findByRole("heading", { name: "加入學習軌道" });
+    await userEvent.type(screen.getByLabelText("房間代碼"), "ABC234");
+    await userEvent.type(screen.getByLabelText("座位代碼"), "DEF2345678");
+    await userEvent.click(screen.getByRole("button", { name: "加入課堂" }));
+    expect(await screen.findByText("課堂服務暫時不可用。請稍後再試。")).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it("uses identical teacher success copy and never displays a link", async () => {

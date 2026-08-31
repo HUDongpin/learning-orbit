@@ -111,6 +111,9 @@ export function RoomDeletionRecoveryPanel({
 }>) {
   const [initial, setInitial] = useState<DeletionStatus | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
+  const recoveryTitleRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => { recoveryTitleRef.current?.focus(); }, []);
 
   useEffect(() => {
     let active = true;
@@ -148,7 +151,7 @@ export function RoomDeletionRecoveryPanel({
     <main className="room-gate-shell room-gate-centered">
       <section className="room-gate-card" aria-labelledby="deletion-recovery-title">
         <p className="login-eyebrow">Deletion recovery</p>
-        <h1 id="deletion-recovery-title">正在確認刪除要求</h1>
+        <h1 ref={recoveryTitleRef} id="deletion-recovery-title" tabIndex={-1}>正在確認刪除要求</h1>
         <p role="status" aria-live="polite">伺服器可能已提交刪除 Job，但原始回應未到達瀏覽器。系統已停止課堂操作，並正在以有界退避恢復真實狀態。</p>
         {attempt ? <p className="teacher-alert" role="alert">第 {attempt} 次恢復尚未取得 Job；不會重新開放課堂或推斷刪除失敗。</p> : null}
       </section>

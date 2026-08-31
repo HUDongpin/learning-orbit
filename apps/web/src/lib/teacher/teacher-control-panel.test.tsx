@@ -261,6 +261,9 @@ describe("teacher control panel", () => {
       expectedProjectionVersion: 4,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(await screen.findByText(/審閱已記錄/u)).toBeInTheDocument();
+    expect(screen.getByText(/這個 Projection Authority 已提交一個事實/u)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交審閱" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
     for (const id of [ROOM_ID, EPOCH, ARTIFACT_ID, EDGE_ID, EVENT_ID, REVIEW_ID, REPLAY_ID]) {
       expect(document.body.innerHTML).not.toContain(id);
     }
@@ -285,8 +288,7 @@ describe("teacher control panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
     await waitFor(() => expect(api.submitAnalyticsReview).toHaveBeenCalledTimes(1));
 
-    await userEvent.selectOptions(branch, "undo_merge");
-    expect(screen.getByText(/等待伺服器新 Projection 確認生效/u)).toBeInTheDocument();
+    expect(screen.getByText(/這個 Projection Authority 已提交一個事實/u)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
 
     const mergedEcho = analyticsContract.parseTeacherEchoSnapshot({
@@ -296,6 +298,9 @@ describe("teacher control panel", () => {
       payload: { nodes: [echo.payload.nodes[0]], edges: [] },
     });
     rerender(<TeacherControlPanel roomId={ROOM_ID} roomStatus="open" echo={mergedEcho} gateway={api} runtime={runtime} onDeletionAccepted={vi.fn()} />);
+    const replayBranch = screen.getByLabelText("修正分支");
+    await waitFor(() => expect(replayBranch).toBeEnabled());
+    await userEvent.selectOptions(replayBranch, "undo_merge");
     expect(await screen.findByText(/新 Projection 已確認合併生效/u)).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("修正理由"), "重新檢查後應保持分開。");
     await userEvent.click(screen.getByRole("button", { name: "提交修正" }));
@@ -361,7 +366,9 @@ describe("teacher control panel", () => {
       REVIEW_ID,
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ));
-    await userEvent.selectOptions(screen.getByLabelText("修正分支"), "undo_merge");
+    const restoredBranch = screen.getByLabelText("修正分支");
+    await waitFor(() => expect(restoredBranch).toBeEnabled());
+    await userEvent.selectOptions(restoredBranch, "undo_merge");
     expect(await screen.findByText(/新 Projection 已確認合併生效/u)).toBeInTheDocument();
     expect(document.body.innerHTML).not.toContain(REVIEW_ID);
     await userEvent.type(screen.getByLabelText("修正理由"), "重新檢查後應保持分開。");
@@ -394,7 +401,9 @@ describe("teacher control panel", () => {
       onDeletionAccepted: vi.fn(),
     };
     const { rerender } = render(<TeacherControlPanel {...props} analyticsCorrectionEventIds={[REVIEW_ID]} />);
-    await userEvent.selectOptions(screen.getByLabelText("修正分支"), "undo_merge");
+    const restoredBranch = screen.getByLabelText("修正分支");
+    await waitFor(() => expect(restoredBranch).toBeEnabled());
+    await userEvent.selectOptions(restoredBranch, "undo_merge");
     expect(await screen.findByText(/新 Projection 已確認合併生效/u)).toBeInTheDocument();
 
     rerender(<TeacherControlPanel {...props} analyticsCorrectionEventIds={[REVIEW_ID, EVENT_ID_2]} />);
@@ -408,7 +417,16 @@ describe("teacher control panel", () => {
   });
 
   it("clears target indices and drafts when server Projection Authority changes", async () => {
-    const api = gateway();
+    let resolveNewAuthorityQueue: ((page: {
+      items: DerivedTextArtifact[];
+      throughRoomSeq: number;
+      nextAfterArtifactId: null;
+      includeHistory: false;
+    }) => void) | undefined;
+    const getDerivedTextArtifacts = vi.fn()
+      .mockResolvedValueOnce({ items: [artifact], throughRoomSeq: 3, nextAfterArtifactId: null, includeHistory: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewAuthorityQueue = resolve; }));
+    const api = gateway({ getDerivedTextArtifacts });
     const runtime = { sendIntent: vi.fn(() => REVIEW_ID) };
     const { rerender } = render(<TeacherControlPanel roomId={ROOM_ID} roomStatus="open" echo={echo} gateway={api} runtime={runtime} onDeletionAccepted={vi.fn()} />);
     await screen.findByText(artifact.text);
@@ -423,6 +441,10 @@ describe("teacher control panel", () => {
     });
     rerender(<TeacherControlPanel roomId={ROOM_ID} roomStatus="open" echo={nextEcho} gateway={api} runtime={runtime} onDeletionAccepted={vi.fn()} />);
 
+    expect(screen.getByRole("button", { name: "提交審閱" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "提交修正" })).toBeDisabled();
+    expect(api.submitAnalyticsReview).not.toHaveBeenCalled();
+    resolveNewAuthorityQueue?.({ items: [artifact], throughRoomSeq: 3, nextAfterArtifactId: null, includeHistory: false });
     await waitFor(() => expect(screen.getByLabelText("修正理由")).toHaveValue(""));
     expect(screen.getByText(/Projection Authority 已更新/u)).toBeInTheDocument();
     expect(api.submitAnalyticsReview).not.toHaveBeenCalled();

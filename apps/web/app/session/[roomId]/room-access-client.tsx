@@ -64,6 +64,13 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
   const activeHydrated = useRef<HydratedSessionState | undefined>(undefined);
   const unsubscribeActiveHydrated = useRef<(() => void) | undefined>(undefined);
 
+  function disposeActiveHydration() {
+    unsubscribeActiveHydrated.current?.();
+    unsubscribeActiveHydrated.current = undefined;
+    activeHydrated.current?.dispose();
+    activeHydrated.current = undefined;
+  }
+
   useEffect(() => {
     let active = true;
     let confirmedSession: AuthSession | undefined;
@@ -126,18 +133,23 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
           agentStatusTimeoutMs,
           onSessionExpired: () => {
             if (!active) return;
+            disposeActiveHydration();
             setState({ kind: "checking" });
             router.replace(mode === "teacher" ? "/login?role=teacher" : "/login");
           },
           onRoomUnavailable: () => {
             if (!active) return;
             if (session.role !== "teacher") {
+              disposeActiveHydration();
               setState({ kind: "authority-lost" });
               return;
             }
             void api.getRoomDeletion(roomId, { signal: accessController.signal }).then(
               (deletion) => {
-                if (active) setState({ kind: "teacher-deletion", initial: deletion, authority });
+                if (active) {
+                  disposeActiveHydration();
+                  setState({ kind: "teacher-deletion", initial: deletion, authority });
+                }
               },
               (statusError) => {
                 if (!active || accessController.signal.aborted) return;
@@ -207,9 +219,10 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
   async function logout() {
     setLoggingOut(true);
     setLogoutError(undefined);
+    disposeActiveHydration();
+    setState({ kind: "authority-lost" });
     try {
       await api.logout();
-      setState({ kind: "checking" });
       router.replace(mode === "teacher" ? "/login?role=teacher" : "/login");
     } catch {
       setLogoutError("未能完成登出。伺服器 Session 可能仍然有效，請稍後再試。");
@@ -354,7 +367,7 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
         </div>
         <div className="room-hydration-notice" role="status">
           <h2>房間權限已確認</h2>
-          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
+          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{details.status === "closed" ? "課堂已結束，不再建立即時連線" : liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
         </div>
         {isTeacher ? (
           <TeacherControlPanel
@@ -366,24 +379,15 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
             gateway={api}
             runtime={hydrated}
             onDeletionAccepted={(initial) => {
-              unsubscribeActiveHydrated.current?.();
-              unsubscribeActiveHydrated.current = undefined;
-              activeHydrated.current?.dispose();
-              activeHydrated.current = undefined;
+              disposeActiveHydration();
               setState({ kind: "teacher-deletion", initial, authority });
             }}
             onDeletionUncertain={() => {
-              unsubscribeActiveHydrated.current?.();
-              unsubscribeActiveHydrated.current = undefined;
-              activeHydrated.current?.dispose();
-              activeHydrated.current = undefined;
+              disposeActiveHydration();
               setState({ kind: "teacher-deletion-unknown", authority });
             }}
             onSessionExpired={() => {
-              unsubscribeActiveHydrated.current?.();
-              unsubscribeActiveHydrated.current = undefined;
-              activeHydrated.current?.dispose();
-              activeHydrated.current = undefined;
+              disposeActiveHydration();
               setState({ kind: "checking" });
               router.replace("/login?role=teacher");
             }}

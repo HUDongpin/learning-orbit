@@ -102,6 +102,16 @@ function gateway(overrides: Partial<SessionGateway> = {}): SessionGateway {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, reject, resolve };
+}
+
 describe("teacher workspace", () => {
   afterEach(() => {
     cleanup();
@@ -203,6 +213,61 @@ describe("teacher workspace", () => {
     await screen.findByRole("heading", { name: "教師工作台" });
     await userEvent.click(screen.getByRole("button", { name: "登出" }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
+    expect(replace).toHaveBeenCalledWith("/login?role=teacher");
+  });
+
+  it("immediately closes the workspace while logout is pending and never resurrects late invite codes", async () => {
+    const createRequest = deferred<CreateRoomResponse>();
+    const logoutRequest = deferred<void>();
+    const api = gateway({
+      createRoom: vi.fn(async () => createRequest.promise),
+      logout: vi.fn(async () => logoutRequest.promise),
+    });
+    render(<TeacherClient gateway={api} />);
+    await screen.findByRole("heading", { name: "教師工作台" });
+
+    await userEvent.click(screen.getByRole("button", { name: "建立新課堂" }));
+    await userEvent.click(screen.getByRole("button", { name: "登出" }));
+
+    expect(await screen.findByRole("heading", { name: "正在安全登出" })).toHaveFocus();
+    expect(screen.queryByRole("heading", { name: "教師工作台" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /建立新課堂|正在建立/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /開啟課堂/u })).not.toBeInTheDocument();
+    expect(screen.queryByText(roomList.rooms[0]!.topic)).not.toBeInTheDocument();
+
+    createRequest.resolve(createdRoom);
+    await waitFor(() => expect(api.createRoom).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(createdRoom.room.roomCode)).not.toBeInTheDocument();
+    for (const invite of createdRoom.seatInvites) {
+      expect(screen.queryByText(invite.code)).not.toBeInTheDocument();
+    }
+
+    logoutRequest.resolve();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?role=teacher"));
+  });
+
+  it("keeps a failed logout fail-closed and retries without restoring teacher data", async () => {
+    const firstLogout = deferred<void>();
+    const secondLogout = deferred<void>();
+    const logout = vi.fn()
+      .mockImplementationOnce(async () => firstLogout.promise)
+      .mockImplementationOnce(async () => secondLogout.promise);
+    render(<TeacherClient gateway={gateway({ logout })} />);
+    await screen.findByRole("heading", { name: "教師工作台" });
+
+    await userEvent.click(screen.getByRole("button", { name: "登出" }));
+    firstLogout.reject(new SessionGatewayError("SESSION_NETWORK_FAILURE"));
+
+    expect(await screen.findByRole("heading", { name: "未能確認登出" })).toHaveFocus();
+    expect(screen.getByRole("alert")).toHaveTextContent("伺服器 Session 可能仍然有效");
+    expect(screen.queryByRole("heading", { name: "教師工作台" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /開啟課堂/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "建立新課堂" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "再次清除 Session" }));
+    expect(await screen.findByRole("heading", { name: "正在安全登出" })).toBeInTheDocument();
+    secondLogout.resolve();
+    await waitFor(() => expect(logout).toHaveBeenCalledTimes(2));
     expect(replace).toHaveBeenCalledWith("/login?role=teacher");
   });
 

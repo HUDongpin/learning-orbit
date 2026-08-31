@@ -118,6 +118,7 @@ export function TeacherControlPanel({
   onDeletionUncertain,
   onSessionExpired,
 }: TeacherControlPanelProps) {
+  const projectionAuthorityKey = echo ? `${echo.analysisEpoch}:${echo.projectionVersion}` : "unavailable";
   const [artifacts, setArtifacts] = useState<DerivedTextArtifact[]>([]);
   const [nextArtifactId, setNextArtifactId] = useState<string | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(true);
@@ -148,13 +149,14 @@ export function TeacherControlPanel({
   const [commandPending, setCommandPending] = useState(false);
   const [actionStatus, setActionStatus] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [reservedProjectionAuthorityKey, setReservedProjectionAuthorityKey] = useState<string>();
+  const [preparedProjectionAuthorityKey, setPreparedProjectionAuthorityKey] = useState<string>();
   const [deletePhrase, setDeletePhrase] = useState("");
   const [agentPolicy, setAgentPolicy] = useState<boolean | undefined>(agentEnabled);
   const [lifecycleRequest, setLifecycleRequest] = useState<Readonly<{
     commandId: string;
     targetStatus: TeacherControlPanelProps["roomStatus"];
   }>>();
-  const projectionAuthorityKey = echo ? `${echo.analysisEpoch}:${echo.projectionVersion}` : "unavailable";
   const previousProjectionAuthorityKey = useRef<string | undefined>(undefined);
   const actionController = useRef<AbortController | undefined>(undefined);
   const paginationController = useRef<AbortController | undefined>(undefined);
@@ -180,6 +182,9 @@ export function TeacherControlPanel({
   const projectionAuthority = echo
     ? { expectedAnalysisEpoch: echo.analysisEpoch, expectedProjectionVersion: echo.projectionVersion }
     : undefined;
+  const projectionAuthorityPrepared = projectionAuthority !== undefined
+    && preparedProjectionAuthorityKey === projectionAuthorityKey;
+  const projectionAuthorityReserved = reservedProjectionAuthorityKey === projectionAuthorityKey;
   const connected = runtime.sessionState?.connected === true;
   const lifecycleReject = lifecycleRequest
     ? [...(runtime.rejects ?? [])].reverse().find(({ commandId }) => commandId === lifecycleRequest.commandId)
@@ -192,7 +197,8 @@ export function TeacherControlPanel({
     && !lifecycleNonRetryableReject;
   const lifecycleTransportPending = lifecycleRequest !== undefined
     && (runtime.pendingCommandIds?.().includes(lifecycleRequest.commandId) ?? false);
-  const correctionCanSubmit = Boolean(projectionAuthority && reason.trim()) && (() => {
+  const correctionCanSubmit = projectionAuthorityPrepared && !projectionAuthorityReserved
+    && Boolean(projectionAuthority && reason.trim()) && (() => {
     switch (correctionKind) {
       case "replace_text":
         return Boolean(selectedArtifact && replacementText.trim() && languageTag.trim());
@@ -221,8 +227,12 @@ export function TeacherControlPanel({
 
   useEffect(() => {
     const controller = new AbortController();
-    setArtifactLoading(true);
+    setPreparedProjectionAuthorityKey(undefined);
+    setArtifacts([]);
+    setNextArtifactId(null);
+    setArtifactLoading(Boolean(echo));
     setArtifactError(undefined);
+    if (!echo) return () => controller.abort();
     void gateway.getDerivedTextArtifacts(
       roomId,
       { reviewStatus: "unreviewed", includeHistory: false, limit: 50 },
@@ -232,7 +242,22 @@ export function TeacherControlPanel({
       setArtifacts(page.items);
       setNextArtifactId(page.nextAfterArtifactId);
       setArtifactIndex(0);
+      setEdgeIndex(0);
+      setReplacementEdgeIndex(0);
+      setTargetEvidenceIndex(0);
+      setReplacementEvidenceIndex(0);
+      setCanonicalIndex(0);
+      setAliasIndex(1);
+      setRationale("");
+      setReason("");
+      setReplacementText("");
+      setPredicate("");
+      setRelationFamily("");
+      setNewCanonicalNodeId("");
+      setNewLabel("");
+      setActionError(undefined);
       setArtifactLoading(false);
+      setPreparedProjectionAuthorityKey(projectionAuthorityKey);
     }, (error) => {
       if (controller.signal.aborted) return;
       if (error instanceof SessionGatewayError && error.code === "AUTH_REQUIRED") {
@@ -243,7 +268,7 @@ export function TeacherControlPanel({
       setArtifactLoading(false);
     });
     return () => controller.abort();
-  }, [gateway, projectionAuthorityKey, roomId]);
+  }, [echo, gateway, projectionAuthorityKey, roomId]);
 
   useEffect(() => { setAgentPolicy(agentEnabled); }, [agentEnabled]);
 
@@ -299,23 +324,11 @@ export function TeacherControlPanel({
   useEffect(() => {
     const previous = previousProjectionAuthorityKey.current;
     previousProjectionAuthorityKey.current = projectionAuthorityKey;
+    setReservedProjectionAuthorityKey((current) => (
+      current === projectionAuthorityKey ? current : undefined
+    ));
     if (previous === undefined || previous === projectionAuthorityKey) return;
-    setArtifactIndex(0);
     paginationController.current?.abort();
-    setEdgeIndex(0);
-    setReplacementEdgeIndex(0);
-    setTargetEvidenceIndex(0);
-    setReplacementEvidenceIndex(0);
-    setCanonicalIndex(0);
-    setAliasIndex(1);
-    setRationale("");
-    setReason("");
-    setReplacementText("");
-    setPredicate("");
-    setRelationFamily("");
-    setNewCanonicalNodeId("");
-    setNewLabel("");
-    setActionError(undefined);
     setActionStatus("伺服器 Projection Authority 已更新；請重新選擇目標並確認審閱或修正內容。");
   }, [projectionAuthorityKey]);
 
@@ -361,7 +374,7 @@ export function TeacherControlPanel({
   }
 
   async function loadMoreArtifacts(): Promise<void> {
-    if (!nextArtifactId || artifactLoading) return;
+    if (!projectionAuthorityPrepared || !nextArtifactId || artifactLoading) return;
     paginationController.current?.abort();
     const controller = new AbortController();
     paginationController.current = controller;
@@ -389,7 +402,7 @@ export function TeacherControlPanel({
   }
 
   async function submitReview(): Promise<void> {
-    if (!selectedArtifact || !projectionAuthority) return;
+    if (!projectionAuthorityPrepared || !selectedArtifact || !projectionAuthority || projectionAuthorityReserved) return;
     const signal = startAction();
     try {
       const input: AnalyticsReviewCommand = {
@@ -401,6 +414,7 @@ export function TeacherControlPanel({
       };
       await gateway.submitAnalyticsReview(roomId, input, { signal });
       if (!actionIsCurrent(signal)) return;
+      setReservedProjectionAuthorityKey(projectionAuthorityKey);
       setActionStatus("審閱已記錄，正在等待伺服器分析重建與 Projection 更新。");
       setRationale("");
     } catch (error) {
@@ -413,7 +427,7 @@ export function TeacherControlPanel({
   }
 
   async function submitCorrection(): Promise<void> {
-    if (!projectionAuthority || !correctionCanSubmit) return;
+    if (!projectionAuthorityPrepared || !projectionAuthority || projectionAuthorityReserved || !correctionCanSubmit) return;
     const signal = startAction();
     try {
       const retractTarget = retractType === "derived_text" && selectedArtifact
@@ -444,6 +458,7 @@ export function TeacherControlPanel({
       });
       const accepted = await gateway.submitAnalyticsReview(roomId, input, { signal });
       if (!actionIsCurrent(signal)) return;
+      setReservedProjectionAuthorityKey(projectionAuthorityKey);
       if (correctionKind === "merge_alias" && canonicalNode && aliasNode) {
         setMergeUndoCandidate({
           reviewEventId: accepted.reviewEventId,
@@ -596,14 +611,14 @@ export function TeacherControlPanel({
           ) : !artifactLoading ? <p>目前沒有伺服器回傳的未審閱 Artifact。</p> : null}
           {nextArtifactId ? <button className="teacher-secondary" disabled={artifactLoading} onClick={() => void loadMoreArtifacts()} type="button">載入下一頁</button> : null}
 
-          <fieldset className="teacher-form-grid" disabled={commandPending || !selectedArtifact || !projectionAuthority}>
+          <fieldset className="teacher-form-grid" disabled={commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !selectedArtifact || !projectionAuthority}>
             <legend>記錄審閱</legend>
             <label>審閱結果<select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as typeof reviewDecision)}>{REVIEW_DECISIONS.map((decision) => <option key={decision} value={decision}>{decision}</option>)}</select></label>
             <label>審閱理由<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} maxLength={2000} required /></label>
             <button className="teacher-create" disabled={!rationale.trim()} onClick={() => void submitReview()} type="button">提交審閱</button>
           </fieldset>
 
-          <fieldset className="teacher-form-grid" disabled={commandPending || !projectionAuthority}>
+          <fieldset className="teacher-form-grid" disabled={commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !projectionAuthority}>
             <legend>記錄 Correction</legend>
             <label>修正分支<select value={correctionKind} onChange={(event) => setCorrectionKind(event.target.value as TeacherCorrectionKind)}>{Object.entries(CORRECTION_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
             {correctionKind === "replace_text" ? <><label>替換文字<textarea value={replacementText} onChange={(event) => setReplacementText(event.target.value)} maxLength={20000} /></label><label>語言標籤<input value={languageTag} onChange={(event) => setLanguageTag(event.target.value)} /></label></> : null}
@@ -622,6 +637,8 @@ export function TeacherControlPanel({
             <button className="teacher-create" disabled={!correctionCanSubmit} onClick={() => void submitCorrection()} type="button">提交修正</button>
           </fieldset>
           {!projectionAuthority ? <p role="status">等待伺服器 teacher ECHO 的 Analysis Epoch 與 Projection Version；審閱提交保持停用。</p> : null}
+          {projectionAuthority && !projectionAuthorityPrepared ? <p role="status">正在為目前 Projection Authority 重新載入 Artifact Queue 並重置目標；審閱提交保持停用。</p> : null}
+          {projectionAuthorityReserved ? <p role="status">這個 Projection Authority 已提交一個事實；等待伺服器 Replay 推進版本後才可再次審閱或修正。</p> : null}
         </div>
       </section>
 

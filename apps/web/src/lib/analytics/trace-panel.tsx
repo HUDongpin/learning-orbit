@@ -62,19 +62,17 @@ export function TracePanel({ slot, onRetry }: Readonly<{ slot: ProjectionSlot; o
 
   useEffect(() => {
     if (!canonical) { setPresented(undefined); return; }
-    if (!paused || storedPresented?.projectionKey !== canonical.projectionKey
-      || storedPresented.analysisEpoch !== canonical.analysisEpoch) {
+    if (!paused || storedPresented?.projectionKey !== canonical.projectionKey) {
       setPresented(canonical);
       if (paused) setPaused(false);
       setSelectedKey(undefined);
     }
-  }, [canonical, paused, storedPresented?.analysisEpoch, storedPresented?.projectionKey]);
+  }, [canonical, paused, storedPresented?.projectionKey]);
 
-  const sameEpoch = Boolean(canonical && storedPresented
-    && canonical.projectionKey === storedPresented.projectionKey
-    && canonical.analysisEpoch === storedPresented.analysisEpoch);
-  const presented = sameEpoch ? storedPresented : canonical;
-  const presentationPaused = paused && sameEpoch;
+  const sameProjection = Boolean(canonical && storedPresented
+    && canonical.projectionKey === storedPresented.projectionKey);
+  const presented = paused && sameProjection ? storedPresented : canonical;
+  const presentationPaused = paused && sameProjection;
 
   const adapted = useMemo(() => presented ? adapt(presented, windowName, viewName) : undefined, [presented, viewName, windowName]);
   const selectedNode = adapted?.nodes.find(({ key }) => key === selectedKey);

@@ -10,6 +10,7 @@ import {
   normalizeClassroomCode,
   type SessionGateway,
 } from "../../src/lib/session/session-gateway";
+import { assertStudentRoomIdentity } from "../../src/lib/session/room-identity";
 
 type LoginRole = "student" | "teacher";
 type SessionCheck = "checking" | "anonymous" | "unavailable";
@@ -132,7 +133,7 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
     try {
       const session = await api.joinStudent({ roomCode: normalizedRoomCode, seatCode: normalizedSeatCode });
       const room = await api.getRoom(session.roomId);
-      if (room.roomId !== session.roomId) throw new SessionGatewayError("SESSION_IDENTITY_MISMATCH");
+      assertStudentRoomIdentity(session, room);
       router.replace(`/session/${session.roomId}`);
     } catch (error) {
       const rejected = error instanceof SessionGatewayError

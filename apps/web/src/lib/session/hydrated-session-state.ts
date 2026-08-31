@@ -17,6 +17,7 @@ import { RoomSocket, roomWebSocketUrl, type SocketLike } from "../realtime/room-
 import { EventLedger, type LedgerMessage } from "./event-ledger";
 import { ProjectionSync, type ProjectionAcceptResult } from "./projection-sync";
 import { makeSessionCommandBus, type RoomCommandIntent, type SessionCommandBus } from "./session-command-bus";
+import { assertRoomRosterIntegrity, assertStudentRoomIdentity } from "./room-identity";
 import {
   SessionGatewayError,
   type EchoProjectionKey,
@@ -168,19 +169,14 @@ export class HydratedSessionState {
     private readonly gateway: EventGateway,
     options: Pick<HydratedSessionOptions, "pageLimit" | "retryDelaysMs" | "onSessionExpired" | "onRoomUnavailable" | "commandClock" | "commandUuid" | "agentCurrent" | "agentServiceUnavailable" | "agentStatusTimeoutMs">,
   ) {
-    const participantActorIds = room.participants.map(({ actorId }) => actorId);
-    if (new Set(participantActorIds).size !== room.participants.length
-      || participantActorIds.includes(room.nova.actorId)) {
-      throw new Error("HYDRATED_ROOM_ROSTER_INVALID");
-    }
+    try { assertRoomRosterIntegrity(room); }
+    catch { throw new Error("HYDRATED_ROOM_ROSTER_INVALID"); }
     if (room.roomId !== (session.role === "student" ? session.roomId : room.roomId)) {
       throw new Error("HYDRATED_SESSION_ROOM_MISMATCH");
     }
     if (session.role === "student") {
-      const self = room.participants.find(({ actorId }) => actorId === session.actorId);
-      if (session.nova.actorId !== room.nova.actorId || self?.pseudonym !== session.pseudonym) {
-        throw new Error("HYDRATED_SESSION_IDENTITY_MISMATCH");
-      }
+      try { assertStudentRoomIdentity(session, room); }
+      catch { throw new Error("HYDRATED_SESSION_IDENTITY_MISMATCH"); }
     }
     this.#session = session;
     this.#room = room;

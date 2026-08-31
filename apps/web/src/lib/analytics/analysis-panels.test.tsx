@@ -233,7 +233,7 @@ describe("server projection panels", () => {
     await waitFor(() => expect(screen.getByRole("definition", { name: "群體參與平衡" })).toHaveTextContent("85%"));
   });
 
-  it("drops ECHO history and TRACE pause synchronously when the server installs a new Analysis Epoch", async () => {
+  it("drops ECHO history but keeps TRACE presentation paused across a new Analysis Epoch", async () => {
     const user = userEvent.setup();
     const echo = render(<EchoPanel slot={ready(studentEcho(2))} onLoadTimeline={async () => studentTimeline()} onRetry={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "查看版本時間線" }));
@@ -248,8 +248,10 @@ describe("server projection panels", () => {
     const trace = render(<TracePanel slot={ready(studentTrace(1, 0.25))} onRetry={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "暫停圖譜呈現" }));
     trace.rerender(<TracePanel slot={ready(studentTrace(1, 0.85, NEXT_EPOCH))} onRetry={vi.fn()} />);
+    expect(screen.getByRole("definition", { name: "群體參與平衡" })).toHaveTextContent("25%");
+    expect(screen.getByText(/1 個較新版本/u)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "顯示最新已驗證版本" }));
     expect(screen.getByRole("definition", { name: "群體參與平衡" })).toHaveTextContent("85%");
-    expect(screen.getByRole("button", { name: "暫停圖譜呈現" })).toBeInTheDocument();
   });
 
   it("shows explicit policy and retryable failure states without creating an empty graph", async () => {
