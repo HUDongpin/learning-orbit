@@ -58,7 +58,7 @@ export class AnalyticsPolicy {
              SELECT 1 FROM auth_session s
              WHERE s.session_id=$3::uuid AND s.teacher_id=r.teacher_id
                AND s.principal_kind='teacher' AND s.revoked_at IS NULL
-               AND s.expires_at > transaction_timestamp()))`,
+               AND s.expires_at > transaction_timestamp())`,
          [roomId, principal.teacherId, sessionId],
       );
       const row = result.rows[0];
@@ -85,7 +85,7 @@ export class AnalyticsPolicy {
            SELECT 1 FROM auth_session s
            WHERE s.session_id=$4::uuid AND s.room_member_id=m.room_member_id
              AND s.principal_kind='student' AND s.revoked_at IS NULL
-             AND s.expires_at > transaction_timestamp()))`,
+             AND s.expires_at > transaction_timestamp())`,
       [roomId, principal.roomMemberId, principal.actorId, sessionId],
     );
     const row = result.rows[0];

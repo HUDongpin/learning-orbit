@@ -73,6 +73,19 @@ describe("teacher magic links", () => {
       expect(links.rows[0]?.token_hash.equals(createHash("sha256").update(token).digest())).toBe(true);
       expect(links.rows[0]?.token_hash.toString("utf8")).not.toContain(token);
     } finally { await pool.end(); }
+    const originlessHead = await app.inject({
+      method: "HEAD",
+      url: `/v1/auth/teacher/magic-link/consume?token=${encodeURIComponent(token)}`,
+    });
+    expect(originlessHead.statusCode).toBe(403);
+    const allowedHead = await app.inject({
+      method: "HEAD",
+      url: `/v1/auth/teacher/magic-link/consume?token=${encodeURIComponent(token)}`,
+      headers: { origin: allowedOrigin },
+    });
+    expect(allowedHead.statusCode).toBe(405);
+    expect(allowedHead.headers["set-cookie"]).toBeUndefined();
+    expect(allowedHead.headers.location).toBeUndefined();
     const [first, second] = await Promise.all([
       app.inject({ method: "GET", url: `/v1/auth/teacher/magic-link/consume?token=${encodeURIComponent(token)}` }),
       app.inject({ method: "GET", url: `/v1/auth/teacher/magic-link/consume?token=${encodeURIComponent(token)}` }),

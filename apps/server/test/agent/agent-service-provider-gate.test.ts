@@ -31,6 +31,24 @@ const teacher: Extract<AuthSession, { role: "teacher" }> = {
 };
 
 describe("Agent Provider admission gate", () => {
+  it("maps a deletion race from locked run admission to the public tombstone code", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM room_member m JOIN auth_session")) {
+        return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID, deletion_active: false }], rowCount: 1 };
+      }
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 40)}`);
+    });
+    const service = new AgentService(
+      { query } as never,
+      { now: () => new Date("2026-08-31T06:00:00.000Z") },
+    );
+    vi.spyOn(service.repository, "getOrCreateRunAndJob")
+      .mockRejectedValue(new Error("ROOM_DELETION_IN_PROGRESS"));
+
+    await expect(service.request(student, SESSION_ID, ROOM_ID, EVENT_ID))
+      .rejects.toEqual(new AgentError("ROOM_DELETION_IN_PROGRESS"));
+  });
+
   it("maps a deletion race from the locked current-state read to the public tombstone code", async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("FROM room_member m JOIN auth_session")) {

@@ -20,6 +20,11 @@ export type Code6 = string;
  * via the `definition` "code10".
  */
 export type Code10 = string;
+/**
+ * This interface was referenced by `RoomHttpCatalog`'s JSON-Schema
+ * via the `definition` "studentPseudonym".
+ */
+export type StudentPseudonym = "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D";
 export type RoomEventEnvelope = {
   eventId: string;
   schemaVersion: 1;
@@ -73,7 +78,7 @@ export interface Nova {
  */
 export interface P {
   actorId: U;
-  pseudonym: string;
+  pseudonym: StudentPseudonym;
   actorKind: "human";
   actorRole: "student";
 }
@@ -104,25 +109,25 @@ export interface CreateRoomResponse {
     {
       roomMemberId: U;
       actorId: U;
-      pseudonym: string;
+      pseudonym: StudentPseudonym;
       code: Code10;
     },
     {
       roomMemberId: U;
       actorId: U;
-      pseudonym: string;
+      pseudonym: StudentPseudonym;
       code: Code10;
     },
     {
       roomMemberId: U;
       actorId: U;
-      pseudonym: string;
+      pseudonym: StudentPseudonym;
       code: Code10;
     },
     {
       roomMemberId: U;
       actorId: U;
-      pseudonym: string;
+      pseudonym: StudentPseudonym;
       code: Code10;
     }
   ];
@@ -142,7 +147,7 @@ export interface JoinRoomRequest {
 export interface JoinRoomResponse {
   roomMemberId: U;
   actorId: U;
-  pseudonym: string;
+  pseudonym: StudentPseudonym;
 }
 /**
  * This interface was referenced by `RoomHttpCatalog`'s JSON-Schema

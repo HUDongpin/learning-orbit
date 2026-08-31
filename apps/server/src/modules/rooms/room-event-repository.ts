@@ -327,12 +327,14 @@ export class RoomEventRepository {
       );
       const locked = result.rows[0];
       if (!locked) throw new RoomError("FORBIDDEN");
+      const canonicalRoomId = locked.room_id;
+      if (!UUID_PATTERN.test(canonicalRoomId)) throw new Error("INVALID_STORED_ROOM");
       const deletion = await client.query<{ deletion_active: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM deletion_job
             WHERE room_id=$1 AND status IN ('queued','running','retryable','dead')
          ) AS deletion_active`,
-        [roomId],
+        [canonicalRoomId],
       );
       if (deletion.rows[0]?.deletion_active !== false) {
         throw new RoomError("ROOM_DELETION_IN_PROGRESS");
@@ -350,7 +352,7 @@ export class RoomEventRepository {
         const existing = await client.query<StoredEventRow>(
           `${storedEventSelect}
            WHERE e.room_id = $1 AND e.causation_id = $2`,
-          [roomId, causationId],
+          [canonicalRoomId, causationId],
         );
         const row = existing.rows[0];
         return row ? parseStoredEvent(row, this.payloads) : null;
@@ -358,7 +360,7 @@ export class RoomEventRepository {
 
       const appendOne = async (draft: unknown): Promise<RoomEventEnvelope> => {
         if (operationFailure !== undefined) throw operationFailure;
-        const candidate = this.#validateDraft(roomId, nextRoomSeq, draft);
+        const candidate = this.#validateDraft(canonicalRoomId, nextRoomSeq, draft);
         const prior = await findOneByCausation(candidate.causationId);
         if (prior) {
           if (!immutableDraftMatches(prior, candidate)) invalidCommand();
@@ -420,7 +422,7 @@ export class RoomEventRepository {
           const advanced = await client.query(
             `UPDATE classroom_room SET next_room_seq = $2
              WHERE room_id = $1 AND next_room_seq = $3`,
-            [roomId, nextRoomSeq + 1, nextRoomSeq],
+            [canonicalRoomId, nextRoomSeq + 1, nextRoomSeq],
           );
           if (advanced.rowCount !== 1) throw new Error("ROOM_SEQUENCE_ADVANCE_FAILED");
         } catch {

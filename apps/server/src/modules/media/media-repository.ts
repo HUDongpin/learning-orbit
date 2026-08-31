@@ -354,7 +354,11 @@ export class MediaRepository {
     return { record: toRecord(asset), grant: toGrant(grant) };
   }
 
-  async getMedia(mediaId: string, roomId?: string): Promise<MediaAssetRecord | null> {
+  async getMedia(
+    mediaId: string,
+    roomId?: string,
+    queryable: Pick<PoolClient, "query"> = this.pool,
+  ): Promise<MediaAssetRecord | null> {
     requireUuid(mediaId, "INVALID_MEDIA_COMMAND");
     const values: unknown[] = [mediaId];
     const roomClause = roomId === undefined ? "" : " AND room_id = $2";
@@ -362,18 +366,23 @@ export class MediaRepository {
       requireUuid(roomId, "INVALID_MEDIA_COMMAND");
       values.push(roomId);
     }
-    const result = await this.pool.query<MediaAssetDbRow>(
+    const result = await queryable.query<MediaAssetDbRow>(
       `SELECT ${assetColumns} FROM media_asset WHERE media_id = $1${roomClause}`,
       values,
     );
     return result.rows[0] ? toRecord(result.rows[0]) : null;
   }
 
-  async getSafeDerivative(mediaId: string, roomId: string, mediaKind: MediaKind): Promise<SafeMediaDerivative | null> {
+  async getSafeDerivative(
+    mediaId: string,
+    roomId: string,
+    mediaKind: MediaKind,
+    queryable: Pick<PoolClient, "query"> = this.pool,
+  ): Promise<SafeMediaDerivative | null> {
     requireUuid(mediaId, "INVALID_MEDIA_COMMAND");
     requireUuid(roomId, "INVALID_MEDIA_COMMAND");
     const derivativeKind: SafeMediaDerivative["kind"] = mediaKind === "image" ? "sanitized_image" : "playback_audio";
-    const result = await this.pool.query<SafeMediaDerivativeDbRow>(
+    const result = await queryable.query<SafeMediaDerivativeDbRow>(
       `SELECT m.media_id, m.room_id, m.kind AS media_kind,
               d.kind AS derivative_kind, d.object_key, d.mime,
               d.size_bytes::text AS size_bytes, d.sha256

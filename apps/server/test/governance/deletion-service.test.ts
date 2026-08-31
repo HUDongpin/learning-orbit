@@ -58,6 +58,10 @@ describe("governance deletion service", () => {
       },
     }, roomId)).rejects.toMatchObject({ statusCode: 404, code: "ROOM_NOT_FOUND" });
     expect(query).toHaveBeenCalledTimes(callsBeforeStudent);
+
+    await expect(service.authorizeRoom(principal, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
+      .rejects.toMatchObject({ statusCode: 404, code: "ROOM_NOT_FOUND" });
+    expect(query).toHaveBeenCalledTimes(callsBeforeStudent);
   });
 
   it("creates one content-free job and routes repeated requests to status recovery", async () => {

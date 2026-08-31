@@ -68,6 +68,7 @@ describe("auth wire contracts", () => {
     const teacher = { role: "teacher", teacherId: uuid, actorId: uuid };
 
     expect(validate(student)).toBe(true);
+    expect(validate({ ...student, pseudonym: "王同學" })).toBe(false);
     expect(validate(teacher)).toBe(true);
     expect(validate({ ...student, extra: true })).toBe(false);
     expect(validate({ ...student, nova: { ...nova, displayName: "Other Agent" } })).toBe(false);

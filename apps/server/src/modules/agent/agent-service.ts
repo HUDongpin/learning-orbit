@@ -50,6 +50,7 @@ export class AgentService {
     } catch (error) {
       if (error instanceof Error && [
         "ROOM_NOT_FOUND",
+        "ROOM_DELETION_IN_PROGRESS",
         "ROOM_NOT_OPEN",
         "AGENT_DISABLED",
         "TRIGGER_EVENT_NOT_FOUND",

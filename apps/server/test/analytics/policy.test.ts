@@ -10,6 +10,18 @@ const teacher: Extract<AuthSession, { role: "teacher" }> = {
   actorId: "00000000-0000-4000-8000-000000000001",
 };
 const sessionId = "00000000-0000-4000-8000-000000000777";
+const student: Extract<AuthSession, { role: "student" }> = {
+  role: "student",
+  roomId,
+  roomMemberId: "00000000-0000-4000-8000-000000000011",
+  actorId: "00000000-0000-4000-8000-000000000012",
+  pseudonym: "探索者 A",
+  nova: {
+    actorId: "00000000-0000-4000-8000-000000000013",
+    actorKind: "agent",
+    actorRole: "socratic_facilitator",
+  },
+};
 
 describe("AnalyticsPolicy role and lifecycle boundary", () => {
   it("allows only the role-owned projection pair", () => {
@@ -36,5 +48,29 @@ describe("AnalyticsPolicy role and lifecycle boundary", () => {
     const pool = { query: async () => ({ rows: [{ room_id: roomId, status: "closed", policy_current: true, deletion_active: true }] }) } as any;
     await expect(new AnalyticsPolicy(pool).requireRoomAccess(teacher, roomId, "latest", sessionId))
       .rejects.toMatchObject({ statusCode: 410, code: "ROOM_DELETION_IN_PROGRESS" });
+  });
+
+  it("emits balanced PostgreSQL for both session-bound room access branches", async () => {
+    const statements: string[] = [];
+    const pool = {
+      query: async (text: string) => {
+        statements.push(text);
+        if (text.includes("student_analytics_promotion")) return { rows: [] };
+        return { rows: [{ room_id: roomId, status: "open", policy_current: true, deletion_active: false }] };
+      },
+    } as any;
+
+    await new AnalyticsPolicy(pool).requireRoomAccess(teacher, roomId, "latest", sessionId);
+    await new AnalyticsPolicy(pool).requireRoomAccess(student, roomId, "latest", sessionId);
+
+    const accessStatements = statements.filter((text) => text.includes("FROM auth_session"));
+    expect(accessStatements).toHaveLength(2);
+    for (const statement of accessStatements) {
+      const balance = [...statement].reduce(
+        (current, character) => current + (character === "(" ? 1 : character === ")" ? -1 : 0),
+        0,
+      );
+      expect(balance).toBe(0);
+    }
   });
 });

@@ -5,11 +5,10 @@ export function isExactAllowedOrigin(value: string | undefined, allowedOrigins: 
 }
 
 export function requiresAllowedOrigin(request: FastifyRequest): boolean {
-  return !(
-    request.method === "GET"
-    && request.routeOptions.url === "/v1/auth/teacher/magic-link/consume"
-  ) && !(request.method === "POST" && [
+  if (request.method === "POST" && [
     "/internal/rooms/auto-close",
     "/internal/media/reconcile-upload",
-  ].includes(request.routeOptions.url ?? ""));
+  ].includes(request.routeOptions.url ?? "")) return false;
+  if (request.headers.upgrade?.toLowerCase() === "websocket") return true;
+  return !["GET", "OPTIONS"].includes(request.method);
 }

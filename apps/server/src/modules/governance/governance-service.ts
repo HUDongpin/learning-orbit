@@ -15,7 +15,7 @@ import { makeDeletionReceipt } from "./retention-policy.js";
 
 const SURFACES = ["events", "media", "derivatives", "artifacts", "projections", "agent_runs", "caches", "provider_copies"] as const;
 const EXPORT_MAX_BYTES = 32 * 1024 * 1024;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DELETION_NAMESPACE = Buffer.from("4d3f1a0e6b9c42d8a1f0e5c7b2d64980", "hex");
 
 export class GovernanceError extends Error {

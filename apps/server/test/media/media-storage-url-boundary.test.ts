@@ -60,6 +60,20 @@ const teacher: Extract<AuthSession, { role: "teacher" }> = {
   actorId: "00000000-0000-4000-8000-000000000001",
 };
 
+function readablePool(deletionActive = false) {
+  const query = vi.fn(async (text: string) => {
+    if (text.includes("FROM classroom_room WHERE room_id=$1 AND teacher_id=$2")) {
+      return { rowCount: 1, rows: [{ one: 1 }] };
+    }
+    if (text.includes("FROM deletion_job")) {
+      return { rowCount: 1, rows: [{ deletion_active: deletionActive }] };
+    }
+    return { rowCount: 0, rows: [] };
+  });
+  const client = { query, release: vi.fn() };
+  return { query, connect: vi.fn(async () => client), client };
+}
+
 describe("storage browser URL boundary", () => {
   it("shares the frozen singular derivative key and rejects plural drift", () => {
     expect(safeDerivativeObjectKey(ROOM_ID, MEDIA_ID, "sanitized_image")).toBe(DERIVATIVE_KEY);
@@ -83,7 +97,7 @@ describe("storage browser URL boundary", () => {
   it("never signs a ready original when the required safe derivative is absent", async () => {
     const store = { capabilities, stat: vi.fn(), createDownloadUrl: vi.fn() };
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store,
       repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => null) },
       clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -103,7 +117,7 @@ describe("storage browser URL boundary", () => {
       createDownloadUrl: vi.fn(async () => signedDownload(`${ORIGIN}/private?signature=opaque`)),
     };
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store,
       repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => derivative) },
       clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -118,7 +132,7 @@ describe("storage browser URL boundary", () => {
 
   it("projects ready public metadata from the verified safe derivative rather than the original", async () => {
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store: {
         capabilities,
         stat: vi.fn(async () => ({ objectKey: DERIVATIVE_KEY, sizeBytes: 3, sha256: SHA256, detectedMime: "image/png", etag: "immutable" })),
@@ -139,7 +153,7 @@ describe("storage browser URL boundary", () => {
       createDownloadUrl: vi.fn(),
     };
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store,
       repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => derivative) },
       clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -161,7 +175,7 @@ describe("storage browser URL boundary", () => {
       createDownloadUrl: vi.fn(async () => signedDownload(`${ORIGIN}/private?signature=opaque`, signedAt, expiresAt)),
     };
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store,
       repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => derivative) },
       clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -179,7 +193,7 @@ describe("storage browser URL boundary", () => {
     ]) {
       const store = { capabilities, stat: vi.fn(), createDownloadUrl: vi.fn() };
       const deps = {
-        pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+        pool: readablePool(),
         store,
         repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => ({ ...derivative, ...changed })) },
         clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -199,7 +213,7 @@ describe("storage browser URL boundary", () => {
       createDownloadUrl: vi.fn(async () => signedDownload("https://user:password@storage.learning-orbit.test/private?secret=hidden")),
     };
     const deps = {
-      pool: { query: vi.fn(async () => ({ rowCount: 1, rows: [{ one: 1 }] })) },
+      pool: readablePool(),
       store,
       repo: { getMedia: vi.fn(async () => asset), getSafeDerivative: vi.fn(async () => derivative) },
       clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
@@ -209,5 +223,32 @@ describe("storage browser URL boundary", () => {
     await expect(createDownloadGrant(deps, { principal: teacher, roomId: ROOM_ID, mediaId: MEDIA_ID }))
       .rejects.toMatchObject({ code: "STORAGE_ORIGIN_NOT_ALLOWED" });
     expect(store.createDownloadUrl).toHaveBeenCalledOnce();
+  });
+
+  it("blocks attachment reads and new signed downloads behind the deletion tombstone", async () => {
+    const store = {
+      capabilities,
+      stat: vi.fn(),
+      createDownloadUrl: vi.fn(),
+    };
+    const repo = {
+      getMedia: vi.fn(async () => asset),
+      getSafeDerivative: vi.fn(async () => derivative),
+    };
+    const deps = {
+      pool: readablePool(true),
+      store,
+      repo,
+      clock: { now: () => new Date("2026-08-31T01:00:00.000Z") },
+      config: { storageBrowserOrigins: [ORIGIN] },
+    } as unknown as MediaDeps;
+
+    await expect(getMediaAttachment(deps, { principal: teacher, roomId: ROOM_ID, mediaId: MEDIA_ID }))
+      .rejects.toMatchObject({ code: "ROOM_DELETION_IN_PROGRESS", statusCode: 409 });
+    await expect(createDownloadGrant(deps, { principal: teacher, roomId: ROOM_ID, mediaId: MEDIA_ID }))
+      .rejects.toMatchObject({ code: "ROOM_DELETION_IN_PROGRESS", statusCode: 409 });
+    expect(repo.getMedia).not.toHaveBeenCalled();
+    expect(store.stat).not.toHaveBeenCalled();
+    expect(store.createDownloadUrl).not.toHaveBeenCalled();
   });
 });

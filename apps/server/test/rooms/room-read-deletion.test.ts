@@ -109,6 +109,58 @@ describe("room read deletion boundary", () => {
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("FROM deletion_job"))).toBe(true);
   });
 
+  it("uses the database-canonical room UUID in every appended envelope", async () => {
+    const canonicalRoomId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const insertedRoomIds: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string, values?: readonly unknown[]) => {
+        if (sql.includes("FROM classroom_room")) return { rows: [{
+          room_id: canonicalRoomId,
+          nova_actor_id: "44444444-4444-4444-8444-444444444444",
+          teacher_id: TEACHER_ID,
+          topic: "生態系統探究",
+          status: "scheduled",
+          duration_seconds: 2700,
+          starts_at: null,
+          closes_at: null,
+          closed_at: null,
+          next_room_seq: "1",
+          created_at: new Date("2026-08-31T00:00:00.000Z"),
+        }] };
+        if (sql.includes("FROM deletion_job")) return { rows: [{ deletion_active: false }] };
+        if (sql.includes("FROM room_event e")) return { rows: [] };
+        if (sql.includes("INSERT INTO room_event")) insertedRoomIds.push(String(values?.[1]));
+        if (sql.includes("UPDATE classroom_room")) return { rows: [], rowCount: 1 };
+        return { rows: [], rowCount: 1 };
+      }),
+      release: vi.fn(),
+    };
+    const repository = new RoomEventRepository(
+      { connect: vi.fn(async () => client) } as never,
+      createCoreEventPayloadRegistry(),
+      { now: () => new Date("2026-08-31T00:00:01.000Z") },
+    );
+
+    const envelope = await repository.transact(canonicalRoomId.toUpperCase(), ({ append }) => append({
+      type: "room.opened",
+      actorId: TEACHER_ID,
+      actorKind: "human",
+      actorRole: "teacher",
+      revision: 1,
+      operation: "add",
+      eventTime: new Date("2026-08-31T00:00:00.000Z"),
+      causationId: "55555555-5555-4555-8555-555555555555",
+      correlationId: "66666666-6666-4666-8666-666666666666",
+      payload: {
+        startsAt: "2026-08-31T00:00:00.000Z",
+        closesAt: "2026-08-31T00:45:00.000Z",
+      },
+    }));
+
+    expect(envelope.roomId).toBe(canonicalRoomId);
+    expect(insertedRoomIds).toEqual([canonicalRoomId]);
+  });
+
   it("applies the deletion tombstone before Fastify parses a stale command body", async () => {
     const authenticateToken = vi.fn(async () => ({ ok: false as const, closeCode: 4410 as const }));
     const app = await buildApp({

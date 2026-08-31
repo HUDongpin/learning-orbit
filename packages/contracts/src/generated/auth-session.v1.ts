@@ -6,7 +6,7 @@ export type AuthSession =
       roomId: string;
       roomMemberId: string;
       actorId: string;
-      pseudonym: string;
+      pseudonym: "探索者 A" | "探索者 B" | "探索者 C" | "探索者 D";
       nova: {
         actorId: string;
         actorKind: "agent";

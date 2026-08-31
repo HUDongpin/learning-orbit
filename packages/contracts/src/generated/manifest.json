@@ -69,7 +69,7 @@
     {
       "file": "auth-session.v1.json",
       "id": "https://learning-orbit.local/schemas/auth-session.v1.json",
-      "sha256": "d9d16e9bad460483dc3859b6751c2b497f177727ccf7eec6244ddea90219234f"
+      "sha256": "3e55554964e95430ed24e23a02a75945cec7345202d241f9ec36456d8bdff39e"
     },
     {
       "file": "core-room-event-payloads.v1.json",
@@ -149,7 +149,7 @@
     {
       "file": "room-http.v1.json",
       "id": "https://learning-orbit.local/schemas/room-http.v1.json",
-      "sha256": "556647d94f6c604c48df9d33da6b0f3ec1be9edc67c06954a2563668596a6a33"
+      "sha256": "6d9bb94028fea3a8bdb23afaad1447e27332c22e802e5d36216741650a84d4c2"
     },
     {
       "file": "room-internal-auto-close.v1.json",

@@ -44,6 +44,7 @@ function projectionRow(payload: unknown) {
 function service(listRow: unknown = artifactRow) {
   const transactionQuery = vi.fn(async (sql: string) => {
     if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+    if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
     if (sql.includes("FROM derived_text_artifact WHERE")) {
       return { rowCount: 1, rows: [listRow] };
     }
@@ -78,6 +79,46 @@ describe("teacher analytics surfaces", () => {
     const artifactQuery = transactionQuery.mock.calls.find(([sql]) => sql.includes("FROM derived_text_artifact WHERE"));
     expect(artifactQuery?.[0]).toContain("review_status=$2");
     expect(artifactQuery?.[1]).toEqual([roomId, "unreviewed", 21]);
+  });
+
+  it("rechecks the retention policy inside the locked artifact-list transaction", async () => {
+    const { svc, transactionQuery } = service();
+    transactionQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: false }] };
+      if (sql.includes("FROM derived_text_artifact WHERE")) {
+        return { rowCount: 1, rows: [artifactRow] };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+
+    await expect(svc.listArtifacts(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      { includeHistory: false, limit: 20 },
+    )).rejects.toMatchObject({ statusCode: 410, code: "RETENTION_POLICY_EXPIRED" });
+    expect(transactionQuery.mock.calls.some(([sql]) => String(sql).includes("FROM derived_text_artifact WHERE")))
+      .toBe(false);
+  });
+
+  it("rechecks the retention policy inside the locked review-detail transaction", async () => {
+    const { svc, transactionQuery } = service();
+    transactionQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: false }] };
+      if (sql.includes("FROM analytics_review_detail")) return { rowCount: 0, rows: [] };
+      return { rowCount: 0, rows: [] };
+    });
+
+    await expect(svc.reviewDetail(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      "00000000-0000-4000-8000-000000000017",
+    )).rejects.toMatchObject({ statusCode: 410, code: "RETENTION_POLICY_EXPIRED" });
+    expect(transactionQuery.mock.calls.some(([sql]) => String(sql).includes("FROM analytics_review_detail")))
+      .toBe(false);
   });
 
   it("rejects duplicate query values instead of coercing arrays into SQL parameters", async () => {
@@ -117,6 +158,17 @@ describe("teacher analytics surfaces", () => {
     expect(events.transact).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-canonical uppercase room UUID before deriving review identity", async () => {
+    const { svc, events } = service();
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+      {},
+    )).rejects.toMatchObject({ statusCode: 400, code: "INVALID_ANALYTICS_QUERY" });
+    expect(events.transact).not.toHaveBeenCalled();
+  });
+
   it("hides every teacher-only analytics surface from a student role", async () => {
     const { svc, pool, policy, events } = service();
     const student = {
@@ -147,13 +199,14 @@ describe("teacher analytics surfaces", () => {
     const { svc, events } = service();
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-      if (sql.includes("SELECT analysis_epoch,version")) return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
       if (sql.includes("derived_text_artifact")) return { rowCount: 1, rows: [{}] };
       return { rowCount: 1, rows: [] };
     }) };
     events.transact.mockImplementation(async (_room: string, work: any) => work({
       client,
-      room: { next_room_seq: 2 },
+      room: { next_room_seq: 2, teacher_id: teacherId },
       append: async () => ({ eventId: "00000000-0000-4000-8000-000000000017", roomSeq: 2, correlationId: "00000000-0000-4000-8000-000000000018" }),
     }));
     const result = await svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
@@ -190,13 +243,14 @@ describe("teacher analytics surfaces", () => {
       actorKind: "human",
       actorRole: "teacher",
     };
-    const client = { query: vi.fn(async (sql: string) => (
-      sql.includes("FROM deletion_job")
-        ? { rowCount: 0, rows: [] }
-        : { rowCount: 1, rows: [] }
-    )) };
+    const client = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      return { rowCount: 1, rows: [] };
+    }) };
     events.transact.mockImplementationOnce(async (_room: string, work: any) => work({
       client,
+      room: { next_room_seq: 3, teacher_id: teacherId },
       findByCausation: async () => existingEvent,
     }));
     pool.query.mockResolvedValueOnce({ rows: [{ job_id: "00000000-0000-4000-8000-000000000019" }] });
@@ -211,12 +265,212 @@ describe("teacher analytics surfaces", () => {
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analysis_room_heads"))).toBe(false);
   });
 
+  it("reserves one projection authority until replay advances the room cursor", async () => {
+    const { svc, events } = service();
+    let nextRoomSeq = 2;
+    const append = vi.fn(async () => {
+      const roomSeq = nextRoomSeq;
+      nextRoomSeq += 1;
+      return {
+        eventId: `00000000-0000-4000-8000-${String(roomSeq).padStart(12, "0")}`,
+        roomSeq,
+        correlationId: "00000000-0000-4000-8000-000000000018",
+      };
+    });
+    const client = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+        return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
+      }
+      if (sql.includes("derived_text_artifact")) return { rowCount: 1, rows: [{}] };
+      return { rowCount: 1, rows: [] };
+    }) };
+    events.transact.mockImplementation(async (_room: string, work: any) => work({
+      client,
+      room: { next_room_seq: nextRoomSeq, teacher_id: teacherId },
+      findByCausation: async () => null,
+      append,
+    }));
+    const command = {
+      targetType: "derived_text",
+      targetId: artifactId,
+      decision: "approve",
+      rationale: "第一個不可變審閱事實。",
+      expectedAnalysisEpoch: epoch,
+      expectedProjectionVersion: 1,
+    } as const;
+
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      command,
+    )).resolves.toMatchObject({ created: true, changeKind: "review" });
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      { ...command, rationale: "同一舊 authority 的第二個不同事實。" },
+    )).rejects.toMatchObject({ statusCode: 409, code: "ANALYTICS_VERSION_CONFLICT" });
+    expect(append).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a projection head that is explicitly waiting for replay", async () => {
+    const { svc, events } = service();
+    const append = vi.fn(async () => ({
+      eventId: "00000000-0000-4000-8000-000000000051",
+      roomSeq: 2,
+      correlationId: "00000000-0000-4000-8000-000000000052",
+    }));
+    const client = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+        return { rows: [{
+          analysis_epoch: epoch,
+          version: "1",
+          complete_through_seq: "1",
+          requires_replay: true,
+        }] };
+      }
+      if (sql.includes("derived_text_artifact")) return { rowCount: 1, rows: [{}] };
+      return { rowCount: 1, rows: [] };
+    }) };
+    events.transact.mockImplementation(async (_room: string, work: any) => work({
+      client,
+      room: { next_room_seq: 2, teacher_id: teacherId },
+      findByCausation: async () => null,
+      append,
+    }));
+
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      {
+        targetType: "derived_text",
+        targetId: artifactId,
+        decision: "approve",
+        rationale: "等待 Replay 的 Projection 不可成為審閱權威。",
+        expectedAnalysisEpoch: epoch,
+        expectedProjectionVersion: 1,
+      },
+    )).rejects.toMatchObject({ statusCode: 409, code: "ANALYTICS_VERSION_CONFLICT" });
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the locked head and validated snapshot disagree on the room cursor", async () => {
+    const { svc, events } = service();
+    const append = vi.fn(async () => ({
+      eventId: "00000000-0000-4000-8000-000000000053",
+      roomSeq: 2,
+      correlationId: "00000000-0000-4000-8000-000000000054",
+    }));
+    const client = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+        return { rows: [{
+          analysis_epoch: epoch,
+          version: "1",
+          complete_through_seq: "1",
+          requires_replay: false,
+        }] };
+      }
+      if (sql.includes("analysis_projection_snapshots")) {
+        return { rows: [{
+          ...projectionRow({
+            nodes: ["producer", "plant"].map((nodeId, index) => ({
+              nodeId,
+              label: nodeId,
+              nodeKind: "concept",
+              evidenceStatus: "supported",
+              reviewStatus: "unreviewed",
+              displayStatus: "provisional",
+              position: { x: 0.25 + index * 0.5, y: 0.5 },
+            })),
+            edges: [],
+          }),
+          complete_through_seq: "0",
+        }] };
+      }
+      return { rowCount: 1, rows: [] };
+    }) };
+    events.transact.mockImplementation(async (_room: string, work: any) => work({
+      client,
+      room: { next_room_seq: 2, teacher_id: teacherId },
+      findByCausation: async () => null,
+      append,
+    }));
+
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      {
+        correctionKind: "split_alias",
+        targetCanonicalNodeId: "producer",
+        replacement: { aliasNodeId: "plant", newCanonicalNodeId: "new-node", newLabel: "新概念" },
+        reason: "Snapshot 游標必須與鎖定的 Head 完全一致。",
+        expectedAnalysisEpoch: epoch,
+        expectedProjectionVersion: 1,
+      },
+    )).rejects.toMatchObject({ statusCode: 503, code: "ANALYTICS_CORRUPT" });
+    expect(append).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the retention policy after acquiring the canonical room transaction lock", async () => {
+    const { svc, events } = service();
+    const append = vi.fn(async () => ({
+      eventId: "00000000-0000-4000-8000-000000000055",
+      roomSeq: 2,
+      correlationId: "00000000-0000-4000-8000-000000000056",
+    }));
+    const client = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: false }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+        return { rows: [{
+          analysis_epoch: epoch,
+          version: "1",
+          complete_through_seq: "1",
+          requires_replay: false,
+        }] };
+      }
+      if (sql.includes("derived_text_artifact")) return { rowCount: 1, rows: [{}] };
+      return { rowCount: 1, rows: [] };
+    }) };
+    events.transact.mockImplementation(async (_room: string, work: any) => work({
+      client,
+      room: { next_room_seq: 2, teacher_id: teacherId },
+      findByCausation: async () => null,
+      append,
+    }));
+
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      {
+        targetType: "derived_text",
+        targetId: artifactId,
+        decision: "approve",
+        rationale: "交易開始時保留政策已經過期。",
+        expectedAnalysisEpoch: epoch,
+        expectedProjectionVersion: 1,
+      },
+    )).rejects.toMatchObject({ statusCode: 410, code: "RETENTION_POLICY_EXPIRED" });
+    expect(append).not.toHaveBeenCalled();
+  });
+
   it("allows undo_merge only while the original merge is still effective and not already undone", async () => {
     const { svc, pool, events } = service();
     const mergeEventId = "00000000-0000-4000-8000-000000000021";
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-      if (sql.includes("SELECT analysis_epoch,version")) return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
       if (sql.includes("validated_payload") && sql.includes("review_event_id=$2")) {
         return { rows: [{ room_seq: "1", validated_payload: {
           correctionKind: "merge_alias",
@@ -243,7 +497,7 @@ describe("teacher analytics surfaces", () => {
     }) };
     events.transact.mockImplementation(async (_room: string, work: any) => work({
       client,
-      room: { next_room_seq: 2 },
+      room: { next_room_seq: 2, teacher_id: teacherId },
       append: async () => ({
         eventId: "00000000-0000-4000-8000-000000000022",
         roomSeq: 2,
@@ -265,7 +519,8 @@ describe("teacher analytics surfaces", () => {
     const duplicate = service();
     const duplicateClient = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-      if (sql.includes("SELECT analysis_epoch,version")) return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
       if (sql.includes("validated_payload") && sql.includes("review_event_id=$2")) {
         return { rows: [{ room_seq: "1", validated_payload: {
           correctionKind: "merge_alias",
@@ -281,6 +536,7 @@ describe("teacher analytics surfaces", () => {
     }) };
     duplicate.events.transact.mockImplementation(async (_room: string, work: any) => work({
       client: duplicateClient,
+      room: { next_room_seq: 2, teacher_id: teacherId },
       append: vi.fn(),
     }));
     await expect(duplicate.svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
@@ -298,7 +554,8 @@ describe("teacher analytics surfaces", () => {
     const append = vi.fn();
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-      if (sql.includes("SELECT analysis_epoch,version")) return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
       if (sql.includes("analysis_projection_snapshots")) {
         return { rows: [projectionRow({
           nodes: ["producer", "plant", "consumer"].map((nodeId, index) => ({
@@ -311,7 +568,7 @@ describe("teacher analytics surfaces", () => {
       }
       return { rowCount: 0, rows: [] };
     }) };
-    events.transact.mockImplementation(async (_room: string, work: any) => work({ client, append }));
+    events.transact.mockImplementation(async (_room: string, work: any) => work({ client, room: { next_room_seq: 2, teacher_id: teacherId }, append }));
 
     await expect(svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
       correctionKind: "split_alias",
@@ -327,14 +584,16 @@ describe("teacher analytics surfaces", () => {
     corrupt.events.transact.mockImplementation(async (_room: string, work: any) => work({
       client: { query: vi.fn(async (sql: string) => {
         if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-        if (sql.includes("SELECT analysis_epoch,version")) {
-          return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+        if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+        if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+          return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
         }
         if (sql.includes("analysis_projection_snapshots")) {
           return { rows: [{ payload: { nodes: [], edges: [] } }] };
         }
         return { rows: [] };
       }) },
+      room: { next_room_seq: 2, teacher_id: teacherId },
       append: vi.fn(),
     }));
     await expect(corrupt.svc.review(
@@ -358,8 +617,9 @@ describe("teacher analytics surfaces", () => {
     const correctedText = "太陽持續提供能量給生產者";
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
-      if (sql.includes("SELECT analysis_epoch,version")) {
-        return { rows: [{ analysis_epoch: epoch, version: "1" }] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) {
+        return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
       }
       if (sql.includes("analysis_projection_snapshots")) {
         return { rows: [projectionRow({
@@ -388,6 +648,7 @@ describe("teacher analytics surfaces", () => {
     }) };
     events.transact.mockImplementation(async (_room: string, work: any) => work({
       client,
+      room: { next_room_seq: 2, teacher_id: teacherId },
       append: async () => ({
         eventId: "00000000-0000-4000-8000-000000000042",
         roomSeq: 3,

@@ -12,7 +12,7 @@
         "roomId": { "type": "string", "format": "uuid" },
         "roomMemberId": { "type": "string", "format": "uuid" },
         "actorId": { "type": "string", "format": "uuid" },
-        "pseudonym": { "type": "string" },
+        "pseudonym": { "enum": ["探索者 A", "探索者 B", "探索者 C", "探索者 D"] },
         "nova": {
           "type": "object",
           "additionalProperties": false,

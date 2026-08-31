@@ -2,19 +2,46 @@ import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../../src/app.js";
 import { apiErrorContract } from "@learning-orbit/contracts";
+import { requiresAllowedOrigin } from "../../src/modules/security/origin-policy.js";
 import { normalizeRateIp } from "../../src/modules/security/rate-policies.js";
 import { buildRatePolicyHarness } from "../fixtures/rate-policy-harness.js";
 
 const allowedOrigin = "https://app.learning-orbit.test";
 
 describe("origin and rate policy", () => {
-  it("denies missing and wrong browser origins but allows originless magic-link navigation", async () => {
+  it("requires exact origins for unsafe requests while allowing originless same-origin reads", async () => {
     const app = await buildApp({ config: { allowedOrigins: [allowedOrigin], publicBaseOrigin: allowedOrigin } });
     expect((await app.inject({ method: "POST", url: "/v1/auth/teacher/magic-link", payload: { email: "x@example.edu" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: "/v1/auth/teacher/magic-link", payload: { email: "x@example.edu" }, headers: { origin: "https://wrong.example" } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/v1/auth/session" })).statusCode).not.toBe(403);
+    expect((await app.inject({ method: "GET", url: "/v1/auth/session", headers: { origin: "https://wrong.example" } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: "/v1/auth/teacher/magic-link/consume?token=x" })).statusCode).toBe(400);
-    expect((await app.inject({ method: "GET", url: "/v1/auth/teacher/magic-link/consume-extra?token=x" })).statusCode).toBe(403);
+    expect((await app.inject({ method: "HEAD", url: "/v1/auth/teacher/magic-link/consume?token=x" })).statusCode).toBe(403);
+    expect((await app.inject({
+      method: "HEAD",
+      url: "/v1/auth/teacher/magic-link/consume?token=x",
+      headers: { origin: allowedOrigin },
+    })).statusCode).toBe(405);
+    expect((await app.inject({ method: "GET", url: "/v1/auth/teacher/magic-link/consume-extra?token=x" })).statusCode).toBe(404);
     await app.close();
+  });
+
+  it("still requires an Origin for WebSocket upgrades", () => {
+    expect(requiresAllowedOrigin({
+      method: "GET",
+      headers: { upgrade: "websocket" },
+      routeOptions: { url: "/v1/rooms/:roomId/realtime" },
+    } as never)).toBe(true);
+    expect(requiresAllowedOrigin({
+      method: "GET",
+      headers: {},
+      routeOptions: { url: "/v1/auth/session" },
+    } as never)).toBe(false);
+    expect(requiresAllowedOrigin({
+      method: "HEAD",
+      headers: {},
+      routeOptions: { url: "/v1/auth/teacher/magic-link/consume" },
+    } as never)).toBe(true);
   });
 
   it("uses production policy definitions for magic, failed join, and agent triggers", async () => {

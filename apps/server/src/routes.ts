@@ -140,7 +140,11 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     return reply.code(202).type("application/json").send(authContract.encodeTeacherMagicLinkAccepted(genericAccepted));
   });
 
-  app.get("/v1/auth/teacher/magic-link/consume", async (request, reply) => {
+  app.head("/v1/auth/teacher/magic-link/consume", async (_request, reply) => (
+    reply.code(405).header("Allow", "GET").send()
+  ));
+
+  app.get("/v1/auth/teacher/magic-link/consume", { exposeHeadRoute: false }, async (request, reply) => {
     const query = request.query as { token?: unknown };
     const token = typeof query.token === "string" ? query.token : "";
     const result = await dependencies.magicLinks?.consume(token) ?? null;

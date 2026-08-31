@@ -146,7 +146,7 @@ describe("envelope, HTTP catalog, and realtime behavior", () => {
     expect(page({ events: [event("human", "teacher")], throughRoomSeq: 1, nextAfterSeq: 1 })).toBe(true);
     expect(page({ events: Array.from({ length: 501 }, () => event("human", "teacher")), throughRoomSeq: 501 })).toBe(false);
     const details = ajv.getSchema(`${httpSchema.$id}#/$defs/RoomDetails`)!;
-    expect(details({ roomId: uuid, topic: "Ecosystems", durationSeconds: 2700, status: "open", startsAt: at, closesAt: null, nova: { actorId: laterUuid, actorKind: "agent", actorRole: "socratic_facilitator", displayName: "Nova Agent" }, participants: Array.from({ length: 4 }, () => ({ actorId: uuid, pseudonym: "Explorer", actorKind: "human", actorRole: "student" })) })).toBe(true);
+    expect(details({ roomId: uuid, topic: "Ecosystems", durationSeconds: 2700, status: "open", startsAt: at, closesAt: null, nova: { actorId: laterUuid, actorKind: "agent", actorRole: "socratic_facilitator", displayName: "Nova Agent" }, participants: ["探索者 A", "探索者 B", "探索者 C", "探索者 D"].map((pseudonym) => ({ actorId: uuid, pseudonym, actorKind: "human", actorRole: "student" })) })).toBe(true);
     expect(details({ roomId: uuid, topic: "Ecosystems", durationSeconds: 2701, status: "open", startsAt: at, closesAt: null, nova: { actorId: laterUuid, actorKind: "agent", actorRole: "socratic_facilitator", displayName: "Nova Agent" }, participants: [] })).toBe(false);
   });
 

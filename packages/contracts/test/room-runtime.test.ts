@@ -10,6 +10,7 @@ const memberIds = [
   "33333333-3333-4333-8333-333333333333",
   "33333333-3333-4333-8333-333333333334",
 ] as const;
+const studentPseudonyms = ["探索者 A", "探索者 B", "探索者 C", "探索者 D"] as const;
 
 const nova = {
   actorId,
@@ -38,7 +39,7 @@ describe("room HTTP runtime contract", () => {
     const seatInvites = memberIds.map((roomMemberId, index) => ({
       roomMemberId,
       actorId: `44444444-4444-4444-8444-44444444444${index}`,
-      pseudonym: `探索者 ${String.fromCharCode(65 + index)}`,
+      pseudonym: studentPseudonyms[index]!,
       code: ["ABC234DEFG", "BCD345EFGH", "CDE456FGHJ", "DEF567GHJK"][index]!,
     }));
     const create = {
@@ -61,5 +62,13 @@ describe("room HTTP runtime contract", () => {
       .toThrow("INVALID_JOIN_ROOM_RESPONSE");
     expect(() => roomHttpContract.encodeRoomDetails({ ...details, seatCodes: ["SECRET"] }))
       .toThrow("INVALID_ROOM_DETAILS");
+    expect(() => roomHttpContract.encodeJoinRoomResponse({ ...join, pseudonym: "王同學" }))
+      .toThrow("INVALID_JOIN_ROOM_RESPONSE");
+    expect(() => roomHttpContract.encodeRoomDetails({
+      ...details,
+      participants: details.participants.map((participant, index) => (
+        index === 3 ? { ...participant, pseudonym: "王同學" } : participant
+      )),
+    })).toThrow("INVALID_ROOM_DETAILS");
   });
 });

@@ -22,7 +22,7 @@ import {
   projectionWire,
 } from "./analytics-repository.js";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROJECTION = new Set(["echo.teacher_shadow", "echo.student_approved", "trace.teacher_bundle", "trace.student_bundle"]);
 const ECHO_TEACHER_PROJECTION = "echo.teacher_shadow" as const;
 const REVIEW_NAMESPACE = Buffer.from("9f5d0c784d6e4f0e8a5c1b2d3e4f5061", "hex");
@@ -191,6 +191,7 @@ export class AnalyticsTeacherService {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
       await this.assertNotDeleting(tx, roomId);
+      await this.assertRetentionCurrent(tx, roomId);
       const values: unknown[] = [roomId];
       const predicates = ["room_id=$1"];
       if (!query.includeHistory) predicates.push("active=true");
@@ -272,7 +273,11 @@ export class AnalyticsTeacherService {
     try {
       await this.events.transact(roomId, async (context) => {
       const client = context.client;
+      if (context.room.teacher_id !== teacher.teacherId) {
+        throw new AnalyticsTeacherError(404, "ROOM_NOT_FOUND");
+      }
       await this.assertNotDeleting(client, roomId);
+      await this.assertRetentionCurrent(client, roomId);
       // Idempotency is checked before the optimistic head CAS.  A retry may
       // arrive after the first command has already triggered a replay (and
       // therefore changed the visible epoch/version); it must still resolve
@@ -315,12 +320,31 @@ export class AnalyticsTeacherService {
         );
         return;
       }
-      const head = await client.query<{ analysis_epoch: string; version: string }>(
-        "SELECT analysis_epoch,version FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2 FOR UPDATE",
+      const head = await client.query<{
+        analysis_epoch: string;
+        version: string;
+        complete_through_seq: string;
+        requires_replay: boolean;
+      }>(
+        "SELECT analysis_epoch,version,complete_through_seq,requires_replay FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2 FOR UPDATE",
         [roomId, ECHO_TEACHER_PROJECTION],
       );
       const current = head.rows[0];
       if (!current || current.analysis_epoch !== expectedEpoch || Number(current.version) !== expectedVersion) throw new AnalyticsTeacherError(409, "ANALYTICS_VERSION_CONFLICT");
+      const projectedThrough = Number(current.complete_through_seq);
+      const roomThrough = context.room.next_room_seq - 1;
+      if (!Number.isSafeInteger(projectedThrough) || projectedThrough < 0
+        || !Number.isSafeInteger(roomThrough) || roomThrough < 0
+        || typeof current.requires_replay !== "boolean") {
+        throw new AnalyticsTeacherError(503, "ANALYTICS_CORRUPT");
+      }
+      // A projection authority can authorize at most one new immutable review
+      // fact. Until replay advances complete_through_seq, accepting a second
+      // distinct command against the same head would let target-changing
+      // corrections race and make the later replay unrecoverable.
+      if (current.requires_replay || projectedThrough !== roomThrough) {
+        throw new AnalyticsTeacherError(409, "ANALYTICS_VERSION_CONFLICT");
+      }
       const targetNotFound = () => { throw new AnalyticsTeacherError(404, "ANALYTICS_TARGET_NOT_FOUND"); };
       let validatedSnapshotPayload: Record<string, any> | undefined;
       const snapshotPayload = async (): Promise<Record<string, any>> => {
@@ -330,7 +354,8 @@ export class AnalyticsTeacherService {
             callerHoldsCanonicalRoomLock: true,
           });
           const row = await repository.latest(roomId, ECHO_TEACHER_PROJECTION);
-          if (!row || row.analysisEpoch !== expectedEpoch || row.version !== expectedVersion) {
+          if (!row || row.analysisEpoch !== expectedEpoch || row.version !== expectedVersion
+            || row.completeThroughRoomSeq !== projectedThrough || row.requiresReplay !== false) {
             throw new AnalyticsRepositoryError();
           }
           const snapshot = analyticsContract.parseTeacherEchoSnapshot(projectionWire(row));
@@ -553,6 +578,7 @@ export class AnalyticsTeacherService {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
       await this.assertNotDeleting(tx, roomId);
+      await this.assertRetentionCurrent(tx, roomId);
       const result = await tx.query<{
         review_event_id: string; room_id: string; change_kind: "review" | "correction";
         validated_payload: unknown; created_at: Date;
@@ -590,6 +616,27 @@ export class AnalyticsTeacherService {
     );
     if (deletion.rowCount === 1) {
       throw new AnalyticsTeacherError(410, "ROOM_DELETION_IN_PROGRESS");
+    }
+  }
+
+  private async assertRetentionCurrent(client: PoolClient, roomId: string): Promise<void> {
+    const retention = await client.query<{ policy_current: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+           FROM classroom_room r
+           JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
+          WHERE r.room_id=$1
+            AND p.approved_at <= transaction_timestamp()
+            AND p.expires_at > transaction_timestamp()
+       ) AS policy_current`,
+      [roomId],
+    );
+    const policyCurrent = retention.rows[0]?.policy_current;
+    if (typeof policyCurrent !== "boolean") {
+      throw new AnalyticsTeacherError(503, "ANALYTICS_CORRUPT");
+    }
+    if (!policyCurrent) {
+      throw new AnalyticsTeacherError(410, "RETENTION_POLICY_EXPIRED");
     }
   }
 

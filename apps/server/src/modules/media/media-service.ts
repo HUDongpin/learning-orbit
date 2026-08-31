@@ -203,11 +203,15 @@ async function requireStudent(deps: MediaDeps, input: { sessionId?: string; prin
  * room students; writes remain student-owned and continue through
  * ``requireStudent``.  The session row is re-read so a revoked cookie cannot
  * keep a stale principal alive during a media lookup/download. */
-async function requireRoomMember(deps: MediaDeps, input: { sessionId?: string; principal?: AuthSession; roomId: string }) {
+async function requireRoomMember(
+  deps: MediaDeps,
+  input: { sessionId?: string; principal?: AuthSession; roomId: string },
+  queryable: Pick<PoolClient, "query"> = deps.pool,
+) {
   if (!UUID.test(input.roomId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
   if (input.sessionId) {
     if (!UUID.test(input.sessionId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
-    const active = await deps.pool.query<{
+    const active = await queryable.query<{
       principal_kind: "teacher" | "student";
       teacher_id: string | null;
       room_member_id: string | null;
@@ -237,9 +241,17 @@ async function requireRoomMember(deps: MediaDeps, input: { sessionId?: string; p
     }
     return { actorId: row.actor_id ?? row.teacher_id ?? "", roomId: input.roomId };
   }
-  if (input.principal?.role === "student") return requireStudent(deps, input);
+  if (input.principal?.role === "student") {
+    const membership = await queryable.query<{ actor_id: string }>(
+      `SELECT actor_id FROM room_member
+       WHERE room_id = $1 AND room_member_id = $2 AND actor_id = $3`,
+      [input.roomId, input.principal.roomMemberId, input.principal.actorId],
+    );
+    if (membership.rowCount !== 1) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    return { actorId: input.principal.actorId, roomId: input.roomId };
+  }
   if (input.principal?.role === "teacher") {
-    const room = await deps.pool.query(
+    const room = await queryable.query(
       "SELECT 1 FROM classroom_room WHERE room_id=$1 AND teacher_id=$2",
       [input.roomId, input.principal.teacherId],
     );
@@ -247,6 +259,29 @@ async function requireRoomMember(deps: MediaDeps, input: { sessionId?: string; p
     return { actorId: input.principal.teacherId, roomId: input.roomId };
   }
   throw new MediaError("AUTH_REQUIRED", 401);
+}
+
+async function withRoomReadFence<T>(
+  deps: MediaDeps,
+  input: { sessionId?: string; principal?: AuthSession; roomId: string },
+  work: (tx: PoolClient) => Promise<T>,
+): Promise<T> {
+  if (!UUID.test(input.roomId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+  return inTransaction(deps.pool, async (tx) => {
+    await lockRoomInTransaction(tx, input.roomId);
+    await requireRoomMember(deps, input, tx);
+    const deletion = await tx.query<{ deletion_active: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM deletion_job
+         WHERE room_id=$1 AND status IN ('queued','running','retryable','dead')
+       ) AS deletion_active`,
+      [input.roomId],
+    );
+    if (deletion.rows[0]?.deletion_active !== false) {
+      throw new MediaError("ROOM_DELETION_IN_PROGRESS", 409);
+    }
+    return work(tx);
+  });
 }
 
 function assertCapabilities(store: MediaStore, config: MediaServiceConfig): void {
@@ -472,16 +507,17 @@ export async function getMediaAttachment(
   deps: MediaDeps,
   input: { readonly sessionId?: string; readonly principal?: AuthSession; readonly roomId: string; readonly mediaId: string },
 ): Promise<MediaAttachmentView | null> {
-  await requireRoomMember(deps, input);
-  if (!UUID.test(input.mediaId)) return null;
-  const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId);
-  if (!record) return null;
-  if (record.state !== "ready") return serializeMediaAttachment(record);
-  const derivative = await verifiedSafeDerivative(deps, record, resolvedConfig(deps));
-  return serializeMediaAttachment({
-    ...record,
-    detectedMime: derivative.mime,
-    sizeBytes: derivative.sizeBytes,
+  return withRoomReadFence(deps, input, async (tx) => {
+    if (!UUID.test(input.mediaId)) return null;
+    const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId, tx);
+    if (!record) return null;
+    if (record.state !== "ready") return serializeMediaAttachment(record);
+    const derivative = await verifiedSafeDerivative(deps, record, resolvedConfig(deps), tx);
+    return serializeMediaAttachment({
+      ...record,
+      detectedMime: derivative.mime,
+      sizeBytes: derivative.sizeBytes,
+    });
   });
 }
 
@@ -489,28 +525,29 @@ export async function createDownloadGrant(
   deps: MediaDeps,
   input: { readonly sessionId?: string; readonly principal?: AuthSession; readonly roomId: string; readonly mediaId: string },
 ): Promise<MediaDownloadGrant> {
-  await requireRoomMember(deps, input);
-  if (!UUID.test(input.mediaId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
-  const config = resolvedConfig(deps);
-  const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId);
-  if (!record) throw new MediaError("MEDIA_NOT_FOUND", 404);
-  if (record.state !== "ready") throw new MediaError("MEDIA_NOT_READY", 409);
-  const derivative = await verifiedSafeDerivative(deps, record, config);
-  const clock = deps.clock ?? systemClock;
-  const requestedAt = now(clock);
-  const signed = await deps.store.createDownloadUrl(
+  return withRoomReadFence(deps, input, async (tx) => {
+    if (!UUID.test(input.mediaId)) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    const config = resolvedConfig(deps);
+    const record = await resolvedRepo(deps).getMedia(input.mediaId, input.roomId, tx);
+    if (!record) throw new MediaError("MEDIA_NOT_FOUND", 404);
+    if (record.state !== "ready") throw new MediaError("MEDIA_NOT_READY", 409);
+    const derivative = await verifiedSafeDerivative(deps, record, config, tx);
+    const clock = deps.clock ?? systemClock;
+    const requestedAt = now(clock);
+    const signed = await deps.store.createDownloadUrl(
       { objectKey: derivative.objectKey, expiresSeconds: config.storeDownloadTtlSeconds },
       makeControl(clock, config.maxPresignMs),
     );
-  assertExactSignedWindow(
-    signed,
-    config.storeDownloadTtlSeconds,
-    requestedAt,
-    config.maxPresignMs,
-    config.maxSignerDbClockSkewMs,
-  );
-  const url = validateStorageBrowserUrl(signed.url, config.storageBrowserOrigins);
-  return mediaCommandContract.parseDownloadGrant({ downloadUrl: url, expiresAt: signed.expiresAt.toISOString() });
+    assertExactSignedWindow(
+      signed,
+      config.storeDownloadTtlSeconds,
+      requestedAt,
+      config.maxPresignMs,
+      config.maxSignerDbClockSkewMs,
+    );
+    const url = validateStorageBrowserUrl(signed.url, config.storageBrowserOrigins);
+    return mediaCommandContract.parseDownloadGrant({ downloadUrl: url, expiresAt: signed.expiresAt.toISOString() });
+  });
 }
 
 function assertSafeDerivative(record: MediaAssetRecord, derivative: SafeMediaDerivative): void {
@@ -531,9 +568,15 @@ async function verifiedSafeDerivative(
   deps: MediaDeps,
   record: MediaAssetRecord,
   config: MediaServiceConfig,
+  queryable?: Pick<PoolClient, "query">,
 ): Promise<SafeMediaDerivative> {
   assertCapabilities(deps.store, config);
-  const derivative = await resolvedRepo(deps).getSafeDerivative(record.mediaId, record.roomId, record.kind);
+  const derivative = await resolvedRepo(deps).getSafeDerivative(
+    record.mediaId,
+    record.roomId,
+    record.kind,
+    queryable,
+  );
   if (!derivative) throw new MediaError("MEDIA_NOT_READY", 409);
   assertSafeDerivative(record, derivative);
   const stored = await deps.store.stat(
