@@ -347,8 +347,9 @@ export class FetchSessionGateway implements SessionGateway {
   readonly #fetch: FetchLike;
 
   constructor(options: Readonly<{ fetch?: FetchLike }> = {}) {
-    this.#fetch = options.fetch ?? globalThis.fetch;
-    if (typeof this.#fetch !== "function") throw new SessionGatewayError("SESSION_NETWORK_FAILURE");
+    const fetch = options.fetch ?? globalThis.fetch;
+    if (typeof fetch !== "function") throw new SessionGatewayError("SESSION_NETWORK_FAILURE");
+    this.#fetch = fetch.bind(globalThis);
   }
 
   async #request(path: string, init: RequestInit): Promise<Response> {
@@ -929,6 +930,10 @@ export class FetchSessionGateway implements SessionGateway {
 
   async logout(): Promise<void> {
     const response = await this.#request(routes.auth.session(), { method: "DELETE" });
-    if (response.status !== 204 || response.body !== null) responseInvalid();
+    if (response.status !== 204) responseInvalid();
+    let body: string;
+    try { body = await response.text(); }
+    catch { return responseInvalid(); }
+    if (body !== "") responseInvalid();
   }
 }

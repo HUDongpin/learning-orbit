@@ -45,6 +45,11 @@ function parseAddresses(value) {
   return value;
 }
 
+function parseSummaryAddresses(value) {
+  if (value === null) return value;
+  return parseAddresses(value);
+}
+
 function parseTags(value) {
   if (!Array.isArray(value) || value.length > 64
     || value.some((item) => !boundedString(item, 128))) {
@@ -67,9 +72,9 @@ function parseSummary(value) {
     fail("MAILPIT_CONTRACT_MISMATCH");
   }
   parseAddress(value.From);
-  parseAddresses(value.Bcc);
-  parseAddresses(value.Cc);
-  parseAddresses(value.ReplyTo);
+  parseSummaryAddresses(value.Bcc);
+  parseSummaryAddresses(value.Cc);
+  parseSummaryAddresses(value.ReplyTo);
   parseAddresses(value.To);
   parseTags(value.Tags);
   return value;
@@ -132,10 +137,11 @@ export function parseMailpitMessage(value) {
 
 export function parseMagicLinkFromMessage(value) {
   const message = parseMailpitMessage(value);
-  if (message.Text.trim() !== message.Text) fail("MAILPIT_MAGIC_LINK_INVALID");
+  const text = message.Text.endsWith("\r\n") ? message.Text.slice(0, -2) : message.Text;
+  if (text.trim() !== text) fail("MAILPIT_MAGIC_LINK_INVALID");
   let url;
   try {
-    url = new URL(message.Text);
+    url = new URL(text);
   } catch {
     fail("MAILPIT_MAGIC_LINK_INVALID");
   }

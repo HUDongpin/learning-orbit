@@ -396,6 +396,24 @@ describe("typed SessionGateway", () => {
       .rejects.toThrow("SESSION_RESPONSE_INVALID");
   });
 
+  it("binds a browser brand-checked fetch transport to globalThis", async () => {
+    let receiver: unknown;
+    const fetch = function (this: unknown) {
+      receiver = this;
+      if (this !== globalThis) throw new TypeError("illegal receiver");
+      return Promise.resolve(json({ code: "AUTH_REQUIRED" }, 401));
+    } as typeof globalThis.fetch;
+
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await expect(new FetchSessionGateway().getSession())
+        .rejects.toEqual(new SessionGatewayError("AUTH_REQUIRED"));
+      expect(receiver).toBe(globalThis);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends normalized teacher email but exposes only the generic accepted result", async () => {
     const fetch = vi.fn().mockResolvedValue(json({ accepted: true }, 202));
     await expect(new FetchSessionGateway({ fetch }).requestTeacherMagicLink({ email: " Teacher@Example.EDU " }))
@@ -424,6 +442,21 @@ describe("typed SessionGateway", () => {
       method: "DELETE",
       credentials: "include",
     }));
+    const proxiedEmpty = {
+      status: 204,
+      body: new ReadableStream(),
+      text: vi.fn(async () => ""),
+    } as unknown as Response;
+    await expect(new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(proxiedEmpty),
+    }).logout()).resolves.toBeUndefined();
+    const proxiedNonEmpty = {
+      ...proxiedEmpty,
+      text: vi.fn(async () => "unexpected"),
+    } as unknown as Response;
+    await expect(new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(proxiedNonEmpty),
+    }).logout()).rejects.toThrow("SESSION_RESPONSE_INVALID");
     const failed = new FetchSessionGateway({ fetch: vi.fn().mockRejectedValue(new Error("cookie=secret")) });
     await expect(failed.getSession()).rejects.toThrow("SESSION_NETWORK_FAILURE");
   });

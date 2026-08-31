@@ -18,7 +18,10 @@ import {
 import type { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
 import type { CommandService } from "./modules/rooms/command-service.js";
 import type { RoomHub } from "./modules/realtime/room-hub.js";
-import type { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery-authorizer.js";
+import type {
+  RealtimeDeliveryAuthorizer,
+  TokenAuthorization,
+} from "./modules/realtime/realtime-delivery-authorizer.js";
 import { roomEventHttpAccessFailure } from "./modules/realtime/room-event-http-access.js";
 import type { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import type { SocketLike } from "./modules/realtime/connection.js";
@@ -359,14 +362,32 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
   });
 
   if (dependencies.realtime && dependencies.sessions && dependencies.commands) {
-    const websocketHandler = async (socket: any, request: any) => {
+    type WebSocketAdmission = TokenAuthorization | { ok: false; closeCode: 1011 };
+    const websocketAdmissions = new WeakMap<object, WebSocketAdmission>();
+    const authenticateWebsocket = async (request: FastifyRequest) => {
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      const auth = await dependencies.realtime!.authorizer.authenticateToken(request.cookies.lo_session, roomId);
-      if (!auth.ok || !auth.sessionId) { socket.close(auth.ok ? 4401 : auth.closeCode, "authorization required"); return; }
-      dependencies.realtime!.hub.connect(socket as unknown as SocketLike, { sessionId: auth.sessionId, roomId, principal: auth.principal, actorId: auth.actorId }, dependencies.commands!);
+      try {
+        websocketAdmissions.set(
+          request,
+          await dependencies.realtime!.authorizer.authenticateToken(request.cookies.lo_session, roomId),
+        );
+      } catch {
+        websocketAdmissions.set(request, { ok: false, closeCode: 1011 });
+      }
     };
-    app.get("/v1/rooms/:roomId/realtime", { websocket: true }, websocketHandler);
-    app.get("/v1/rooms/:roomId/ws", { websocket: true }, websocketHandler);
+    const websocketHandler = (socket: SocketLike, request: FastifyRequest) => {
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const auth = websocketAdmissions.get(request);
+      websocketAdmissions.delete(request);
+      if (!auth?.ok) {
+        socket.close(auth?.closeCode ?? 1011, "authorization required");
+        return;
+      }
+      dependencies.realtime!.hub.connect(socket, { sessionId: auth.sessionId, roomId, principal: auth.principal, actorId: auth.actorId }, dependencies.commands!);
+    };
+    const websocketOptions = { websocket: true, preValidation: authenticateWebsocket } as const;
+    app.get("/v1/rooms/:roomId/realtime", websocketOptions, websocketHandler);
+    app.get("/v1/rooms/:roomId/ws", websocketOptions, websocketHandler);
   }
 
   if (dependencies.lifecycle && dependencies.serviceAssertionTrust) {

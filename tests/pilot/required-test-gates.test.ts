@@ -65,8 +65,8 @@ test("the checked-in required-test manifest is closed and valid", async () => {
     Object.fromEntries(manifest.gates.map(({ id, expectedTests }) => [id, expectedTests])),
     {
       "contracts-vitest": 63,
-      "server-vitest": 308,
-      "web-vitest": 284,
+      "server-vitest": 311,
+      "web-vitest": 288,
       "pilot-harness-vitest": 85,
       "worker-python": 80,
       "browser-playwright": 2,

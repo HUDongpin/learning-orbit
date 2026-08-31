@@ -5,6 +5,11 @@ import { promisify } from "node:util";
 
 import type { BrowserContext, Download, Page } from "@playwright/test";
 
+import {
+  browserStorageHasNoCredentialArtifacts,
+  type BrowserStorageSafetyOptions,
+} from "./browser-storage-safety.js";
+
 const execFileAsync = promisify(execFile);
 export const PILOT_PUBLIC_ORIGIN = "https://127.0.0.1:3000";
 const PILOT_ADDRESS = /^pilot-[0-9a-f]{16}@example\.invalid$/u;
@@ -13,7 +18,17 @@ const SEAT_CODE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 
-export type RoomSocketObservation = { count: number; invalid: boolean };
+export type RoomSocketObservation = {
+  count: number;
+  invalid: boolean;
+  generation: number;
+  ready: boolean;
+  welcome: number;
+  resumeComplete: number;
+  durableEvents: number;
+  closed: number;
+  socketErrors: number;
+};
 
 type MailpitMessage = unknown;
 type MailpitClientLike = Readonly<{
@@ -33,7 +48,17 @@ export function fail(code: string): never {
 }
 
 export function observeRoomWebSockets(page: Page): RoomSocketObservation {
-  const result: RoomSocketObservation = { count: 0, invalid: false };
+  const result: RoomSocketObservation = {
+    count: 0,
+    invalid: false,
+    generation: 0,
+    ready: false,
+    welcome: 0,
+    resumeComplete: 0,
+    durableEvents: 0,
+    closed: 0,
+    socketErrors: 0,
+  };
   page.on("websocket", (socket) => {
     let url: URL;
     try { url = new URL(socket.url()); } catch { return; }
@@ -44,6 +69,38 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
       || url.search !== "" || url.hash !== "" || url.username !== "" || url.password !== "") {
       result.invalid = true;
     }
+    const generation = result.generation + 1;
+    result.generation = generation;
+    result.ready = false;
+    let currentWelcome = false;
+    let currentResumeComplete = false;
+    socket.on("framereceived", ({ payload }) => {
+      if (typeof payload !== "string" || payload.length > 1_000_000) return;
+      let value: unknown;
+      try { value = JSON.parse(payload); } catch { return; }
+      const type = value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>).type : undefined;
+      if (type === "welcome") {
+        result.welcome += 1;
+        if (result.generation === generation) currentWelcome = true;
+      } else if (type === "resume_complete") {
+        result.resumeComplete += 1;
+        if (result.generation === generation) currentResumeComplete = true;
+      } else if (type === "event") {
+        result.durableEvents += 1;
+      }
+      if (result.generation === generation) {
+        result.ready = currentWelcome && currentResumeComplete;
+      }
+    });
+    socket.on("close", () => {
+      result.closed += 1;
+      if (result.generation === generation) result.ready = false;
+    });
+    socket.on("socketerror", () => {
+      result.socketErrors += 1;
+      if (result.generation === generation) result.ready = false;
+    });
   });
   return result;
 }
@@ -210,14 +267,27 @@ export async function assertSessionMissing(page: Page): Promise<void> {
   if (status !== 401) fail("PILOT_SESSION_NOT_REVOKED");
 }
 
-export async function assertNoBrowserCredentialArtifacts(page: Page): Promise<void> {
+export async function assertNoBrowserCredentialArtifacts(
+  page: Page,
+  options: BrowserStorageSafetyOptions = {},
+): Promise<void> {
+  try {
+    await page.waitForFunction(() => {
+      const requestId = Reflect.get(self, "__next_r");
+      return requestId === undefined
+        || (typeof requestId === "string"
+          && /^[A-Za-z0-9_-]{1,64}$/u.test(requestId)
+          && sessionStorage.getItem(`__next_debug_channel:${requestId}`) !== null);
+    }, undefined, { timeout: 10_000 });
+  } catch {
+    fail("PILOT_BROWSER_STORAGE_NOT_STABLE");
+  }
+  const storageSafe = await page.evaluate(browserStorageHasNoCredentialArtifacts, options);
   const result = await page.evaluate(() => ({
-    localStorageEmpty: localStorage.length === 0,
-    sessionStorageEmpty: sessionStorage.length === 0,
     httpOnlyHidden: !document.cookie.includes("lo_session"),
     noTokenText: !/(?:token=|magic-link\/consume|lo_session=)/iu.test(document.body.innerText),
   }));
-  if (!result.localStorageEmpty || !result.sessionStorageEmpty || !result.httpOnlyHidden || !result.noTokenText) {
+  if (!storageSafe || !result.httpOnlyHidden || !result.noTokenText) {
     fail("PILOT_BROWSER_CREDENTIAL_ARTIFACT");
   }
 }

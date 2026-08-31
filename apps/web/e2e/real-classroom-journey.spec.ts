@@ -48,6 +48,30 @@ async function assertNoPageOverflow(page: Page, code: string): Promise<void> {
   if (!valid) fail(`PILOT_REFLOW_${code}`);
 }
 
+async function assertStudentComposerState(
+  page: Page,
+  studentIndex: number,
+  enabled: boolean,
+  socket: RoomSocketObservation,
+): Promise<void> {
+  try {
+    const assertion = expect(page.getByLabel("輸入訊息"));
+    if (enabled) await assertion.toBeEnabled({ timeout: 30_000 });
+    else await assertion.toBeDisabled({ timeout: 30_000 });
+  } catch {
+    const status = (await page.locator(".teacher-status").first().textContent({ timeout: 1_000 }).catch(() => null))?.trim();
+    const statusCode = status === "尚未開始" ? "SCHEDULED"
+      : status === "進行中" ? "OPEN"
+        : status === "已暫停" ? "PAUSED"
+          : status === "已結束" ? "CLOSED"
+            : "UNKNOWN";
+    const flag = (value: number) => Math.min(9, Math.max(0, value));
+    fail(`PILOT_STUDENT_${studentIndex + 1}_COMPOSER_${enabled ? "DISABLED" : "ENABLED"}_${statusCode}`
+      + `_W${flag(socket.welcome)}_R${flag(socket.resumeComplete)}_E${flag(socket.durableEvents)}`
+      + `_C${flag(socket.closed)}_X${flag(socket.socketErrors)}`);
+  }
+}
+
 async function countUndersizedTargets(page: Page): Promise<number> {
   return page.evaluate(() => {
     const candidates = document.querySelectorAll<HTMLElement>(
@@ -295,7 +319,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await anonymousPage.getByLabel("教師電郵").fill(teacherAddress);
     await anonymousPage.getByRole("button", { name: "傳送登入連結" }).click();
     await expect(anonymousPage.getByRole("status")).toHaveText(TEACHER_ACCEPTED_COPY);
-    await assertNoBrowserCredentialArtifacts(anonymousPage);
+    await assertNoBrowserCredentialArtifacts(anonymousPage, { forbiddenValues: [teacherAddress] });
 
     let firstMagicLink: string | undefined = await readSingleMagicLink(teacherAddress);
     await closeContext(anonymousContext);
@@ -309,7 +333,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await expect(bootstrapTeacherPage.getByRole("heading", { name: "教師工作台" })).toBeVisible();
     await assertTeacherSession(bootstrapTeacherPage);
     await assertSecureSessionCookie(bootstrapTeacherContext);
-    await assertNoBrowserCredentialArtifacts(bootstrapTeacherPage);
+    await assertNoBrowserCredentialArtifacts(bootstrapTeacherPage, { forbiddenValues: [teacherAddress] });
     await bootstrapTeacherPage.getByRole("button", { name: "登出" }).click();
     await expect(bootstrapTeacherPage).toHaveURL(/\/login\?role=teacher$/u);
     await assertSessionMissing(bootstrapTeacherPage);
@@ -346,7 +370,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await expect(teacherPage.getByRole("heading", { name: "教師工作台" })).toBeVisible();
     await assertTeacherSession(teacherPage);
     await assertSecureSessionCookie(teacherContext);
-    await assertNoBrowserCredentialArtifacts(teacherPage);
+    await assertNoBrowserCredentialArtifacts(teacherPage, { forbiddenValues: [teacherAddress] });
     await assertProtectedSurfaceQuality(teacherPage, "TEACHER_WORKSPACE");
 
     let roomCode = "";
@@ -387,6 +411,10 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await expect(teacherPage.getByText("教師房間控制台")).toBeVisible();
     await teacherPage.reload();
     await expect(teacherPage.getByRole("heading", { name: TOPIC })).toBeVisible();
+    await assertNoBrowserCredentialArtifacts(teacherPage, {
+      allowedUuids: [roomId],
+      forbiddenValues: [teacherAddress, roomCode, ...invites.map(({ code }) => code)],
+    });
 
     const students: StudentBrowser[] = [];
     await test.step("join four students and confirm server-assigned anonymous identities", async () => {
@@ -403,13 +431,20 @@ test("real teacher and four-student classroom journey remains server-authoritati
         await expect(page.locator(".room-gate-heading .login-eyebrow")).toHaveText(invite.pseudonym);
         await assertStudentSession(page, roomId, invite.pseudonym);
         await assertSecureSessionCookie(context);
-        await assertNoBrowserCredentialArtifacts(page);
+        await assertNoBrowserCredentialArtifacts(page, {
+          allowedUuids: [roomId],
+          forbiddenValues: [roomCode, invite.code],
+        });
         students.push({ context, page, pseudonym: invite.pseudonym });
       }
       await Promise.all(students.map(async ({ page, pseudonym }) => {
         await page.reload();
         await expect(page.getByRole("heading", { name: TOPIC })).toBeVisible();
         await assertStudentSession(page, roomId, pseudonym);
+        await assertNoBrowserCredentialArtifacts(page, {
+          allowedUuids: [roomId],
+          forbiddenValues: [roomCode, ...invites.map(({ code }) => code)],
+        });
       }));
       await assertProtectedSurfaceQuality(teacherPage, "TEACHER_ROOM");
       await assertProtectedSurfaceQuality(students[0]!.page, "STUDENT_ROOM");
@@ -441,53 +476,83 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await expect(students[1]!.page.getByRole("heading", { name: TOPIC })).toBeVisible();
 
     await test.step("drive lifecycle and real WSS RoomEvent chat", async () => {
-      await expect(teacherPage.getByText("WebSocket 已連線").first()).toBeVisible({ timeout: 30_000 });
-      await expect.poll(() => socketObservations.every(({ count, invalid }) => count >= 1 && !invalid), {
-        message: "every classroom client must open a credential-free same-origin WSS URL",
-        timeout: 30_000,
-      }).toBe(true);
-      const openButton = teacherPage.getByRole("button", { name: "開始課堂" });
-      await expect(openButton).toBeEnabled({ timeout: 30_000 });
-      await openButton.click();
-      await expect(teacherPage.getByText("伺服器 RoomEvent 已確認新的課堂狀態。")).toBeVisible({ timeout: 30_000 });
-      await Promise.all(students.map(({ page }) => expect(page.getByLabel("輸入訊息")).toBeEnabled({ timeout: 30_000 })));
-
-      await teacherPage.getByRole("button", { name: "暫停課堂" }).click();
-      await Promise.all(students.map(({ page }) => expect(page.getByLabel("輸入訊息")).toBeDisabled({ timeout: 30_000 })));
-      await teacherPage.getByRole("button", { name: "繼續課堂" }).click();
-      await Promise.all(students.map(({ page }) => expect(page.getByLabel("輸入訊息")).toBeEnabled({ timeout: 30_000 })));
-
       const firstMessage = "池塘中的陽光為生產者提供能量。";
       const revisedMessage = "池塘中的陽光为生产者提供能量，也支持食物链。";
       const replyMessage = "我同意，并想追问能量如何传到消费者。";
-      await students[0]!.page.getByLabel("輸入訊息").fill(firstMessage);
-      await students[0]!.page.getByRole("button", { name: "發送訊息" }).click();
-      await Promise.all([teacherPage, ...students.map(({ page }) => page)].map((page) => (
-        expect(page.getByRole("region", { name: "共學對話" }).getByText(firstMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
-      )));
+      await test.step("open room and enable composers", async () => {
+        await test.step("teacher WSS ready", async () => {
+          await expect(teacherPage.getByText("WebSocket 已連線").first()).toBeVisible({ timeout: 30_000 });
+        });
+        await test.step("credential-free classroom sockets ready", async () => {
+          await expect.poll(() => socketObservations.every(({ count, invalid, ready }) => (
+            count >= 1 && ready && !invalid
+          )), {
+            message: "every classroom client must complete a credential-free same-origin WSS handshake",
+            timeout: 30_000,
+          }).toBe(true);
+        });
+        await test.step("send room open command", async () => {
+          const openButton = teacherPage.getByRole("button", { name: "開始課堂" });
+          await expect(openButton).toBeEnabled({ timeout: 30_000 });
+          await openButton.click();
+        });
+        await test.step("teacher receives room open event", async () => {
+          await expect(teacherPage.getByText("伺服器 RoomEvent 已確認新的課堂狀態。")).toBeVisible({ timeout: 30_000 });
+        });
+        await test.step("students receive room open event", async () => {
+          await Promise.all(students.map(({ page }, index) => (
+            assertStudentComposerState(page, index, true, socketObservations[index + 1]!)
+          )));
+        });
+      });
 
-      await students[1]!.page.getByRole("button", { name: /^回覆訊息 \d+$/u }).click();
-      await students[1]!.page.getByLabel("輸入訊息").fill(replyMessage);
-      await students[1]!.page.getByRole("button", { name: "發送訊息" }).click();
-      await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(replyMessage, { exact: true })).toBeVisible({ timeout: 30_000 });
+      await test.step("pause and resume room", async () => {
+        await teacherPage.getByRole("button", { name: "暫停課堂" }).click();
+        await Promise.all(students.map(({ page }, index) => (
+          assertStudentComposerState(page, index, false, socketObservations[index + 1]!)
+        )));
+        await teacherPage.getByRole("button", { name: "繼續課堂" }).click();
+        await Promise.all(students.map(({ page }, index) => (
+          assertStudentComposerState(page, index, true, socketObservations[index + 1]!)
+        )));
+      });
 
-      await students[0]!.page.getByRole("button", { name: /^修訂訊息 \d+$/u }).click();
-      await students[0]!.page.getByLabel("修訂內容").fill(revisedMessage);
-      await students[0]!.page.getByRole("button", { name: "送出修訂" }).click();
-      await Promise.all([teacherPage, ...students.map(({ page }) => page)].map((page) => (
-        expect(page.getByRole("region", { name: "共學對話" }).getByText(revisedMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
-      )));
+      await test.step("broadcast first message", async () => {
+        await students[0]!.page.getByLabel("輸入訊息").fill(firstMessage);
+        await students[0]!.page.getByRole("button", { name: "發送訊息" }).click();
+        await Promise.all([teacherPage, ...students.map(({ page }) => page)].map((page) => (
+          expect(page.getByRole("region", { name: "共學對話" }).getByText(firstMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
+        )));
+      });
 
-      const hostileMessage = `<img src=x onerror="globalThis.__learningOrbitXss=1"> 太陽與食物鏈仍要由證據解釋。`;
-      await students[2]!.page.getByLabel("輸入訊息").fill(hostileMessage);
-      await students[2]!.page.getByRole("button", { name: "發送訊息" }).click();
-      await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(hostileMessage, { exact: true }))
-        .toBeVisible({ timeout: 30_000 });
-      const xssResult = await teacherPage.evaluate(() => ({
-        injectedElementCount: document.querySelectorAll('img[src="x"]').length,
-        handlerRan: Reflect.get(globalThis, "__learningOrbitXss") === 1,
-      }));
-      if (xssResult.injectedElementCount !== 0 || xssResult.handlerRan) fail("PILOT_CHAT_XSS_BOUNDARY_FAILED");
+      await test.step("reply to message", async () => {
+        await students[1]!.page.getByRole("button", { name: /^回覆訊息 \d+$/u }).click();
+        await students[1]!.page.getByLabel("輸入訊息").fill(replyMessage);
+        await students[1]!.page.getByRole("button", { name: "發送訊息" }).click();
+        await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(replyMessage, { exact: true })).toBeVisible({ timeout: 30_000 });
+      });
+
+      await test.step("revise message", async () => {
+        await students[0]!.page.getByRole("button", { name: /^修訂訊息 \d+$/u }).click();
+        await students[0]!.page.getByLabel("修訂內容").fill(revisedMessage);
+        await students[0]!.page.getByRole("button", { name: "送出修訂" }).click();
+        await Promise.all([teacherPage, ...students.map(({ page }) => page)].map((page) => (
+          expect(page.getByRole("region", { name: "共學對話" }).getByText(revisedMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
+        )));
+      });
+
+      await test.step("reject chat XSS execution", async () => {
+        const hostileMessage = `<img src=x onerror="globalThis.__learningOrbitXss=1"> 太陽與食物鏈仍要由證據解釋。`;
+        await students[2]!.page.getByLabel("輸入訊息").fill(hostileMessage);
+        await students[2]!.page.getByRole("button", { name: "發送訊息" }).click();
+        await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(hostileMessage, { exact: true }))
+          .toBeVisible({ timeout: 30_000 });
+        const xssResult = await teacherPage.evaluate(() => ({
+          injectedElementCount: document.querySelectorAll('img[src="x"]').length,
+          handlerRan: Reflect.get(globalThis, "__learningOrbitXss") === 1,
+        }));
+        if (xssResult.injectedElementCount !== 0 || xssResult.handlerRan) fail("PILOT_CHAT_XSS_BOUNDARY_FAILED");
+      });
     });
 
     await test.step("verify Provider and role-scoped analytics boundaries", async () => {
@@ -639,7 +704,9 @@ test("real teacher and four-student classroom journey remains server-authoritati
     });
 
     await teacherPage.getByRole("button", { name: "結束課堂" }).click();
-    await Promise.all(students.map(({ page }) => expect(page.getByLabel("輸入訊息")).toBeDisabled({ timeout: 30_000 })));
+    await Promise.all(students.map(({ page }, index) => (
+      assertStudentComposerState(page, index, false, socketObservations[index + 1]!)
+    )));
 
     const loggedOutStudent = students.pop();
     if (!loggedOutStudent) fail("PILOT_STUDENT_CONTEXT_MISSING");
@@ -655,6 +722,10 @@ test("real teacher and four-student classroom journey remains server-authoritati
       await expect(teacherPage.getByRole("heading", { name: "課堂刪除狀態" })).toBeVisible({ timeout: 30_000 });
       await teacherPage.reload();
       await expect(teacherPage.getByRole("heading", { name: "課堂刪除狀態" })).toBeVisible({ timeout: 30_000 });
+      await assertNoBrowserCredentialArtifacts(teacherPage, {
+        allowedUuids: [roomId],
+        forbiddenValues: [teacherAddress, roomCode, ...invites.map(({ code }) => code)],
+      });
       await expect(teacherPage.getByRole("heading", { name: "伺服器已完成線上刪除驗證" })).toBeVisible({ timeout: 120_000 });
       const surfaces = teacherPage.locator(".deletion-receipt li");
       await expect(surfaces).toHaveCount(8);

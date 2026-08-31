@@ -67,6 +67,11 @@ const jsonResponse = (body: unknown) => new Response(JSON.stringify(body), {
 describe("pinned Mailpit v1.31.0 contract", () => {
   it("strictly parses the query and single-message response shapes", () => {
     expect(parseMailpitSearch(search)).toEqual(search);
+    const liveSearch = {
+      ...search,
+      messages: [{ ...summary, Bcc: null, Cc: null, ReplyTo: null }],
+    };
+    expect(parseMailpitSearch(liveSearch)).toEqual(liveSearch);
     expect(parseMailpitMessage(message)).toEqual(message);
     expect(() => parseMailpitSearch({ ...search, unexpected: true })).toThrow(
       "MAILPIT_CONTRACT_MISMATCH",
@@ -84,6 +89,7 @@ describe("pinned Mailpit v1.31.0 contract", () => {
 
   it("accepts only the canonical same-origin consume URL", () => {
     expect(parseMagicLinkFromMessage(message)).toBe(message.Text);
+    expect(parseMagicLinkFromMessage({ ...message, Text: `${message.Text}\r\n` })).toBe(message.Text);
     expect(() => parseMagicLinkFromMessage({ ...message, Text: "https://evil.invalid/?token=abc" })).toThrow(
       "MAILPIT_MAGIC_LINK_INVALID",
     );
