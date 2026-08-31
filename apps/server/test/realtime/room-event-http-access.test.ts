@@ -51,8 +51,9 @@ describe("GET /v1/rooms/:roomId/events authority boundary", () => {
   const apps: Array<Awaited<ReturnType<typeof buildApp>>> = [];
   afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
-  async function appFor(identity: AuthSession | null, authorization: unknown) {
+  async function appFor(identity: AuthSession | null, authorization: unknown, finalAuthorization: unknown = authorization) {
     const authenticateToken = vi.fn(async () => authorization);
+    const reauthorize = vi.fn(async () => finalAuthorization);
     const eventsAfter = vi.fn(async () => []);
     const app = await buildApp({
       config: { allowedOrigins: [ORIGIN], publicBaseOrigin: ORIGIN },
@@ -63,13 +64,13 @@ describe("GET /v1/rooms/:roomId/events authority boundary", () => {
       } as never,
       lifecycle: { events: { eventsAfter } } as never,
       realtime: {
-        authorizer: { authenticateToken } as never,
+        authorizer: { authenticateToken, reauthorize } as never,
         hub: {} as never,
         publisher: { tick: vi.fn(async () => undefined) } as never,
       },
     });
     apps.push(app);
-    return { app, authenticateToken, eventsAfter };
+    return { app, authenticateToken, reauthorize, eventsAfter };
   }
 
   it("returns 401 only when the browser Session itself is absent", async () => {
@@ -98,5 +99,20 @@ describe("GET /v1/rooms/:roomId/events authority boundary", () => {
         expect(value.eventsAfter).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("rechecks authority after the event read so deletion cannot race a page response", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000099";
+    const initial = { ok: true, sessionId, principal: teacher, actorId: teacher.actorId } as const;
+    const value = await appFor(teacher, initial, { ok: false, closeCode: 4410 });
+    const response = await value.app.inject({
+      method: "GET",
+      url: `/v1/rooms/${ROOM_ID}/events?afterSeq=0&limit=500`,
+      cookies: { lo_session: "opaque-session" },
+      headers: { origin: ORIGIN },
+    });
+    expect(value.eventsAfter).toHaveBeenCalledOnce();
+    expect(value.reauthorize).toHaveBeenCalledWith(sessionId, ROOM_ID);
+    expect([response.statusCode, response.json()]).toEqual([404, { code: "ROOM_NOT_FOUND" }]);
   });
 });

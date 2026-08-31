@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from learning_orbit_worker.core_handlers import TerminalJobError
 from learning_orbit_worker.handler_registry import HandlerOutcome
 from learning_orbit_worker.jobs import WorkerJob
-from learning_orbit_worker.lifecycle import _surface_count, delete_surface_handler, register_lifecycle_handlers
+from learning_orbit_worker.lifecycle import _delete_surface, _surface_count, delete_surface_handler, register_lifecycle_handlers
 from learning_orbit_worker.handler_registry import HandlerRegistry
 
 
@@ -54,13 +54,76 @@ class LifecycleHandlerTests(unittest.TestCase):
         with self.assertRaisesRegex(TerminalJobError, "CLAIM"):
             delete_surface_handler(SimpleNamespace(claim=None), job({"deletionJobId": DELETION, "surface": "events"}))
 
-    def test_capability_surfaces_have_explicit_zero_probe(self):
+    def test_cache_is_explicit_zero_but_provider_surface_counts_potential_external_records(self):
         class ShouldNotQuery:
             def execute(self, *_args):
                 raise AssertionError("capability surface must not issue a parameterless query with room args")
 
         self.assertEqual(_surface_count(ShouldNotQuery(), "caches", DELETION), 0)
-        self.assertEqual(_surface_count(ShouldNotQuery(), "provider_copies", DELETION), 0)
+
+        class Result:
+            @staticmethod
+            def fetchone():
+                return (2,)
+
+        class RecordingConnection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, values):
+                self.calls.append((sql, values))
+                return Result()
+
+        connection = RecordingConnection()
+        self.assertEqual(_surface_count(connection, "provider_copies", DELETION), 2)
+        sql, values = connection.calls[-1]
+        self.assertIn("media_asset", sql)
+        self.assertIn("agent_run", sql)
+        self.assertIn("provider NOT IN ('learner-authored','teacher-correction')", sql)
+        self.assertEqual(values, (DELETION,) * 3)
+
+    def test_relational_surface_probes_cover_review_and_projection_metadata(self):
+        class Result:
+            @staticmethod
+            def fetchone():
+                return (3,)
+
+        class RecordingConnection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, values):
+                self.calls.append((sql, values))
+                return Result()
+
+        connection = RecordingConnection()
+        self.assertEqual(_surface_count(connection, "artifacts", DELETION), 3)
+        artifact_sql, artifact_values = connection.calls[-1]
+        self.assertIn("analytics_review_detail", artifact_sql)
+        self.assertIn("extraction_artifacts", artifact_sql)
+        self.assertEqual(artifact_values, (DELETION,) * 3)
+
+        self.assertEqual(_surface_count(connection, "projections", DELETION), 3)
+        projection_sql, projection_values = connection.calls[-1]
+        self.assertIn("analysis_room_heads", projection_sql)
+        self.assertIn("student_analytics_promotion", projection_sql)
+        self.assertEqual(projection_values, (DELETION,) * 5)
+
+    def test_artifact_deletion_removes_teacher_review_detail_before_artifacts(self):
+        class RecordingConnection:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, values):
+                self.calls.append((sql, values))
+
+        connection = RecordingConnection()
+        _delete_surface(connection, "artifacts", DELETION)
+        self.assertEqual(len(connection.calls), 3)
+        self.assertIn("DELETE FROM extraction_artifacts", connection.calls[0][0])
+        self.assertIn("DELETE FROM analytics_review_detail", connection.calls[1][0])
+        self.assertIn("DELETE FROM derived_text_artifact", connection.calls[2][0])
+        self.assertTrue(all(values == (DELETION,) for _, values in connection.calls))
 
 
 if __name__ == "__main__":

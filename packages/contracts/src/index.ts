@@ -15,6 +15,10 @@ export { mediaStatusContract } from "./media-status.js";
 export { mediaInternalReconcileContract } from "./media-internal-reconcile.js";
 export { agentContract } from "./agent.js";
 export { analyticsContract, analyticsHttpContract, analyticsReviewRoomEventPayloadSchema } from "./analytics.js";
+export { analyticsTeacherHttpContract } from "./analytics-teacher.js";
+export type { AnalyticsReviewAccepted, AnalyticsReviewDetail } from "./analytics-teacher.js";
+export { teacherRoomExportContract } from "./room-export.js";
+export type { TeacherRoomExport } from "./room-export.js";
 export type {
   DerivedTextArtifact,
   DerivedTextArtifactPage,
@@ -33,6 +37,7 @@ export type {
   StudentAnalyticsTimelineResponse,
   TeacherAnalyticsTimelineResponse,
   AnalyticsResyncResponse,
+  AnalyticsReviewCommand,
 } from "./analytics.js";
 export {
   deletionLifecycleContract,

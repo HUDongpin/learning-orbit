@@ -26,6 +26,7 @@ type HarnessOptions = Readonly<{
   latestMentions?: readonly string[];
   existing?: boolean;
   active?: boolean;
+  deleting?: boolean;
 }>;
 
 function harness(options: HarnessOptions = {}) {
@@ -52,6 +53,7 @@ function harness(options: HarnessOptions = {}) {
     calls.push(sql);
     if (/^(BEGIN|COMMIT|ROLLBACK)/u.test(sql)) return { rows: [], rowCount: 0 };
     if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+    if (sql.includes("FROM deletion_job")) return { rows: [{ deletion_active: options.deleting ?? false }], rowCount: 1 };
     if (sql.includes("SELECT status, agent_enabled, nova_actor_id FROM classroom_room")) {
       return { rows: [{ status: options.status ?? "open", agent_enabled: options.enabled ?? true, nova_actor_id: NOVA_ID }], rowCount: 1 };
     }
@@ -84,6 +86,32 @@ function harness(options: HarnessOptions = {}) {
 }
 
 describe("Agent locked create admission", () => {
+  it("linearizes the current-state read behind the deletion tombstone lock", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (/^(BEGIN|COMMIT|ROLLBACK)/u.test(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+      if (sql.includes("FROM deletion_job")) {
+        return { rows: [{ deletion_active: true }], rowCount: 1 };
+      }
+      if (sql.includes("SELECT agent_enabled FROM classroom_room")) {
+        return { rows: [{ agent_enabled: true }], rowCount: 1 };
+      }
+      if (sql.includes("FROM agent_run")) return { rows: [], rowCount: 0 };
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 80)}`);
+    });
+    const client = { query, release: vi.fn() };
+    const repository = new AgentRepository({
+      query,
+      connect: vi.fn(async () => client),
+    } as never, { now: () => new Date("2026-08-31T06:00:00.000Z") });
+    const health = vi.fn(async () => "unavailable" as const);
+
+    await expect(repository.getCurrent(ROOM_ID, health))
+      .rejects.toThrow("ROOM_DELETION_IN_PROGRESS");
+    expect(health).toHaveBeenCalledOnce();
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("FROM agent_run"))).toBe(false);
+  });
+
   it.each([
     [{ status: "paused" as const }, "ROOM_NOT_OPEN"],
     [{ status: "closed" as const }, "ROOM_NOT_OPEN"],
@@ -97,6 +125,15 @@ describe("Agent locked create admission", () => {
     expect(state.calls.findIndex((sql) => sql.includes("pg_advisory_xact_lock")))
       .toBeLessThan(state.calls.findIndex((sql) => sql.includes("FOR UPDATE")));
     expect(state.release).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks the deletion tombstone after acquiring the canonical room lock", async () => {
+    const state = harness({ deleting: true });
+    const beforeCreate = vi.fn(async () => undefined);
+    await expect(state.repository.getOrCreateRunAndJob(input(beforeCreate)))
+      .rejects.toThrow("ROOM_DELETION_IN_PROGRESS");
+    expect(beforeCreate).not.toHaveBeenCalled();
+    expect(state.calls.some((sql) => /^\s*(?:INSERT|UPDATE|DELETE)\b/iu.test(sql))).toBe(false);
   });
 
   it("rejects a trigger whose latest message lineage is retracted", async () => {

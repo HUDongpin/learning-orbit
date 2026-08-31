@@ -49,10 +49,65 @@ function baseSnapshotRow() {
 
 function fakePool(rows: Array<{ rows: any[] }>) {
   let index = 0;
-  return { query: async () => rows[index++] ?? { rows: [] } } as any;
+  return { query: async (sql: string) => {
+    if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+    if (sql.includes("AS room_exists")) {
+      return { rows: [{
+        room_exists: true,
+        deletion_active: false,
+        policy_current: true,
+        student_projection_allowed: true,
+      }], rowCount: 1 };
+    }
+    return rows[index++] ?? { rows: [] };
+  } } as any;
 }
 
 describe("AnalyticsRepository projection chain", () => {
+  it("takes a final canonical room fence so deletion cannot race a projection response", async () => {
+    const projectionQuery = vi.fn(async () => ({ rows: [baseSnapshotRow()] }));
+    const transactionQuery = vi.fn(async (sql: string) => {
+      if (/^(BEGIN|COMMIT|ROLLBACK)/u.test(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+      if (sql.includes("AS room_exists")) {
+        return { rows: [{ room_exists: true, deletion_active: true }], rowCount: 1 };
+      }
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 80)}`);
+    });
+    const client = { query: transactionQuery, release: vi.fn() };
+    const repository = new AnalyticsRepository({
+      query: projectionQuery,
+      connect: vi.fn(async () => client),
+    } as never);
+
+    await expect(repository.latest(roomId, "echo.teacher_shadow"))
+      .rejects.toMatchObject({ statusCode: 410, code: "ROOM_DELETION_IN_PROGRESS" });
+    expect(transactionQuery.mock.calls.findIndex(([sql]) => String(sql).includes("pg_advisory_xact_lock")))
+      .toBeLessThan(transactionQuery.mock.calls.findIndex(([sql]) => String(sql).includes("AS room_exists")));
+  });
+
+  it("rechecks the student promotion at the same final projection-read fence", async () => {
+    const studentRow = { ...baseSnapshotRow(), projection_key: "echo.student_approved" };
+    const transactionQuery = vi.fn(async (sql: string) => {
+      if (/^(BEGIN|COMMIT|ROLLBACK)/u.test(sql)) return { rows: [], rowCount: 0 };
+      if (sql.includes("pg_advisory_xact_lock")) return { rows: [], rowCount: 1 };
+      if (sql.includes("AS room_exists")) return { rows: [{
+        room_exists: true,
+        deletion_active: false,
+        policy_current: true,
+        student_projection_allowed: false,
+      }], rowCount: 1 };
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 80)}`);
+    });
+    const repository = new AnalyticsRepository({
+      query: vi.fn(async () => ({ rows: [studentRow] })),
+      connect: vi.fn(async () => ({ query: transactionQuery, release: vi.fn() })),
+    } as never);
+
+    await expect(repository.latest(roomId, "echo.student_approved"))
+      .rejects.toMatchObject({ statusCode: 403, code: "STUDENT_ANALYTICS_NOT_PROMOTED" });
+  });
+
   it("reverses the bounded descending query and returns a contiguous timeline", async () => {
     const repository = new AnalyticsRepository(fakePool([
       { rows: [{ version: "3", analysis_epoch: epoch, algorithm_version: "echo-v1", parameter_hash: hash }] },

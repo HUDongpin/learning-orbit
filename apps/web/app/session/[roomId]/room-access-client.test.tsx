@@ -150,6 +150,14 @@ function gateway(session: AuthSession = student, overrides: Partial<SessionGatew
       agentEnabled: false,
       updatedAt: "2026-08-31T01:00:00.000Z",
     })),
+    setAgentSettings: vi.fn(async (_requestedRoomId: string, input) => ({ enabled: input.enabled, cancelledRunId: null })),
+    getDerivedTextArtifacts: vi.fn(async () => ({ items: [], throughRoomSeq: 0, nextAfterArtifactId: null, includeHistory: false })),
+    submitAnalyticsReview: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    getAnalyticsReviewDetail: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_REVIEW_NOT_FOUND"); }),
+    requestRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("DELETION_IN_PROGRESS"); }),
+    getDeletionStatus: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    getRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    exportRoom: vi.fn(async () => { throw new SessionGatewayError("EXPORT_UNAVAILABLE"); }),
     getProjectionLatest: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getProjectionPatches: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getConceptTimeline: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
@@ -170,6 +178,8 @@ describe("room route access guard", () => {
     const api = gateway();
     render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
     expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "跳到共學工作區" })).toHaveAttribute("href", "#classroom-workspace");
+    expect(document.getElementById("classroom-workspace")).toHaveAttribute("tabindex", "-1");
     expect(screen.getByText("探索者 A")).toBeInTheDocument();
     expect(api.getRoom).toHaveBeenCalledWith(roomId);
     expect(api.getAgentCurrent).toHaveBeenCalledWith(roomId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
@@ -346,7 +356,7 @@ describe("room route access guard", () => {
   it("rejects a malformed route id before session or room data access", async () => {
     const api = gateway();
     render(<RoomAccessClient gateway={api} mode="student" roomId="demo-room" />);
-    expect(await screen.findByRole("heading", { name: "無法開啟這個課堂" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "無法開啟這個課堂" })).toHaveFocus();
     expect(api.getSession).not.toHaveBeenCalled();
     expect(api.getRoom).not.toHaveBeenCalled();
   });
@@ -378,6 +388,112 @@ describe("room route access guard", () => {
     expect(await screen.findByRole("heading", { name: "目前的 Session 無法再開啟這個課堂" })).toBeInTheDocument();
   });
 
+  it("hydrates a normally closed teacher room for export and deletion without opening WSS", async () => {
+    const WebSocketConstructor = vi.fn();
+    vi.stubGlobal("WebSocket", WebSocketConstructor);
+    const getRoomEvents = vi.fn(async () => ({ events: [], throughRoomSeq: 0 }));
+    const api = gateway(teacher, {
+      getRoom: vi.fn(async () => ({
+        ...room,
+        status: "closed" as const,
+        startsAt: "2026-08-31T01:00:00.000Z",
+        closesAt: "2026-08-31T01:45:00.000Z",
+      })),
+      getRoomEvents,
+    });
+    render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+
+    expect(await screen.findByRole("heading", { name: "生態系統探究" })).toBeInTheDocument();
+    expect(screen.getAllByText("已結束").length).toBeGreaterThan(0);
+    expect(getRoomEvents).toHaveBeenCalledWith(roomId, 0, 500);
+    expect(WebSocketConstructor).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "下載 JSON" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "要求刪除" })).toBeDisabled();
+  });
+
+  it("restores a teacher deletion job before reading ordinary room details", async () => {
+    const deletionJobId = "00000000-0000-4000-8000-000000000601";
+    const status = {
+      deletionJobId,
+      status: "queued" as const,
+      nextPollAfterMs: null,
+      failureCode: null,
+    };
+    const api = gateway(teacher, {
+      getRoomDeletion: vi.fn(async () => status),
+      getDeletionStatus: vi.fn(async () => status),
+    });
+    render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+
+    expect(await screen.findByRole("heading", { name: "課堂刪除狀態" })).toBeInTheDocument();
+    expect(screen.getByText("刪除工作已由伺服器排入佇列。")).toBeInTheDocument();
+    expect(api.getRoomDeletion).toHaveBeenCalledWith(roomId, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(api.getRoom).not.toHaveBeenCalled();
+    expect(document.body.innerHTML).not.toContain(deletionJobId);
+  });
+
+  it("recovers the deletion job if deletion starts between the status probe and Room Details", async () => {
+    const deletionJobId = "00000000-0000-4000-8000-000000000602";
+    const status = { deletionJobId, status: "running" as const, nextPollAfterMs: null, failureCode: null };
+    const getRoomDeletion = vi.fn()
+      .mockRejectedValueOnce(new SessionGatewayError("ROOM_NOT_FOUND"))
+      .mockResolvedValue(status);
+    const api = gateway(teacher, {
+      getRoomDeletion,
+      getRoom: vi.fn(async () => { throw new SessionGatewayError("DELETION_IN_PROGRESS"); }),
+      getDeletionStatus: vi.fn(async () => status),
+    });
+    render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+
+    expect(await screen.findByRole("heading", { name: "課堂刪除狀態" })).toBeInTheDocument();
+    expect(getRoomDeletion).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("伺服器正在逐一清除並驗證課堂 Surface。")).toBeInTheDocument();
+  });
+
+  it("canonicalizes an owning teacher on the student URL before showing an existing deletion job", async () => {
+    const status = {
+      deletionJobId: "00000000-0000-4000-8000-000000000603",
+      status: "queued" as const,
+      nextPollAfterMs: 1000,
+      failureCode: null,
+    };
+    const api = gateway(teacher, { getRoomDeletion: vi.fn(async () => status) });
+    render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(`/session/${roomId}/teacher`));
+    expect(api.getRoom).not.toHaveBeenCalled();
+  });
+
+  it("recovers a deletion job after a teacher WebSocket receives room-unavailable", async () => {
+    let closeListener: ((event: { code?: number }) => void) | undefined;
+    class TestWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { code?: number }) => void) {
+        if (type === "close") closeListener = listener;
+      }
+    }
+    vi.stubGlobal("WebSocket", TestWebSocket);
+    const status = {
+      deletionJobId: "00000000-0000-4000-8000-000000000604",
+      status: "running" as const,
+      nextPollAfterMs: null,
+      failureCode: null,
+    };
+    const getRoomDeletion = vi.fn()
+      .mockRejectedValueOnce(new SessionGatewayError("ROOM_NOT_FOUND"))
+      .mockResolvedValue(status);
+    const api = gateway(teacher, {
+      getRoomDeletion,
+      getDeletionStatus: vi.fn(async () => status),
+    });
+    render(<RoomAccessClient gateway={api} mode="teacher" roomId={roomId} />);
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    closeListener?.({ code: 4410 });
+    expect(await screen.findByRole("heading", { name: "課堂刪除狀態" })).toBeInTheDocument();
+    expect(getRoomDeletion).toHaveBeenCalledTimes(2);
+  });
+
   it("redirects an expired session to the correct login entry", async () => {
     const api = gateway(student, {
       getSession: vi.fn(async () => { throw new SessionGatewayError("AUTH_REQUIRED"); }),
@@ -401,7 +517,8 @@ describe("room route access guard", () => {
       getRoomEvents: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
     });
     render(<RoomAccessClient gateway={api} mode="student" roomId={roomId} />);
-    expect(await screen.findByRole("heading", { name: "課堂服務暫時不可用" })).toBeInTheDocument();
+    const recoveryHeading = await screen.findByRole("heading", { name: "課堂服務暫時不可用" });
+    await waitFor(() => expect(recoveryHeading).toHaveFocus());
     await userEvent.click(screen.getByRole("button", { name: "清除 Session 並返回登入" }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
     expect(replace).toHaveBeenCalledWith("/login");

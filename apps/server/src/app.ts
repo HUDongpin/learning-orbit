@@ -78,6 +78,7 @@ export interface BuildAppOptions {
     policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
     repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
   };
+  analyticsTeacher?: Pick<AnalyticsTeacherService, "authorize" | "listArtifacts" | "review" | "reviewDetail">;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -184,8 +185,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       jobClaims,
     )
     : undefined;
-  const analyticsTeacher = pool && lifecycle && analytics?.policy instanceof AnalyticsPolicy
-    ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined;
+  const analyticsTeacher = options.analyticsTeacher ?? (pool && lifecycle && analytics?.policy instanceof AnalyticsPolicy
+    ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined);
   const agent = options.agent ?? (pool ? new AgentService(pool, clock) : undefined);
   const agentProviderHealth = pool && assertionTrust ? new InternalProviderHealthRoute(
     new ProviderHealthRepository(pool, clock), assertionTrust, clock,

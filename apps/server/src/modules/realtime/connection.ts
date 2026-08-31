@@ -115,7 +115,7 @@ export class RealtimeConnection {
     }
     if (frame.type === "command") {
       try { const result = await this.commands.dispatch(auth.principal, frame.command, this.identity.sessionId); this.send({ type: "ack", commandId: frame.command.commandId, roomSeq: result.roomSeq, revision: result.revision }); }
-      catch (error) { const code = error instanceof Error && ["FORBIDDEN","ROOM_NOT_OPEN","MESSAGE_NOT_FOUND","REVISION_CONFLICT","INVALID_COMMAND"].includes(error.message) ? error.message : "INTERNAL"; this.send({ type: "reject", commandId: frame.command.commandId, code: code as any }); }
+      catch (error) { const code = error instanceof Error && ["FORBIDDEN","ROOM_DELETION_IN_PROGRESS","ROOM_NOT_OPEN","MESSAGE_NOT_FOUND","REVISION_CONFLICT","INVALID_COMMAND"].includes(error.message) ? error.message : "INTERNAL"; this.send({ type: "reject", commandId: frame.command.commandId, code: code as any }); }
       return;
     }
     const now = this.now().getTime();

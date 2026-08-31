@@ -327,6 +327,16 @@ export class RoomEventRepository {
       );
       const locked = result.rows[0];
       if (!locked) throw new RoomError("FORBIDDEN");
+      const deletion = await client.query<{ deletion_active: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM deletion_job
+            WHERE room_id=$1 AND status IN ('queued','running','retryable','dead')
+         ) AS deletion_active`,
+        [roomId],
+      );
+      if (deletion.rows[0]?.deletion_active !== false) {
+        throw new RoomError("ROOM_DELETION_IN_PROGRESS");
+      }
       const room = roomSnapshot(locked);
       let nextRoomSeq = room.next_room_seq;
       let operationFailure: unknown;

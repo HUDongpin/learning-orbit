@@ -80,23 +80,27 @@ def _count(connection: Any, query: str, room_id: str) -> int:
 
 
 def _surface_count(connection: Any, surface: str, room_id: str) -> int:
-    # These surfaces are intentionally capability-owned rather than backed by
-    # a local relational table in the pilot schema.  Returning a literal zero
-    # avoids pretending that a provider sweep occurred and, importantly,
-    # avoids passing a room parameter to a parameterless ``SELECT 0`` query.
-    # A non-zero frozen manifest still fails closed in ``delete_surface_handler``.
-    if surface in {"caches", "provider_copies"}:
+    # The pilot has no cache adapter, so its local cache surface is structurally
+    # empty. Provider copies are different: any media asset, Agent run, or
+    # non-local derived-text provider is durable evidence that an external
+    # copy may exist. Without a reviewed deletion/no-persistence capability,
+    # that potential count must keep the saga retryable instead of certifying
+    # a false zero-copy receipt.
+    if surface == "caches":
         return 0
     queries = {
         "events": "SELECT count(*) AS count FROM room_event WHERE room_id=%s",
         "media": "SELECT count(*) AS count FROM media_asset WHERE room_id=%s",
         "derivatives": "SELECT count(*) AS count FROM media_derivative d JOIN media_asset m ON m.media_id=d.media_id WHERE m.room_id=%s",
-        "artifacts": "SELECT count(*) AS count FROM derived_text_artifact WHERE room_id=%s",
-        "projections": "SELECT (SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=%s) AS count",
+        "artifacts": "SELECT (SELECT count(*) FROM derived_text_artifact WHERE room_id=%s)+(SELECT count(*) FROM extraction_artifacts WHERE room_id=%s)+(SELECT count(*) FROM analytics_review_detail WHERE room_id=%s) AS count",
+        "projections": "SELECT (SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=%s)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=%s)+(SELECT count(*) FROM analysis_room_heads WHERE room_id=%s)+(SELECT count(*) FROM student_analytics_promotion WHERE room_id=%s) AS count",
         "agent_runs": "SELECT count(*) AS count FROM agent_run WHERE room_id=%s",
+        "provider_copies": "SELECT (SELECT count(*) FROM media_asset WHERE room_id=%s)+(SELECT count(*) FROM agent_run WHERE room_id=%s)+(SELECT count(*) FROM derived_text_artifact WHERE room_id=%s AND provider NOT IN ('learner-authored','teacher-correction')) AS count",
     }
-    if surface == "projections":
-        result = connection.execute(queries[surface], (room_id, room_id, room_id)).fetchone()
+    if surface in {"artifacts", "projections", "provider_copies"}:
+        parameters = ((room_id,) * 3 if surface in {"artifacts", "provider_copies"}
+                      else (room_id,) * 5)
+        result = connection.execute(queries[surface], parameters).fetchone()
         value = _row(result, "count", 0) if result is not None else None
         try:
             return int(value)
@@ -109,6 +113,8 @@ def _delete_surface(connection: Any, surface: str, room_id: str) -> None:
     if surface == "derivatives":
         connection.execute("DELETE FROM media_derivative d USING media_asset m WHERE d.media_id=m.media_id AND m.room_id=%s", (room_id,))
     elif surface == "artifacts":
+        connection.execute("DELETE FROM extraction_artifacts WHERE room_id=%s", (room_id,))
+        connection.execute("DELETE FROM analytics_review_detail WHERE room_id=%s", (room_id,))
         connection.execute("DELETE FROM derived_text_artifact WHERE room_id=%s", (room_id,))
     elif surface == "projections":
         connection.execute("DELETE FROM analysis_projection_outbox WHERE room_id=%s", (room_id,))

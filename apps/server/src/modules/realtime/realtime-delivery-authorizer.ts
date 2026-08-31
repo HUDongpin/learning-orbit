@@ -19,9 +19,15 @@ export class RealtimeDeliveryAuthorizer {
       session_id: string; principal_kind: "teacher" | "student"; teacher_id: string | null;
       room_id: string | null; room_member_id: string | null; actor_id: string | null;
       pseudonym: string | null; nova_actor_id: string | null; room_status: string | null;
+      deletion_active: boolean;
     }>(
       `SELECT s.session_id, s.principal_kind, s.teacher_id, m.room_id, s.room_member_id,
-              m.actor_id, m.pseudonym, r.nova_actor_id, r.status AS room_status
+              m.actor_id, m.pseudonym, r.nova_actor_id, r.status AS room_status,
+              EXISTS (
+                SELECT 1 FROM deletion_job d
+                WHERE d.room_id=r.room_id
+                  AND d.status IN ('queued','running','retryable','dead')
+              ) AS deletion_active
        FROM auth_session s
        LEFT JOIN room_member m ON m.room_member_id=s.room_member_id
        LEFT JOIN classroom_room r ON r.room_id=m.room_id OR (s.principal_kind='teacher' AND r.teacher_id=s.teacher_id)
@@ -33,7 +39,7 @@ export class RealtimeDeliveryAuthorizer {
     );
     const row = result.rows[0];
     if (!row) return { ok: false, closeCode: 4401 };
-    if (row.room_status === "closed" || row.room_status === "deleting") return { ok: false, closeCode: 4410 };
+    if (row.deletion_active !== false) return { ok: false, closeCode: 4410 };
     if (row.principal_kind === "teacher" && row.teacher_id) {
       return { ok: true, sessionId: row.session_id, principal: authContract.parseSession({ role: "teacher", teacherId: row.teacher_id, actorId: row.teacher_id }), actorId: row.teacher_id };
     }
@@ -52,8 +58,14 @@ export class RealtimeDeliveryAuthorizer {
     const identity = await this.pool.query<{
       principal_kind: "teacher" | "student"; teacher_id: string | null; room_id: string | null;
       room_member_id: string | null; actor_id: string | null; pseudonym: string | null; nova_actor_id: string | null; room_status: string | null;
+      deletion_active: boolean;
     }>(
-      `SELECT s.principal_kind,s.teacher_id,m.room_id,s.room_member_id,m.actor_id,m.pseudonym,r.nova_actor_id,r.status AS room_status
+      `SELECT s.principal_kind,s.teacher_id,m.room_id,s.room_member_id,m.actor_id,m.pseudonym,r.nova_actor_id,r.status AS room_status,
+              EXISTS (
+                SELECT 1 FROM deletion_job d
+                WHERE d.room_id=r.room_id
+                  AND d.status IN ('queued','running','retryable','dead')
+              ) AS deletion_active
        FROM auth_session s LEFT JOIN room_member m ON m.room_member_id=s.room_member_id
        LEFT JOIN classroom_room r ON r.room_id=m.room_id OR (s.principal_kind='teacher' AND r.teacher_id=s.teacher_id)
        WHERE s.session_id=$1 AND s.revoked_at IS NULL AND s.expires_at>now()
@@ -63,7 +75,7 @@ export class RealtimeDeliveryAuthorizer {
     );
     const row = identity.rows[0];
     if (!row) return { ok: false, closeCode: 4403 };
-    if (row.room_status === "closed" || row.room_status === "deleting") return { ok: false, closeCode: 4410 };
+    if (row.deletion_active !== false) return { ok: false, closeCode: 4410 };
     if (row.principal_kind === "teacher" && row.teacher_id) return { ok: true, actorId: row.teacher_id, principal: authContract.parseSession({ role: "teacher", teacherId: row.teacher_id, actorId: row.teacher_id }) };
     if (row.room_id !== roomId || !row.room_member_id || !row.actor_id || !row.pseudonym || !row.nova_actor_id) return { ok: false, closeCode: 4403 };
     return { ok: true, actorId: row.actor_id, principal: authContract.parseSession({ role: "student", roomId, roomMemberId: row.room_member_id, actorId: row.actor_id, pseudonym: row.pseudonym, nova: { actorId: row.nova_actor_id, actorKind: "agent", actorRole: "socratic_facilitator", displayName: "Nova Agent" } }) };

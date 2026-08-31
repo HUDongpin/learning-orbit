@@ -22,6 +22,16 @@ const student: Extract<AuthSession, { role: "student" }> = {
     displayName: "Nova Agent",
   },
 };
+const teacher: Extract<AuthSession, { role: "teacher" }> = {
+  role: "teacher",
+  teacherId: "00000000-0000-4000-8000-000000000014",
+  actorId: "00000000-0000-4000-8000-000000000014",
+};
+const teacherSessions = {
+  get: async () => teacher,
+  getSessionId: async () => SESSION_ID,
+  revoke: async () => undefined,
+};
 const current: AgentCurrentState = {
   roomId: ROOM_ID,
   run: null,
@@ -39,9 +49,12 @@ describe("public Agent route boundary", () => {
     getSessionId: async () => SESSION_ID,
     revoke: async () => undefined,
   }) {
+    const guardedAgent = agent && typeof agent === "object"
+      ? { authorize: vi.fn(async () => undefined), ...(agent as Record<string, unknown>) }
+      : agent;
     const app = await buildApp({
       config: { allowedOrigins: [ORIGIN], publicBaseOrigin: ORIGIN },
-      agent: agent as never,
+      agent: guardedAgent as never,
       sessions: sessions as never,
     });
     apps.push(app);
@@ -84,7 +97,7 @@ describe("public Agent route boundary", () => {
     const agent = {
       request: vi.fn(), cancel: vi.fn(), current: vi.fn(), settings: vi.fn(),
     };
-    const app = await appFor(agent);
+    const app = await appFor(agent, teacherSessions);
     for (const request of [
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs`, payload: { triggerEventId: EVENT_ID, candidateText: "leak" } },
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs/${RUN_ID}/cancel`, payload: { extra: true } },
@@ -101,7 +114,7 @@ describe("public Agent route boundary", () => {
 
   it("closes malformed JSON without exposing Fastify parser details", async () => {
     const agent = { request: vi.fn(), cancel: vi.fn(), current: vi.fn(), settings: vi.fn() };
-    const app = await appFor(agent);
+    const app = await appFor(agent, teacherSessions);
     for (const request of [
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs` },
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs/${RUN_ID}/cancel` },
@@ -123,9 +136,29 @@ describe("public Agent route boundary", () => {
     expect(agent.settings).not.toHaveBeenCalled();
   });
 
+  it("authenticates before parsing an anonymous malformed Agent command", async () => {
+    const agent = { request: vi.fn(), cancel: vi.fn(), current: vi.fn(), settings: vi.fn() };
+    const sessions = {
+      get: vi.fn(async () => null),
+      getSessionId: vi.fn(async () => null),
+      revoke: vi.fn(async () => undefined),
+    };
+    const app = await appFor(agent, sessions);
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/rooms/${ROOM_ID}/agent/runs`,
+      payload: '{"broken":',
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+    });
+
+    expect([response.statusCode, response.json()]).toEqual([401, { code: "AUTH_REQUIRED" }]);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(agent.request).not.toHaveBeenCalled();
+  });
+
   it("closes an empty application/json body with the same generated command error", async () => {
     const agent = { request: vi.fn(), cancel: vi.fn(), settings: vi.fn() };
-    const app = await appFor(agent);
+    const app = await appFor(agent, teacherSessions);
     for (const request of [
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs` },
       { method: "POST" as const, url: `/v1/rooms/${ROOM_ID}/agent/runs/${RUN_ID}/cancel` },
@@ -213,6 +246,22 @@ describe("public Agent route boundary", () => {
       headers: { origin: ORIGIN }, cookies: { lo_session: "opaque" },
     });
     expect([response.statusCode, response.json()]).toEqual([403, { code: "EXPLICIT_TRIGGER_REQUIRED" }]);
+  });
+
+  it("returns the generated deletion tombstone code for stale Agent settings", async () => {
+    const app = await appFor({ settings: vi.fn(async () => {
+      const { AgentError } = await import("../../src/modules/agent/agent-service.js");
+      throw new AgentError("ROOM_DELETION_IN_PROGRESS");
+    }) }, teacherSessions);
+    const response = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${ROOM_ID}/agent/settings`,
+      payload: { enabled: false },
+      headers: { origin: ORIGIN },
+      cookies: { lo_session: "opaque" },
+    });
+    expect([response.statusCode, response.json()]).toEqual([409, { code: "ROOM_DELETION_IN_PROGRESS" }]);
+    expect(response.headers["cache-control"]).toBe("no-store");
   });
 
   it("returns a closed 503 when the admitted Agent service reports no usable Executor", async () => {

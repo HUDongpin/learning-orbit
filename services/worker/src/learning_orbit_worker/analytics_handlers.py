@@ -9,12 +9,15 @@ or network call is made here.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import math
 import os
 import re
 from typing import Any, Mapping
+from unicodedata import normalize
 from uuid import UUID, uuid5
 
 from .handler_registry import HandlerOutcome, WorkerDeps
@@ -29,6 +32,7 @@ from .trace_adapter import project_trace, scoped_node_id
 from .reference.learning_orbit_algorithms_v1 import StreamingInteractionNetwork
 from .replay_jobs import enqueue_analytics_replay
 from .room_lock import lock_room_in_transaction
+from .generated.analytics_review_command_v1 import Request as AnalyticsReviewRequest
 
 REPLAY_REASONS = frozenset({
     "late_event", "artifact_available", "analytics_review", "operator_rebuild",
@@ -300,6 +304,53 @@ def _pseudonym_index(connection: Any, room_id: str) -> tuple[dict[str, dict[str,
     return students, mapping
 
 
+def _artifact_source_event_id(connection: Any, room_id: str, artifact_id: str) -> str:
+    """Resolve a correction chain to the first non-correction source event.
+
+    A human-correction artifact is attached to its correction notice event.  Its
+    semantic text still replaces the nearest non-human ancestor, which may be a
+    revised direct/ASR/OCR artifact rather than the oldest lineage row.  Keeping
+    that distinction here prevents a second correction from being overlaid on
+    the first content-free correction notice.
+    """
+    rows = connection.execute(
+        """WITH RECURSIVE artifact_ancestry AS (
+               SELECT artifact_id,event_id,derivation,supersedes_artifact_id,0 AS depth
+                 FROM derived_text_artifact
+                WHERE room_id=%s AND artifact_id=%s
+               UNION ALL
+               SELECT parent.artifact_id,parent.event_id,parent.derivation,
+                      parent.supersedes_artifact_id,child.depth+1
+                 FROM artifact_ancestry child
+                 JOIN derived_text_artifact parent
+                   ON parent.artifact_id=child.supersedes_artifact_id
+                WHERE parent.room_id=%s AND child.depth<100
+             )
+             SELECT artifact_id,event_id,derivation,supersedes_artifact_id,depth
+               FROM artifact_ancestry ORDER BY depth""",
+        (room_id, artifact_id, room_id),
+    ).fetchall()
+    if not rows:
+        raise ValueError("ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+    for expected_depth, row in enumerate(rows):
+        depth = _row_value(row, "depth", 4)
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth != expected_depth:
+            raise ValueError("ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+        _canonical_uuid(_row_value(row, "artifact_id", 0), "ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+        event_id = _canonical_uuid(
+            _row_value(row, "event_id", 1), "ANALYTICS_ARTIFACT_LINEAGE_INVALID",
+        )
+        derivation = _row_value(row, "derivation", 2)
+        supersedes = _row_value(row, "supersedes_artifact_id", 3)
+        if supersedes is not None:
+            _canonical_uuid(supersedes, "ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+        if derivation != "human_correction":
+            return event_id
+        if supersedes is None:
+            raise ValueError("ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+    raise ValueError("ANALYTICS_ARTIFACT_LINEAGE_INVALID")
+
+
 def _review_allowlist(connection: Any, room_id: str, through: int) -> tuple[set[str], set[str]]:
     """Resolve teacher approvals into the ECHO student filter.
 
@@ -317,37 +368,440 @@ def _review_allowlist(connection: Any, room_id: str, through: int) -> tuple[set[
     approved_edges: set[str] = set()
     approved_nodes: set[str] = set()
     for row in cursor.fetchall():
-        value = row if isinstance(row, Mapping) else row[0]
+        value = _row_value(row, "validated_payload", 0)
         if not isinstance(value, Mapping):
+            raise ValueError("INVALID_ANALYTICS_REVIEW_COMMAND")
+        parsed = AnalyticsReviewRequest.from_dict(dict(value)).value
+        decision = parsed.get("decision")
+        # Rich quality outcomes are teacher-only metadata.  They never publish
+        # or revoke student content; only the explicit governance decisions do.
+        if decision not in {"approve", "reject", "revoke"}:
             continue
-        decision = value.get("decision")
-        target_type = value.get("targetType")
-        target_id = value.get("targetId")
+        target_type = parsed.get("targetType")
+        target_id = parsed.get("targetId")
         if target_type == "projection" and isinstance(target_id, str):
-            if decision in {"approve", "review_pass"}:
+            if decision == "approve":
                 approved_edges.add(target_id)
-            elif decision in {"reject", "revoke", "review_fail"}:
+            else:
                 approved_edges.discard(target_id)
         if target_type == "evidence" and isinstance(target_id, str):
             # Evidence approvals are resolved against event IDs by the adapter
             # after extraction; retain a prefixed marker to avoid confusing an
             # event UUID with an edge UUID.
-            if decision in {"approve", "review_pass"}:
+            if decision == "approve":
                 approved_edges.add("evidence:" + target_id)
-            elif decision in {"reject", "revoke", "review_fail"}:
+            else:
                 approved_edges.discard("evidence:" + target_id)
         if target_type == "derived_text" and isinstance(target_id, str):
-            artifact = connection.execute(
-                "SELECT event_id FROM derived_text_artifact WHERE room_id=%s AND artifact_id=%s",
-                (room_id, target_id),
-            ).fetchone()
-            if artifact:
-                event_id = str(_row_value(artifact, "event_id", 0))
-                if decision in {"approve", "review_pass"}:
-                    approved_edges.add("evidence:" + event_id)
-                elif decision in {"reject", "revoke", "review_fail"}:
-                    approved_edges.discard("evidence:" + event_id)
+            event_id = _artifact_source_event_id(connection, room_id, target_id)
+            if decision == "approve":
+                approved_edges.add("evidence:" + event_id)
+            else:
+                approved_edges.discard("evidence:" + event_id)
     return approved_edges, approved_nodes
+
+
+def _review_details(connection: Any, room_id: str, through: int) -> list[dict[str, Any]]:
+    """Load the immutable, generated review union in canonical room order."""
+    rows = connection.execute(
+        """SELECT d.review_event_id,d.validated_payload,e.room_seq,e.ingest_time
+             FROM analytics_review_detail d
+             JOIN room_event e ON e.event_id=d.review_event_id AND e.room_id=d.room_id
+            WHERE d.room_id=%s AND e.room_seq<=%s
+            ORDER BY e.room_seq,d.review_detail_id""",
+        (room_id, through),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        payload = _row_value(row, "validated_payload", 1)
+        # A database row outside the generated closed union is corruption, not
+        # an instruction that can be partially interpreted by the worker.
+        parsed = AnalyticsReviewRequest.from_dict(dict(payload) if isinstance(payload, Mapping) else payload).value
+        target_event_id: str | None = None
+        if parsed.get("correctionKind") == "retract" and parsed.get("targetType") == "derived_text":
+            target_event_id = _artifact_source_event_id(
+                connection, room_id, str(parsed["targetId"]),
+            )
+        result.append({
+            "reviewEventId": _canonical_uuid(
+                _row_value(row, "review_event_id", 0), "ANALYTICS_CORRECTION_EVENT_INVALID",
+            ),
+            "payload": parsed,
+            "roomSeq": _strict_int(
+                _row_value(row, "room_seq", 2), "ANALYTICS_CORRECTION_EVENT_INVALID", minimum=1,
+            ),
+            "createdAt": _iso(_row_value(row, "ingest_time", 3)),
+            "targetEventId": target_event_id,
+        })
+    return result
+
+
+def _apply_artifact_reviews(
+    connection: Any,
+    room_id: str,
+    details: list[dict[str, Any]],
+) -> None:
+    """Apply artifact review state and immutable human-correction lineage."""
+    for detail in details:
+        payload = AnalyticsReviewRequest.from_dict(detail.get("payload")).value
+        decision = payload.get("decision")
+        if payload.get("targetType") == "derived_text" and decision in {"approve", "reject", "revoke"}:
+            status = "approved" if decision == "approve" else "rejected"
+            connection.execute(
+                "UPDATE derived_text_artifact SET review_status=%s WHERE room_id=%s AND artifact_id=%s",
+                (status, room_id, payload["targetId"]),
+            )
+        if payload.get("correctionKind") == "retract" and payload.get("targetType") == "derived_text":
+            connection.execute(
+                "UPDATE derived_text_artifact SET review_status='rejected',active=false WHERE room_id=%s AND artifact_id=%s",
+                (room_id, payload["targetId"]),
+            )
+        if payload.get("correctionKind") != "replace_text":
+            continue
+        target = connection.execute(
+            """SELECT artifact_id,lineage_id,event_id,room_seq,source_media_id,
+                      source_modality,language_tag
+                 FROM derived_text_artifact
+                WHERE room_id=%s AND artifact_id=%s""",
+            (room_id, payload["targetArtifactId"]),
+        ).fetchone()
+        if target is None:
+            raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+        clean = normalize("NFC", str(payload["replacement"]["text"])).strip()
+        if not clean:
+            raise ValueError("ANALYTICS_CORRECTION_TEXT_INVALID")
+        digest = sha256(clean.encode("utf-8")).hexdigest()
+        review_event_id = _canonical_uuid(detail.get("reviewEventId"), "ANALYTICS_CORRECTION_EVENT_INVALID")
+        corrected_id = str(uuid5(ANALYSIS_NAMESPACE, f"{review_event_id}:human_correction:{digest}"))
+        lineage_id = _canonical_uuid(
+            _row_value(target, "lineage_id", 1), "ANALYTICS_CORRECTION_TARGET_INVALID",
+        )
+        target_id = _canonical_uuid(
+            _row_value(target, "artifact_id", 0), "ANALYTICS_CORRECTION_TARGET_INVALID",
+        )
+        connection.execute(
+            "UPDATE derived_text_artifact SET active=false WHERE room_id=%s AND lineage_id=%s AND active=true",
+            (room_id, lineage_id),
+        )
+        connection.execute(
+            """INSERT INTO derived_text_artifact(
+                 artifact_id,lineage_id,event_id,room_id,room_seq,source_media_id,
+                 source_modality,derivation,text_content,normalized_text_sha256,
+                 source_confidence_raw,source_confidence_calibrated,provider,
+                 model_version,language_tag,spans,review_status,display_status,
+                 warnings,supersedes_artifact_id,active,created_at)
+               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               ON CONFLICT (artifact_id) DO NOTHING""",
+            (
+                corrected_id, lineage_id, review_event_id, room_id,
+                int(detail.get("roomSeq", 0)), _row_value(target, "source_media_id", 4),
+                str(_row_value(target, "source_modality", 5)), "human_correction", clean, digest,
+                1.0, None, "teacher-correction", "teacher-correction-v1",
+                str(payload["replacement"]["languageTag"]), _jsonb([]), "corrected",
+                "teacher_shadow", _jsonb([]), target_id, True, detail.get("createdAt"),
+            ),
+        )
+        persisted = connection.execute(
+            """SELECT artifact_id,lineage_id,event_id,room_id,room_seq,source_media_id,
+                      source_modality,derivation,text_content,normalized_text_sha256,
+                      source_confidence_raw,source_confidence_calibrated,
+                      provider,model_version,language_tag,spans,review_status,display_status,
+                      warnings,supersedes_artifact_id,active,created_at
+                 FROM derived_text_artifact WHERE artifact_id=%s""",
+            (corrected_id,),
+        ).fetchone()
+        if persisted is None:
+            raise ValueError("ANALYTICS_CORRECTION_PERSISTENCE_INVALID")
+        source_media = _row_value(target, "source_media_id", 4)
+        expected_source_media = None if source_media is None else _canonical_uuid(
+            source_media, "ANALYTICS_CORRECTION_PERSISTENCE_INVALID",
+        )
+        actual_source_media = _row_value(persisted, "source_media_id", 5)
+        actual_source_media = None if actual_source_media is None else _canonical_uuid(
+            actual_source_media, "ANALYTICS_CORRECTION_PERSISTENCE_INVALID",
+        )
+        raw_confidence = _row_value(persisted, "source_confidence_raw", 10)
+        calibrated_confidence = _row_value(persisted, "source_confidence_calibrated", 11)
+        if isinstance(raw_confidence, bool):
+            raise ValueError("ANALYTICS_CORRECTION_PERSISTENCE_INVALID")
+        try:
+            raw_confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            raise ValueError("ANALYTICS_CORRECTION_PERSISTENCE_INVALID") from None
+        immutable_actual = {
+            "artifactId": _canonical_uuid(_row_value(persisted, "artifact_id", 0), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID"),
+            "lineageId": _canonical_uuid(_row_value(persisted, "lineage_id", 1), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID"),
+            "eventId": _canonical_uuid(_row_value(persisted, "event_id", 2), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID"),
+            "roomId": _canonical_uuid(_row_value(persisted, "room_id", 3), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID"),
+            "roomSeq": _strict_int(_row_value(persisted, "room_seq", 4), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID", minimum=1),
+            "sourceMediaId": actual_source_media,
+            "sourceModality": _row_value(persisted, "source_modality", 6),
+            "derivation": _row_value(persisted, "derivation", 7),
+            "text": _row_value(persisted, "text_content", 8),
+            "normalizedTextSha256": _row_value(persisted, "normalized_text_sha256", 9),
+            "sourceConfidenceRaw": raw_confidence,
+            "sourceConfidenceCalibrated": calibrated_confidence,
+            "provider": _row_value(persisted, "provider", 12),
+            "modelVersion": _row_value(persisted, "model_version", 13),
+            "languageTag": _row_value(persisted, "language_tag", 14),
+            "spans": _row_value(persisted, "spans", 15),
+            "warnings": _row_value(persisted, "warnings", 18),
+            "supersedesArtifactId": _canonical_uuid(
+                _row_value(persisted, "supersedes_artifact_id", 19),
+                "ANALYTICS_CORRECTION_PERSISTENCE_INVALID",
+            ),
+            "createdAt": _iso(_row_value(persisted, "created_at", 21)),
+        }
+        immutable_expected = {
+            "artifactId": corrected_id,
+            "lineageId": lineage_id,
+            "eventId": review_event_id,
+            "roomId": room_id,
+            "roomSeq": _strict_int(detail.get("roomSeq"), "ANALYTICS_CORRECTION_PERSISTENCE_INVALID", minimum=1),
+            "sourceMediaId": expected_source_media,
+            "sourceModality": str(_row_value(target, "source_modality", 5)),
+            "derivation": "human_correction",
+            "text": clean,
+            "normalizedTextSha256": digest,
+            "sourceConfidenceRaw": 1.0,
+            "sourceConfidenceCalibrated": None,
+            "provider": "teacher-correction",
+            "modelVersion": "teacher-correction-v1",
+            "languageTag": str(payload["replacement"]["languageTag"]),
+            "spans": [],
+            "warnings": [],
+            "supersedesArtifactId": target_id,
+            "createdAt": _iso(detail.get("createdAt")),
+        }
+        if (not math.isfinite(raw_confidence)
+            or calibrated_confidence is not None
+            or immutable_actual != immutable_expected):
+            raise ValueError("ANALYTICS_CORRECTION_PERSISTENCE_INVALID")
+        connection.execute(
+            """UPDATE derived_text_artifact
+                  SET active=true,review_status='corrected',display_status='teacher_shadow'
+                WHERE artifact_id=%s""",
+            (corrected_id,),
+        )
+        settled = connection.execute(
+            """SELECT review_status,display_status,active
+                 FROM derived_text_artifact WHERE artifact_id=%s""",
+            (corrected_id,),
+        ).fetchone()
+        if (settled is None
+            or _row_value(settled, "review_status", 0) != "corrected"
+            or _row_value(settled, "display_status", 1) != "teacher_shadow"
+            or _row_value(settled, "active", 2) is not True):
+            raise ValueError("ANALYTICS_CORRECTION_PERSISTENCE_INVALID")
+
+
+def _suppressed_event_ids(details: list[dict[str, Any]]) -> set[str]:
+    result: set[str] = set()
+    for detail in details:
+        payload = AnalyticsReviewRequest.from_dict(detail.get("payload")).value
+        if payload.get("correctionKind") != "retract":
+            continue
+        if payload.get("targetType") == "evidence":
+            result.add(str(payload["targetId"]))
+        elif payload.get("targetType") == "derived_text" and detail.get("targetEventId"):
+            result.add(str(detail["targetEventId"]))
+    return result
+
+
+def _effective_events(
+    connection: Any,
+    room_id: str,
+    events: list[dict[str, Any]],
+    suppressed_event_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Overlay active human-corrected text in memory; never rewrite RoomEvent."""
+    rows = connection.execute(
+        """SELECT artifact_id,text_content
+             FROM derived_text_artifact
+            WHERE room_id=%s AND active=true AND derivation='human_correction'
+            ORDER BY artifact_id""",
+        (room_id,),
+    ).fetchall()
+    corrected: dict[str, str] = {}
+    for row in rows:
+        artifact_id = _canonical_uuid(
+            _row_value(row, "artifact_id", 0), "ANALYTICS_ARTIFACT_LINEAGE_INVALID",
+        )
+        source_event_id = _artifact_source_event_id(connection, room_id, artifact_id)
+        if source_event_id in corrected:
+            raise ValueError("ANALYTICS_ARTIFACT_LINEAGE_AMBIGUOUS")
+        corrected[source_event_id] = str(_row_value(row, "text_content", 1))
+    result = deepcopy(events)
+    for event in result:
+        if str(event.get("eventId")) in (suppressed_event_ids or set()):
+            # Preserve the contiguous room cursor while making the retracted
+            # evidence a semantic no-op for both ECHO and TRACE.  RoomEvent is
+            # immutable; this replacement exists only inside the replay.
+            event["type"] = "analytics.evidence.retracted.v1"
+            event["payload"] = {}
+            continue
+        text = corrected.get(str(event.get("eventId")))
+        if text is not None:
+            payload = event.get("payload")
+            if not isinstance(payload, Mapping):
+                raise ValueError("ANALYTICS_EVENT_PAYLOAD_INVALID")
+            event["payload"] = {**payload, "text": text}
+    return result
+
+
+def _merge_duplicate_edges(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw in edges:
+        edge = dict(raw)
+        identity = (
+            str(edge.get("head")), str(edge.get("predicate", edge.get("linkPhrase", "relates to"))),
+            str(edge.get("tail")), str(edge.get("relationFamily", "evidence")),
+        )
+        current = merged.get(identity)
+        if current is None:
+            merged[identity] = edge
+            continue
+        channels = dict(current.get("channels", {}))
+        for name, value in dict(edge.get("channels", {})).items():
+            channels[name] = float(channels.get(name, 0.0)) + float(value)
+        current["channels"] = channels
+        refs = list(current.get("evidenceIds", current.get("evidence_ids", ())))
+        refs.extend(edge.get("evidenceIds", edge.get("evidence_ids", ())))
+        current["evidenceIds"] = list(dict.fromkeys(str(value) for value in refs))
+    return list(merged.values())
+
+
+def _approved_echo_edge_ids(
+    room_id: str,
+    internal: Mapping[str, Any],
+    evidence_index: Mapping[str, Mapping[str, Any]],
+    approvals: set[str],
+) -> set[str]:
+    """Map explicit edge/event approvals onto the current corrected ECHO IDs."""
+    result = {value for value in approvals if not value.startswith("evidence:")}
+    for raw_edge in internal.get("edges", ()):
+        edge = dict(raw_edge)
+        for evidence_key in edge.get("evidenceIds", edge.get("evidence_ids", ())):
+            evidence = evidence_index.get(str(evidence_key))
+            if not isinstance(evidence, Mapping):
+                raise ValueError("ANALYTICS_ECHO_EVIDENCE_INVALID")
+            event_id = _canonical_uuid(
+                evidence.get("eventId", evidence.get("event_id")),
+                "ANALYTICS_ECHO_EVIDENCE_INVALID",
+            )
+            if "evidence:" + event_id in approvals:
+                result.add(echo_wire_edge_id(room_id, edge))
+                break
+    return result
+
+
+def _apply_projection_corrections(
+    room_id: str,
+    internal: Mapping[str, Any],
+    evidence_index: Mapping[str, Mapping[str, Any]],
+    details: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Apply the seven-branch correction ledger over a fresh reference replay."""
+    value = deepcopy(dict(internal))
+    value["nodes"] = [dict(node) for node in internal.get("nodes", ())]
+    value["edges"] = [dict(edge) for edge in internal.get("edges", ())]
+    refs = {str(key): dict(ref) for key, ref in evidence_index.items()}
+    parsed_details = [
+        {**detail, "payload": AnalyticsReviewRequest.from_dict(detail.get("payload")).value}
+        for detail in details
+    ]
+    undone_merges = {
+        str(item["payload"]["targetCorrectionEventId"])
+        for item in parsed_details
+        if item["payload"].get("correctionKind") == "undo_merge"
+    }
+
+    def target_edge(edge_id: str) -> tuple[int, dict[str, Any]]:
+        for index, edge in enumerate(value["edges"]):
+            if echo_wire_edge_id(room_id, edge) == edge_id:
+                return index, edge
+        raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+
+    for detail in parsed_details:
+        payload = detail["payload"]
+        kind = payload.get("correctionKind")
+        if not kind or kind == "replace_text" or kind == "undo_merge":
+            continue
+        if kind == "merge_alias" and str(detail.get("reviewEventId")) in undone_merges:
+            continue
+        if kind == "replace_evidence_span":
+            _, edge = target_edge(str(payload["targetProjectionEdgeId"]))
+            evidence_ids = list(edge.get("evidenceIds", edge.get("evidence_ids", ())))
+            target = payload["target"]
+            match = next((index for index, key in enumerate(evidence_ids)
+                          if refs.get(str(key)) == target), None)
+            if match is None:
+                raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+            replacement_key = f"correction:{detail['reviewEventId']}"
+            refs[replacement_key] = dict(payload["replacement"])
+            evidence_ids[match] = replacement_key
+            edge["evidenceIds"] = evidence_ids
+        elif kind == "replace_relation":
+            _, edge = target_edge(str(payload["targetProjectionEdgeId"]))
+            replacement = payload["replacement"]
+            node_ids = {str(node.get("nodeId")) for node in value["nodes"]}
+            if replacement["head"] not in node_ids or replacement["tail"] not in node_ids:
+                raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+            edge.update({name: replacement[name] for name in ("head", "predicate", "tail", "relationFamily")})
+        elif kind == "merge_alias":
+            canonical = str(payload["targetCanonicalNodeId"])
+            alias = str(payload["replacement"]["aliasNodeId"])
+            node_ids = {str(node.get("nodeId")) for node in value["nodes"]}
+            if canonical not in node_ids or alias not in node_ids:
+                raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+            value["nodes"] = [node for node in value["nodes"] if str(node.get("nodeId")) != alias]
+            for edge in value["edges"]:
+                if str(edge.get("head")) == alias:
+                    edge["head"] = canonical
+                if str(edge.get("tail")) == alias:
+                    edge["tail"] = canonical
+            value["edges"] = _merge_duplicate_edges(value["edges"])
+        elif kind == "split_alias":
+            alias = str(payload["replacement"]["aliasNodeId"])
+            new_id = str(payload["replacement"]["newCanonicalNodeId"])
+            new_label = str(payload["replacement"]["newLabel"])
+            node_ids = {str(node.get("nodeId")) for node in value["nodes"]}
+            if alias not in node_ids or new_id in node_ids:
+                raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+            for node in value["nodes"]:
+                if str(node.get("nodeId")) == alias:
+                    node["nodeId"] = new_id
+                    node["label"] = new_label
+            for edge in value["edges"]:
+                if str(edge.get("head")) == alias:
+                    edge["head"] = new_id
+                if str(edge.get("tail")) == alias:
+                    edge["tail"] = new_id
+        elif kind == "retract":
+            target_type = payload["targetType"]
+            if target_type == "projection":
+                before = len(value["edges"])
+                value["edges"] = [edge for edge in value["edges"]
+                                  if echo_wire_edge_id(room_id, edge) != payload["targetId"]]
+                if len(value["edges"]) == before:
+                    raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+            else:
+                target_event = (str(detail.get("targetEventId"))
+                                if target_type == "derived_text" else str(payload["targetId"]))
+                if not target_event or target_event == "None":
+                    raise ValueError("ANALYTICS_CORRECTION_TARGET_INVALID")
+                filtered: list[dict[str, Any]] = []
+                found = False
+                for edge in value["edges"]:
+                    evidence_ids = list(edge.get("evidenceIds", edge.get("evidence_ids", ())))
+                    kept = [key for key in evidence_ids if str(refs.get(str(key), {}).get("eventId")) != target_event]
+                    if len(kept) != len(evidence_ids):
+                        found = True
+                    if kept:
+                        edge["evidenceIds"] = kept
+                        filtered.append(edge)
+                value["edges"] = filtered
+    return value, refs
 
 
 def _persist_direct_artifacts(connection: Any, room_id: str, events: list[dict[str, Any]]) -> None:
@@ -409,22 +863,46 @@ def _persist_direct_artifacts(connection: Any, room_id: str, events: list[dict[s
         )
 
 
-def _persist_extractions(connection: Any, room_id: str, chats: list[Any], seq_by_event: Mapping[str, int]) -> None:
+def _persist_extractions(connection: Any, room_id: str, chats: list[Any]) -> None:
     if not chats:
         return
     event_ids = [str(chat.event_id) for chat in chats]
     rows = connection.execute(
-        "SELECT artifact_id,event_id FROM derived_text_artifact WHERE room_id=%s AND event_id=ANY(%s::uuid[]) AND active=true",
+        """SELECT artifact_id,event_id,derivation,room_seq
+             FROM derived_text_artifact
+            WHERE room_id=%s AND active=true
+              AND (event_id=ANY(%s::uuid[]) OR derivation='human_correction')
+            ORDER BY CASE WHEN derivation='human_correction' THEN 1 ELSE 0 END,
+                     room_seq,artifact_id""",
         (room_id, event_ids),
     ).fetchall()
-    artifact_by_event = {
-        str(_row_value(row, "event_id", 1)): str(_row_value(row, "artifact_id", 0))
-        for row in rows
-    }
-    for chat in chats:
-        artifact_id = artifact_by_event.get(str(chat.event_id))
-        if not artifact_id:
+    artifact_by_event: dict[str, tuple[str, int, bool]] = {}
+    for row in rows:
+        artifact_id = _canonical_uuid(
+            _row_value(row, "artifact_id", 0), "ANALYTICS_EXTRACTION_ARTIFACT_INVALID",
+        )
+        derivation = str(_row_value(row, "derivation", 2))
+        source_event_id = (
+            _artifact_source_event_id(connection, room_id, artifact_id)
+            if derivation == "human_correction"
+            else _canonical_uuid(_row_value(row, "event_id", 1), "ANALYTICS_EXTRACTION_ARTIFACT_INVALID")
+        )
+        if source_event_id not in event_ids:
             continue
+        room_seq = _strict_int(
+            _row_value(row, "room_seq", 3), "ANALYTICS_EXTRACTION_ARTIFACT_INVALID", minimum=1,
+        )
+        prior = artifact_by_event.get(source_event_id)
+        corrected = derivation == "human_correction"
+        if prior and prior[2] and corrected:
+            raise ValueError("ANALYTICS_EXTRACTION_ARTIFACT_AMBIGUOUS")
+        if prior is None or (corrected and not prior[2]):
+            artifact_by_event[source_event_id] = (artifact_id, room_seq, corrected)
+    for chat in chats:
+        artifact = artifact_by_event.get(str(chat.event_id))
+        if not artifact:
+            continue
+        artifact_id, artifact_room_seq, _ = artifact
         extracted = extract_echo(chat)
         extraction_id = str(uuid5(ANALYSIS_NAMESPACE, f"{artifact_id}:ECHO:{extracted['outputSha256']}"))
         connection.execute(
@@ -434,7 +912,7 @@ def _persist_extractions(connection: Any, room_id: str, chats: list[Any], seq_by
                VALUES(%s,%s,%s,%s,'ECHO-CM',%s,%s,%s,%s)
                ON CONFLICT (artifact_id,algorithm,extractor_version,output_sha256)
                DO NOTHING""",
-            (extraction_id, artifact_id, room_id, int(seq_by_event.get(str(chat.event_id), 0)),
+            (extraction_id, artifact_id, room_id, artifact_room_seq,
              extracted["output"]["extractorVersion"], _jsonb(extracted["output"]),
              extracted["outputSha256"], float(chat.source_confidence)),
         )
@@ -480,10 +958,15 @@ def _materialize(
     *,
     enqueue_replay: bool = True,
 ) -> None:
-    events = _canonical_events(deps.db, room_id, through)
-    if not events or int(events[-1]["roomSeq"]) != through:
+    canonical_events = _canonical_events(deps.db, room_id, through)
+    if not canonical_events or int(canonical_events[-1]["roomSeq"]) != through:
         raise ValueError("ANALYTICS_EVENT_SEQUENCE_INVALID")
-    _persist_direct_artifacts(deps.db, room_id, events)
+    _persist_direct_artifacts(deps.db, room_id, canonical_events)
+    review_details = _review_details(deps.db, room_id, through)
+    _apply_artifact_reviews(deps.db, room_id, review_details)
+    events = _effective_events(
+        deps.db, room_id, canonical_events, _suppressed_event_ids(review_details),
+    )
     projector = StreamingProjector(room_id)
     for event in events:
         projector.consume(event)
@@ -524,10 +1007,10 @@ def _materialize(
                 echo_evidence[str(evidence["evidenceId"])] = {
                     "eventId": str(evidence["eventId"]), "start": int(evidence["start"]), "end": int(evidence["end"]),
                 }
-    _persist_extractions(
-        deps.db, room_id, projector._chat_history,
-        {str(event["eventId"]): int(event["roomSeq"]) for event in events},
+    echo_internal, echo_evidence = _apply_projection_corrections(
+        room_id, echo_internal, echo_evidence, review_details,
     )
+    _persist_extractions(deps.db, room_id, projector._chat_history)
     pseudonyms, actor_mapping = _pseudonym_index(deps.db, room_id)
     approved_edges, approved_nodes = _review_allowlist(deps.db, room_id, through)
     # Scoped IDs include the epoch and are therefore rotated on replay.
@@ -583,10 +1066,9 @@ def _materialize(
             warnings=tuple(projector.state.warnings),
         )
         if key.startswith("echo."):
-            edge_approvals = {edge_id for edge_id in approved_edges if not edge_id.startswith("evidence:")}
-            for edge in echo_internal.get("edges", ()):
-                if any("evidence:" + ref in approved_edges for ref in edge.get("evidenceIds", ())):
-                    edge_approvals.add(echo_wire_edge_id(room_id, edge))
+            edge_approvals = _approved_echo_edge_ids(
+                room_id, echo_internal, echo_evidence, approved_edges,
+            )
             projected = project_echo_snapshot(
                 echo_internal, metadata, echo_evidence,
                 approved_edge_ids=edge_approvals, approved_node_ids=approved_nodes,

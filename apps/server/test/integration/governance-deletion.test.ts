@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
+import { teacherRoomExportContract } from "@learning-orbit/contracts";
 import { GovernanceService } from "../../src/modules/governance/governance-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -25,6 +26,28 @@ describe("governance deletion SQL integration", () => {
       const service = new GovernanceService(pool, {
         auditSalt: "integration-audit-salt-0123456789",
       });
+      const emptyJsonExport = await service.exportRoom(
+        { role: "teacher", teacherId, actorId: teacherId },
+        roomId,
+        { format: "json" },
+      );
+      expect(teacherRoomExportContract.parse(JSON.parse(emptyJsonExport.body))).toEqual({
+        schemaVersion: 1,
+        exportKind: "teacher_room",
+        roomId,
+        throughRoomSeq: 0,
+        events: [],
+        artifacts: [],
+        projections: [],
+        provenance: { artifactSources: [], projectionSources: [] },
+      });
+      const emptyCsvExport = await service.exportRoom(
+        { role: "teacher", teacherId, actorId: teacherId },
+        roomId,
+        { format: "csv" },
+      );
+      expect(emptyCsvExport.body).toMatch(/^recordType,json\nmanifest,/u);
+
       const accepted = await service.requestDeletion(
         { role: "teacher", teacherId, actorId: teacherId },
         roomId,
@@ -41,10 +64,21 @@ describe("governance deletion SQL integration", () => {
         [deletionJobId],
       );
       expect(manifests.rows).toHaveLength(8);
+      expect(manifests.rows.every((row) => Number(row.expected_item_count) === 0)).toBe(true);
       expect(manifests.rows.map((row) => row.surface)).toEqual([
         "agent_runs", "artifacts", "caches", "derivatives",
         "events", "media", "projections", "provider_copies",
       ]);
+
+      await expect(service.deletionStatus(
+        { role: "teacher", teacherId, actorId: teacherId },
+        deletionJobId,
+      )).resolves.toEqual({
+        deletionJobId,
+        status: "queued",
+        nextPollAfterMs: 1000,
+        failureCode: null,
+      });
 
       const jobs = await pool.query<{
         room_id: string | null;

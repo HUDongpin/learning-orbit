@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AnalyticsReviewCommand } from "@learning-orbit/contracts";
 
 import {
   FetchSessionGateway,
+  readBoundedExportText,
   SessionGatewayError,
   normalizeClassroomCode,
 } from "./session-gateway.js";
@@ -162,6 +164,185 @@ const traceLatest = {
     interpretation: "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。" as const,
   },
 };
+const artifactId = "00000000-0000-4000-8000-000000000a01";
+const derivedTextArtifact = {
+  schemaVersion: 1 as const,
+  artifactId,
+  lineageId: "00000000-0000-4000-8000-000000000a02",
+  roomId: createdRoom.room.roomId,
+  eventId: "00000000-0000-4000-8000-000000000a03",
+  roomSeq: 4,
+  sourceMediaId: null,
+  sourceModality: "text" as const,
+  derivation: "direct" as const,
+  text: "太陽提供能量給生產者。",
+  normalizedTextSha256: "d".repeat(64),
+  sourceConfidenceRaw: 1,
+  sourceConfidenceCalibrated: null,
+  provider: "learner-authored",
+  modelVersion: "direct-text-v1",
+  languageTag: "zh-Hant",
+  spans: [],
+  reviewStatus: "unreviewed" as const,
+  displayStatus: "teacher_shadow" as const,
+  warnings: [],
+  supersedesArtifactId: null,
+  active: true,
+  createdAt: "2026-08-31T01:00:00.000Z",
+};
+const artifactPage = {
+  items: [derivedTextArtifact],
+  throughRoomSeq: 4,
+  nextAfterArtifactId: artifactId,
+  includeHistory: false,
+};
+const reviewEventId = "00000000-0000-4000-8000-000000000b01";
+const replayJobId = "00000000-0000-4000-8000-000000000b02";
+const correctionTargetId = "00000000-0000-4000-8000-000000000b03";
+const correctionEventId = "00000000-0000-4000-8000-000000000b04";
+const reviewCommands = [
+  {
+    targetType: "derived_text",
+    targetId: artifactId,
+    decision: "approve",
+    rationale: "證據來源與文字一致。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetArtifactId: artifactId,
+    correctionKind: "replace_text",
+    replacement: { text: "太陽把能量傳給生產者。", languageTag: "zh-Hant" },
+    reason: "修正文字。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetProjectionEdgeId: correctionTargetId,
+    correctionKind: "replace_evidence_span",
+    target: { eventId: correctionEventId, start: 0, end: 2 },
+    replacement: { eventId: correctionEventId, start: 0, end: 4 },
+    reason: "擴充證據範圍。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetProjectionEdgeId: correctionTargetId,
+    correctionKind: "replace_relation",
+    replacement: { head: "producer", predicate: "receives energy from", tail: "sun", relationFamily: "energy_flow" },
+    reason: "修正關係方向。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetCanonicalNodeId: "producer",
+    correctionKind: "merge_alias",
+    replacement: { aliasNodeId: "green-plant" },
+    reason: "合併同義概念。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetCanonicalNodeId: "producer",
+    correctionKind: "split_alias",
+    replacement: { aliasNodeId: "plant", newCanonicalNodeId: "aquatic-plant", newLabel: "水生植物" },
+    reason: "拆分不同概念。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetCorrectionEventId: correctionEventId,
+    correctionKind: "undo_merge",
+    replacement: {},
+    reason: "撤銷錯誤合併。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+  {
+    targetType: "projection",
+    targetId: correctionTargetId,
+    correctionKind: "retract",
+    replacement: {},
+    reason: "撤回錯誤關係。",
+    expectedAnalysisEpoch: analyticsEpoch,
+    expectedProjectionVersion: 1,
+  },
+] as const satisfies readonly AnalyticsReviewCommand[];
+const deletionJobId = "00000000-0000-4000-8000-000000000c01";
+const deletionAccepted = { deletionJobId, status: "queued" as const };
+const deletionRunning = {
+  deletionJobId,
+  status: "running" as const,
+  nextPollAfterMs: 1000,
+  failureCode: null,
+};
+const deletionCompleted = {
+  deletionJobId,
+  status: "completed" as const,
+  receipt: {
+    receiptVersion: 1 as const,
+    surfacesVerified: [
+      "agent_runs", "artifacts", "caches", "derivatives",
+      "events", "media", "projections", "provider_copies",
+    ] as const,
+    completedAt: "2026-08-31T01:10:00.000Z",
+  },
+};
+const exportedEvent = {
+  eventId: "00000000-0000-4000-8000-000000000d01",
+  schemaVersion: 1 as const,
+  roomId: createdRoom.room.roomId,
+  roomSeq: 1,
+  type: "room.opened",
+  actorId: "00000000-0000-4000-8000-000000000d02",
+  actorKind: "human" as const,
+  actorRole: "teacher" as const,
+  revision: 1,
+  operation: "add" as const,
+  eventTime: "2026-08-31T01:00:00.000Z",
+  ingestTime: "2026-08-31T01:00:00.001Z",
+  causationId: "00000000-0000-4000-8000-000000000d03",
+  correlationId: "00000000-0000-4000-8000-000000000d04",
+  payload: {
+    startsAt: "2026-08-31T01:00:00.000Z",
+    closesAt: "2026-08-31T01:45:00.000Z",
+  },
+};
+const exportDocument = {
+  schemaVersion: 1 as const,
+  exportKind: "teacher_room" as const,
+  roomId: createdRoom.room.roomId,
+  throughRoomSeq: 1,
+  events: [exportedEvent],
+  artifacts: [],
+  projections: [],
+  provenance: { artifactSources: [], projectionSources: [] },
+};
+const exportCsvHeader = "recordType,json\n";
+const csvJsonRow = (kind: string, value: unknown) => (
+  `${kind},"${JSON.stringify(value).replaceAll('"', '""')}"\n`
+);
+const exportCsv = exportCsvHeader
+  + csvJsonRow("manifest", {
+    schemaVersion: 1,
+    exportKind: "teacher_room",
+    roomId: createdRoom.room.roomId,
+    throughRoomSeq: 1,
+  })
+  + csvJsonRow("event", exportedEvent);
+
+const exported = (
+  body: BodyInit,
+  contentType: string,
+  contentDisposition: string,
+  status = 200,
+) => new Response(body, {
+  status,
+  headers: {
+    "content-type": contentType,
+    "content-disposition": contentDisposition,
+  },
+});
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -368,6 +549,317 @@ describe("typed SessionGateway", () => {
       .rejects.toEqual(new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"));
     const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...agentCurrent, provider: "fixture" })) });
     await expect(leaked.getAgentCurrent(createdRoom.room.roomId)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("updates the teacher Nova policy through the generated settings contract", async () => {
+    const response = { enabled: false, cancelledRunId: null };
+    const fetch = vi.fn().mockResolvedValue(json(response));
+    const controller = new AbortController();
+    await expect(new FetchSessionGateway({ fetch }).setAgentSettings(
+      createdRoom.room.roomId,
+      { enabled: false },
+      { signal: controller.signal },
+    )).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/agent/settings`,
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+        credentials: "include",
+        signal: controller.signal,
+      }),
+    );
+
+    const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ ...response, provider: "fixture" })) });
+    await expect(leaked.setAgentSettings(createdRoom.room.roomId, { enabled: false }))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("loads a room-correlated generated teacher artifact page through the bounded shared route", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn().mockResolvedValue(json(artifactPage));
+    await expect(new FetchSessionGateway({ fetch }).getDerivedTextArtifacts(
+      createdRoom.room.roomId,
+      { reviewStatus: "unreviewed", includeHistory: false, limit: 50 },
+      { signal: controller.signal },
+    )).resolves.toEqual(artifactPage);
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/artifacts?reviewStatus=unreviewed&limit=50`,
+      expect.objectContaining({
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      }),
+    );
+
+    const wrongRoom = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      ...artifactPage,
+      items: [{ ...derivedTextArtifact, roomId: "00000000-0000-4000-8000-000000000099" }],
+    })) });
+    await expect(wrongRoom.getDerivedTextArtifacts(createdRoom.room.roomId))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+
+    const inconsistentCursor = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      ...artifactPage,
+      nextAfterArtifactId: "00000000-0000-4000-8000-000000000a09",
+    })) });
+    await expect(inconsistentCursor.getDerivedTextArtifacts(createdRoom.room.roomId))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("submits the generated review branch and all seven correction branches without predicting a projection", async () => {
+    for (const command of reviewCommands) {
+      const changeKind = "correctionKind" in command ? "correction" as const : "review" as const;
+      const accepted = { schemaVersion: 1 as const, reviewEventId, replayJobId, changeKind };
+      const fetch = vi.fn().mockResolvedValue(json(accepted, 201));
+      await expect(new FetchSessionGateway({ fetch }).submitAnalyticsReview(
+        createdRoom.room.roomId,
+        command,
+      )).resolves.toEqual(accepted);
+      expect(fetch).toHaveBeenCalledWith(
+        `/v1/rooms/${createdRoom.room.roomId}/analytics/reviews`,
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify(command),
+          credentials: "include",
+          cache: "no-store",
+          redirect: "error",
+        }),
+      );
+    }
+
+    const mismatched = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      schemaVersion: 1,
+      reviewEventId,
+      replayJobId,
+      changeKind: "review",
+    }, 201)) });
+    await expect(mismatched.submitAnalyticsReview(createdRoom.room.roomId, reviewCommands[1]))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("accepts the same generated response on a server-confirmed idempotent review retry", async () => {
+    const accepted = { schemaVersion: 1 as const, reviewEventId, replayJobId, changeKind: "review" as const };
+    const fetch = vi.fn().mockResolvedValue(json(accepted, 200));
+    await expect(new FetchSessionGateway({ fetch }).submitAnalyticsReview(
+      createdRoom.room.roomId,
+      reviewCommands[0],
+    )).resolves.toEqual(accepted);
+  });
+
+  it("loads only a generated review detail correlated to the requested room and event", async () => {
+    const detail = {
+      schemaVersion: 1 as const,
+      reviewEventId,
+      roomId: createdRoom.room.roomId,
+      changeKind: "review" as const,
+      payload: reviewCommands[0],
+      createdAt: "2026-08-31T01:05:00.000Z",
+    };
+    const controller = new AbortController();
+    const fetch = vi.fn().mockResolvedValue(json(detail));
+    await expect(new FetchSessionGateway({ fetch }).getAnalyticsReviewDetail(
+      createdRoom.room.roomId,
+      reviewEventId,
+      { signal: controller.signal },
+    )).resolves.toEqual(detail);
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/analytics/reviews/${reviewEventId}`,
+      expect.objectContaining({ method: "GET", credentials: "include", signal: controller.signal }),
+    );
+
+    const wrongReview = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      ...detail,
+      reviewEventId: "00000000-0000-4000-8000-000000000b09",
+    })) });
+    await expect(wrongReview.getAnalyticsReviewDetail(createdRoom.room.roomId, reviewEventId))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("requests deletion once with a generated confirmation and restores typed status by job or room", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(json(deletionAccepted, 202))
+      .mockResolvedValueOnce(json(deletionRunning))
+      .mockResolvedValueOnce(json(deletionCompleted));
+    const gateway = new FetchSessionGateway({ fetch });
+
+    await expect(gateway.requestRoomDeletion(createdRoom.room.roomId, { signal: controller.signal }))
+      .resolves.toEqual(deletionAccepted);
+    await expect(gateway.getDeletionStatus(deletionJobId, { signal: controller.signal }))
+      .resolves.toEqual(deletionRunning);
+    await expect(gateway.getRoomDeletion(createdRoom.room.roomId, { signal: controller.signal }))
+      .resolves.toEqual(deletionCompleted);
+
+    expect(fetch).toHaveBeenNthCalledWith(1, `/v1/rooms/${createdRoom.room.roomId}`, expect.objectContaining({
+      method: "DELETE",
+      body: JSON.stringify({ confirmation: `DELETE ${createdRoom.room.roomId}` }),
+      credentials: "include",
+      cache: "no-store",
+      redirect: "error",
+      signal: controller.signal,
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(2, `/v1/deletions/${deletionJobId}`, expect.objectContaining({
+      method: "GET",
+      credentials: "include",
+      signal: controller.signal,
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(3, `/v1/rooms/${createdRoom.room.roomId}/deletion`, expect.objectContaining({
+      method: "GET",
+      credentials: "include",
+      signal: controller.signal,
+    }));
+
+    const wrongJob = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      ...deletionRunning,
+      deletionJobId: "00000000-0000-4000-8000-000000000c09",
+    })) });
+    await expect(wrongJob.getDeletionStatus(deletionJobId)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("fails closed on malformed deletion receipts and endpoint-illegal governance errors", async () => {
+    const malformed = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({
+      ...deletionCompleted,
+      receipt: { ...deletionCompleted.receipt, surfacesVerified: ["events"] },
+    })) });
+    await expect(malformed.getRoomDeletion(createdRoom.room.roomId))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+
+    const hidden = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "ROOM_NOT_FOUND" }, 404)) });
+    await expect(hidden.getRoomDeletion(createdRoom.room.roomId))
+      .rejects.toEqual(new SessionGatewayError("ROOM_NOT_FOUND"));
+    const leaked = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "DELETION_STATUS_CORRUPT" }, 404)) });
+    await expect(leaked.getRoomDeletion(createdRoom.room.roomId))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+  });
+
+  it("returns a strictly validated JSON export Blob and a safe UTF-8 disposition filename", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn().mockResolvedValue(exported(
+      JSON.stringify(exportDocument),
+      "application/json; charset=utf-8",
+      "attachment; filename*=UTF-8''ecosystem-export.json",
+    ));
+    const result = await new FetchSessionGateway({ fetch }).exportRoom(
+      createdRoom.room.roomId,
+      "json",
+      { signal: controller.signal },
+    );
+    expect(result).toMatchObject({ fileName: "ecosystem-export.json", format: "json", blob: expect.any(Blob) });
+    expect(result.blob.type).toBe("application/json");
+    expect(await result.blob.text()).toBe(JSON.stringify(exportDocument));
+    expect(fetch).toHaveBeenCalledWith(
+      `/v1/rooms/${createdRoom.room.roomId}/export?format=json`,
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Accept: "application/json" }),
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it("cancels an undeclared export stream as soon as its byte bound is exceeded", async () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("123456"));
+        controller.enqueue(new TextEncoder().encode("789"));
+      },
+      cancel() { cancelled = true; },
+    }), { headers: { "content-type": "application/json" } });
+
+    await expect(readBoundedExportText(response, 8)).rejects.toThrow("SESSION_RESPONSE_INVALID");
+    expect(cancelled).toBe(true);
+  });
+
+  it("validates CSV structure and replaces path or identifier-bearing filenames with a generic basename", async () => {
+    for (const unsafeFileName of [
+      "../../teacher-export.csv",
+      `learning-orbit-${createdRoom.room.roomId.slice(0, 8)}-export.csv`,
+    ]) {
+      const fetch = vi.fn().mockResolvedValue(exported(
+        exportCsv,
+        "text/csv; charset=utf-8",
+        `attachment; filename="${unsafeFileName}"`,
+      ));
+      const result = await new FetchSessionGateway({ fetch }).exportRoom(createdRoom.room.roomId, "csv");
+      expect(result.fileName).toBe("learning-orbit-room-export.csv");
+      expect(result.format).toBe("csv");
+      expect(result.blob.type).toBe("text/csv");
+      expect(await result.blob.text()).toBe(exportCsv);
+    }
+  });
+
+  it("validates RFC 4180 quoted JSON records containing commas, quotes, and newlines", async () => {
+    const messageEvent = {
+      ...exportedEvent,
+      type: "message.added",
+      actorRole: "student",
+      payload: {
+        messageId: "00000000-0000-4000-8000-000000000d05",
+        text: "觀察池塘,\n\"生產者\"吸收陽光。",
+        replyTo: null,
+        mentions: [],
+        mediaIds: [],
+      },
+    };
+    const csv = exportCsvHeader
+      + csvJsonRow("manifest", {
+        schemaVersion: 1,
+        exportKind: "teacher_room",
+        roomId: createdRoom.room.roomId,
+        throughRoomSeq: 1,
+      })
+      + csvJsonRow("event", messageEvent);
+    const gateway = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(exported(
+      csv,
+      "text/csv; charset=utf-8",
+      "attachment; filename=ecosystem.csv",
+    )) });
+
+    const result = await gateway.exportRoom(createdRoom.room.roomId, "csv");
+    expect(await result.blob.text()).toBe(csv);
+  });
+
+  it("fails closed on wrong export MIME, cross-room JSON, malformed CSV, or endpoint-illegal errors", async () => {
+    const wrongMime = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(exported(
+      JSON.stringify(exportDocument),
+      "text/html",
+      "attachment; filename=export.json",
+    )) });
+    await expect(wrongMime.exportRoom(createdRoom.room.roomId, "json"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+
+    const crossRoom = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(exported(
+      JSON.stringify({
+        ...exportDocument,
+        roomId: "00000000-0000-4000-8000-000000000099",
+      }),
+      "application/json",
+      "attachment; filename=export.json",
+    )) });
+    await expect(crossRoom.exportRoom(createdRoom.room.roomId, "json"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+
+    const malformedCsv = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(exported(
+      exportCsv.replace(exportCsvHeader, "eventId,roomSeq,type\n"),
+      "text/csv",
+      "attachment; filename=export.csv",
+    )) });
+    await expect(malformedCsv.exportRoom(createdRoom.room.roomId, "csv"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
+
+    const unavailable = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "EXPORT_UNAVAILABLE" }, 503)) });
+    await expect(unavailable.exportRoom(createdRoom.room.roomId, "json"))
+      .rejects.toEqual(new SessionGatewayError("EXPORT_UNAVAILABLE"));
+    const illegal = new FetchSessionGateway({ fetch: vi.fn().mockResolvedValue(json({ code: "ANALYTICS_CORRUPT" }, 503)) });
+    await expect(illegal.exportRoom(createdRoom.room.roomId, "json"))
+      .rejects.toThrow("SESSION_RESPONSE_INVALID");
   });
 
   it("loads only room-and-key-correlated generated ECHO and TRACE snapshots", async () => {

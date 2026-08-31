@@ -28,6 +28,7 @@ import type {
   TeacherTimelineResponse,
   TimelineResponse,
 } from "./generated/analytics-http.v1.js";
+import type { AnalyticsReviewCommand } from "./generated/analytics-review-command.v1.js";
 import { makeSchemaAjv } from "./schema-ajv.js";
 
 const ajv = makeSchemaAjv();
@@ -210,7 +211,7 @@ const timeline = validator<TimelineResponse>(`${analyticsHttpSchema.$id}#/$defs/
 const teacherTimeline = validator<TeacherTimelineResponse>(`${analyticsHttpSchema.$id}#/$defs/TeacherTimelineResponse`);
 const studentTimeline = validator<StudentTimelineResponse>(`${analyticsHttpSchema.$id}#/$defs/StudentTimelineResponse`);
 const resync = validator<ResyncResponse>(`${analyticsHttpSchema.$id}#/$defs/ResyncResponse`);
-const review = validator(`${reviewSchema.$id}`);
+const review = validator<AnalyticsReviewCommand>(`${reviewSchema.$id}`);
 
 function assertPatchChain(patches: readonly ConceptMapPatch[], code: string): void {
   let previous: ConceptMapPatch | undefined;
@@ -363,4 +364,5 @@ export type {
   StudentTimelineResponse as StudentAnalyticsTimelineResponse,
   TeacherTimelineResponse as TeacherAnalyticsTimelineResponse,
   ResyncResponse as AnalyticsResyncResponse,
+  AnalyticsReviewCommand,
 };

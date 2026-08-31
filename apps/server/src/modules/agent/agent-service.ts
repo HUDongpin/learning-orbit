@@ -28,6 +28,11 @@ export class AgentService {
     this.manifestSha256 = options.manifestSha256 ?? "0".repeat(64);
   }
 
+  /** Pre-parse room/session authorization; command methods recheck it. */
+  async authorize(principal: AuthSession, sessionId: string, roomId: string): Promise<void> {
+    await this.authorizeMember(principal, sessionId, roomId);
+  }
+
   async request(principal: AuthSession, sessionId: string, roomId: string, triggerEventId: string, options: AgentRequestOptions = {}) {
     const owner = await this.authorizeMember(principal, sessionId, roomId);
     try {
@@ -66,7 +71,17 @@ export class AgentService {
 
   async current(principal: AuthSession, sessionId: string, roomId: string) {
     await this.authorizeMember(principal, sessionId, roomId);
-    return this.repository.getCurrent(roomId, () => this.healthRepository.current(this.providerId, this.manifestSha256));
+    try {
+      return await this.repository.getCurrent(
+        roomId,
+        () => this.healthRepository.current(this.providerId, this.manifestSha256),
+      );
+    } catch (error) {
+      if (error instanceof Error && ["ROOM_NOT_FOUND", "ROOM_DELETION_IN_PROGRESS"].includes(error.message)) {
+        throw new AgentError(error.message);
+      }
+      throw error;
+    }
   }
 
   async settings(principal: AuthSession, sessionId: string, roomId: string, enabled: boolean) {
@@ -80,10 +95,25 @@ export class AgentService {
     if (!UUID.test(roomId) || !UUID.test(sessionId)) throw new AgentError("ROOM_NOT_FOUND");
     if (principal.role === "student" && principal.roomId !== roomId) throw new AgentError("ROOM_NOT_FOUND");
     const result = principal.role === "teacher"
-      ? await this.pool.query<{ actor_id: string }>(`SELECT teacher_id AS actor_id FROM classroom_room WHERE room_id = $1 AND teacher_id = $2 AND EXISTS (SELECT 1 FROM auth_session WHERE session_id = $3 AND teacher_id = $2 AND principal_kind = 'teacher' AND revoked_at IS NULL AND expires_at > now())`, [roomId, principal.teacherId, sessionId])
-      : await this.pool.query<{ room_member_id: string; actor_id: string }>(`SELECT m.room_member_id, m.actor_id FROM room_member m JOIN auth_session s ON s.room_member_id = m.room_member_id WHERE m.room_id = $1 AND m.room_member_id = $2 AND s.session_id = $3 AND s.principal_kind = 'student' AND s.revoked_at IS NULL AND s.expires_at > now()`, [roomId, principal.roomMemberId, sessionId]);
+      ? await this.pool.query<{ actor_id: string; deletion_active: boolean }>(
+        `SELECT r.teacher_id AS actor_id,
+                EXISTS (SELECT 1 FROM deletion_job d WHERE d.room_id=r.room_id AND d.status IN ('queued','running','retryable','dead')) AS deletion_active
+           FROM classroom_room r
+          WHERE r.room_id = $1 AND r.teacher_id = $2
+            AND EXISTS (SELECT 1 FROM auth_session WHERE session_id = $3 AND teacher_id = $2 AND principal_kind = 'teacher' AND revoked_at IS NULL AND expires_at > now())`,
+        [roomId, principal.teacherId, sessionId],
+      )
+      : await this.pool.query<{ room_member_id: string; actor_id: string; deletion_active: boolean }>(
+        `SELECT m.room_member_id, m.actor_id,
+                EXISTS (SELECT 1 FROM deletion_job d WHERE d.room_id=m.room_id AND d.status IN ('queued','running','retryable','dead')) AS deletion_active
+           FROM room_member m JOIN auth_session s ON s.room_member_id = m.room_member_id
+          WHERE m.room_id = $1 AND m.room_member_id = $2 AND s.session_id = $3
+            AND s.principal_kind = 'student' AND s.revoked_at IS NULL AND s.expires_at > now()`,
+        [roomId, principal.roomMemberId, sessionId],
+      );
     const row = result.rows[0];
     if (!row) throw new AgentError("ROOM_NOT_FOUND");
+    if (row.deletion_active !== false) throw new AgentError("ROOM_DELETION_IN_PROGRESS");
     return principal.role === "teacher"
       ? { role: "teacher", teacherId: principal.teacherId, roomMemberId: null, actorId: principal.actorId }
       : { role: "student", teacherId: null, roomMemberId: principal.roomMemberId, actorId: row.actor_id };

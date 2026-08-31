@@ -34,6 +34,7 @@ type RoomServiceErrorCode =
   | "ROOM_FORBIDDEN"
   | "JOIN_FORBIDDEN"
   | "ROOM_NOT_FOUND"
+  | "DELETION_IN_PROGRESS"
   | "ROOM_CODE_UNAVAILABLE"
   | "RETENTION_POLICY_NOT_CONFIGURED";
 
@@ -237,48 +238,65 @@ export class RoomService {
     if (allowed.rowCount !== 1) throw new RoomServiceError("ROOM_NOT_FOUND");
     try { await this.lifecycle?.closeIfDue(roomId); }
     catch (error) {
-      if (error instanceof RoomError && error.code === "FORBIDDEN") {
-        throw new RoomServiceError("ROOM_NOT_FOUND");
+      if (error instanceof RoomError) {
+        if (error.code === "FORBIDDEN") throw new RoomServiceError("ROOM_NOT_FOUND");
+        if (error.code === "ROOM_DELETION_IN_PROGRESS") {
+          throw new RoomServiceError("DELETION_IN_PROGRESS");
+        }
       }
       throw error;
     }
-    const accessSql = identity.role === "teacher"
-      ? "r.teacher_id = $2"
-      : "r.room_id = $2";
-    const accessId = identity.role === "teacher" ? identity.teacherId : identity.roomId;
-    const result = await this.pool.query<RoomDetailsRow>(
-      `SELECT r.room_id, r.topic, r.status, r.duration_seconds,
-              r.starts_at, r.closes_at, r.nova_actor_id,
-              m.actor_id, m.pseudonym
-       FROM classroom_room r
-       JOIN room_member m ON m.room_id = r.room_id
-       WHERE r.room_id = $1 AND ${accessSql}
-       ORDER BY m.seat_index`,
-      [roomId, accessId],
-    );
-    if (result.rows.length !== STUDENT_PSEUDONYMS.length) {
-      throw new RoomServiceError("ROOM_NOT_FOUND");
-    }
-    const room = result.rows[0]!;
-    return roomHttpContract.parseRoomDetails({
-      roomId: room.room_id,
-      topic: room.topic,
-      status: room.status,
-      durationSeconds: room.duration_seconds,
-      startsAt: room.starts_at?.toISOString() ?? null,
-      closesAt: room.closes_at?.toISOString() ?? null,
-      nova: {
-        actorId: room.nova_actor_id,
-        actorKind: "agent",
-        actorRole: "socratic_facilitator",
-        displayName: "Nova Agent",
-      },
-      participants: result.rows.map(({ actor_id: actorId, pseudonym }) => ({
-        actorId,
-        pseudonym,
-        actorKind: "human",
-        actorRole: "student",
-      })),
+    return inTransaction(this.pool, async (tx) => {
+      await lockRoomInTransaction(tx, roomId);
+      const owner = identity.role === "teacher"
+        ? await tx.query("SELECT 1 FROM classroom_room WHERE room_id=$1 AND teacher_id=$2", [roomId, identity.teacherId])
+        : await tx.query("SELECT 1 FROM classroom_room WHERE room_id=$1", [roomId]);
+      if (owner.rowCount !== 1) throw new RoomServiceError("ROOM_NOT_FOUND");
+      const deleting = await tx.query(
+        `SELECT 1 FROM deletion_job
+         WHERE room_id = $1 AND status IN ('queued','running','retryable','dead')
+         LIMIT 1`,
+        [roomId],
+      );
+      if (deleting.rowCount === 1) throw new RoomServiceError("DELETION_IN_PROGRESS");
+      const accessSql = identity.role === "teacher"
+        ? "r.teacher_id = $2"
+        : "r.room_id = $2";
+      const accessId = identity.role === "teacher" ? identity.teacherId : identity.roomId;
+      const result = await tx.query<RoomDetailsRow>(
+        `SELECT r.room_id, r.topic, r.status, r.duration_seconds,
+                r.starts_at, r.closes_at, r.nova_actor_id,
+                m.actor_id, m.pseudonym
+         FROM classroom_room r
+         JOIN room_member m ON m.room_id = r.room_id
+         WHERE r.room_id = $1 AND ${accessSql}
+         ORDER BY m.seat_index`,
+        [roomId, accessId],
+      );
+      if (result.rows.length !== STUDENT_PSEUDONYMS.length) {
+        throw new RoomServiceError("ROOM_NOT_FOUND");
+      }
+      const room = result.rows[0]!;
+      return roomHttpContract.parseRoomDetails({
+        roomId: room.room_id,
+        topic: room.topic,
+        status: room.status,
+        durationSeconds: room.duration_seconds,
+        startsAt: room.starts_at?.toISOString() ?? null,
+        closesAt: room.closes_at?.toISOString() ?? null,
+        nova: {
+          actorId: room.nova_actor_id,
+          actorKind: "agent",
+          actorRole: "socratic_facilitator",
+          displayName: "Nova Agent",
+        },
+        participants: result.rows.map(({ actor_id: actorId, pseudonym }) => ({
+          actorId,
+          pseudonym,
+          actorKind: "human",
+          actorRole: "student",
+        })),
+      });
     });
   }
 

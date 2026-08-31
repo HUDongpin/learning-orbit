@@ -43,6 +43,19 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 export class AgentRepository {
   constructor(private readonly pool: Pool, private readonly clock: Clock) {}
 
+  private async assertNotDeleting(tx: PoolClient, roomId: string): Promise<void> {
+    const tombstone = await tx.query<{ deletion_active: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM deletion_job
+          WHERE room_id=$1 AND status IN ('queued','running','retryable','dead')
+       ) AS deletion_active`,
+      [roomId],
+    );
+    if (tombstone.rows[0]?.deletion_active !== false) {
+      throw new Error("ROOM_DELETION_IN_PROGRESS");
+    }
+  }
+
   private async requireActiveSession(
     tx: PoolClient,
     roomId: string,
@@ -76,6 +89,7 @@ export class AgentRepository {
   async getOrCreateRunAndJob(input: AgentRunRequest, retryTriggerConflict = true): Promise<AgentRunCreation> {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, input.roomId);
+      await this.assertNotDeleting(tx, input.roomId);
       const room = await tx.query<{ status: string; agent_enabled: boolean; nova_actor_id: string }>(
         `SELECT status, agent_enabled, nova_actor_id FROM classroom_room
          WHERE room_id = $1 FOR UPDATE`,
@@ -171,17 +185,43 @@ export class AgentRepository {
   }
 
   async getCurrent(roomId: string, health: () => Promise<"healthy" | "degraded" | "unavailable">): Promise<AgentCurrentState> {
-    const roomResult = await this.pool.query<{ agent_enabled: boolean }>("SELECT agent_enabled FROM classroom_room WHERE room_id = $1", [roomId]);
-    const result = await this.pool.query<RunRow>(`SELECT ${runColumns} FROM agent_run WHERE room_id = $1 ORDER BY updated_at DESC LIMIT 1`, [roomId]);
-    const row = result.rows[0];
     const serviceHealth = await health();
-    const run = row?.agent_run_id ? asRun(row) : null;
-    return agentContract.parseCurrent({ roomId, run: run ? { agentRunId: run.agentRunId, state: run.state, failureCode: run.failureCode, createdAt: run.createdAt, updatedAt: run.updatedAt } : null, serviceHealth, agentEnabled: roomResult.rows[0]?.agent_enabled ?? false, updatedAt: this.clock.now().toISOString() });
+    return inTransaction(this.pool, async (tx) => {
+      await lockRoomInTransaction(tx, roomId);
+      await this.assertNotDeleting(tx, roomId);
+      const roomResult = await tx.query<{ agent_enabled: boolean }>(
+        "SELECT agent_enabled FROM classroom_room WHERE room_id = $1",
+        [roomId],
+      );
+      if (roomResult.rowCount !== 1 || typeof roomResult.rows[0]?.agent_enabled !== "boolean") {
+        throw new Error("ROOM_NOT_FOUND");
+      }
+      const result = await tx.query<RunRow>(
+        `SELECT ${runColumns} FROM agent_run WHERE room_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+        [roomId],
+      );
+      const row = result.rows[0];
+      const run = row?.agent_run_id ? asRun(row) : null;
+      return agentContract.parseCurrent({
+        roomId,
+        run: run ? {
+          agentRunId: run.agentRunId,
+          state: run.state,
+          failureCode: run.failureCode,
+          createdAt: run.createdAt,
+          updatedAt: run.updatedAt,
+        } : null,
+        serviceHealth,
+        agentEnabled: roomResult.rows[0].agent_enabled,
+        updatedAt: this.clock.now().toISOString(),
+      });
+    });
   }
 
   async cancelRun(roomId: string, runId: string, teacherId: string, causationId: string, sessionId?: string): Promise<AgentRun> {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
+      await this.assertNotDeleting(tx, roomId);
       await this.requireActiveSession(tx, roomId, { role: "teacher", teacherId, roomMemberId: null, actorId: teacherId }, sessionId);
       const found = await tx.query<RunRow>(`SELECT ${runColumns} FROM agent_run WHERE agent_run_id = $1 AND room_id = $2 AND EXISTS (SELECT 1 FROM classroom_room WHERE room_id = $2 AND teacher_id = $3) FOR UPDATE`, [runId, roomId, teacherId]);
       if (found.rowCount !== 1) throw new Error("AGENT_RUN_NOT_FOUND");
@@ -194,6 +234,7 @@ export class AgentRepository {
   async setEnabled(roomId: string, teacherId: string, enabled: boolean, causationId: string, sessionId?: string): Promise<AgentSettingsResponse> {
     return inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
+      await this.assertNotDeleting(tx, roomId);
       await this.requireActiveSession(tx, roomId, { role: "teacher", teacherId, roomMemberId: null, actorId: teacherId }, sessionId);
       const room = await tx.query<{ agent_enabled: boolean }>(`SELECT agent_enabled FROM classroom_room WHERE room_id = $1 AND teacher_id = $2 FOR UPDATE`, [roomId, teacherId]);
       if (room.rowCount !== 1) throw new Error("ROOM_NOT_FOUND");

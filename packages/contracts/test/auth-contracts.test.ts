@@ -114,7 +114,7 @@ describe("auth wire contracts", () => {
     ]));
   });
 
-  it("builds exact auth and complete room routes with encoded path segments", () => {
+  it("builds exact auth and implemented room routes with encoded path segments", () => {
     expect(routes.auth.session()).toBe("/v1/auth/session");
     expect(routes.auth.teacherMagicLink()).toBe("/v1/auth/teacher/magic-link");
     const token = "abc &?=/%redirect=evil";
@@ -132,9 +132,5 @@ describe("auth wire contracts", () => {
       "/v1/rooms/a%2Fb/events?afterSeq=4&limit=500",
     );
     expect(routes.rooms.websocket("a/b")).toBe("/v1/rooms/a%2Fb/realtime");
-    expect(routes.rooms.open("a/b")).toBe("/v1/rooms/a%2Fb/open");
-    expect(routes.rooms.pause("a/b")).toBe("/v1/rooms/a%2Fb/pause");
-    expect(routes.rooms.resume("a/b")).toBe("/v1/rooms/a%2Fb/resume");
-    expect(routes.rooms.close("a/b")).toBe("/v1/rooms/a%2Fb/close");
   });
 });

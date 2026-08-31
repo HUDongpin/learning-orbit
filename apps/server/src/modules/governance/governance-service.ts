@@ -2,20 +2,24 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
   deletionLifecycleContract,
+  teacherRoomExportContract,
   type AuthSession,
   type DeletionStatus,
   type DeleteRoomRequest,
+  type TeacherRoomExport,
 } from "@learning-orbit/contracts";
 import { inTransaction } from "../../db/transactions.js";
+import { AnalyticsRepository, projectionWire } from "../analytics/analytics-repository.js";
 import { lockRoomInTransaction } from "../rooms/room-lock.js";
 import { makeDeletionReceipt } from "./retention-policy.js";
 
 const SURFACES = ["events", "media", "derivatives", "artifacts", "projections", "agent_runs", "caches", "provider_copies"] as const;
+const EXPORT_MAX_BYTES = 32 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DELETION_NAMESPACE = Buffer.from("4d3f1a0e6b9c42d8a1f0e5c7b2d64980", "hex");
 
 export class GovernanceError extends Error {
-  constructor(readonly code: "AUTH_REQUIRED" | "ROOM_NOT_FOUND" | "DELETION_IN_PROGRESS" | "DELETION_STATUS_CORRUPT" | "INVALID_DELETE_REQUEST" | "INVALID_EXPORT_FORMAT" | "EXPORT_UNAVAILABLE", readonly statusCode: 400 | 401 | 404 | 409 | 410 | 503 = 400) {
+  constructor(readonly code: "AUTH_REQUIRED" | "ROOM_NOT_FOUND" | "DELETION_IN_PROGRESS" | "DELETION_STATUS_CORRUPT" | "INVALID_DELETE_REQUEST" | "INVALID_EXPORT_FORMAT" | "EXPORT_UNAVAILABLE" | "RETENTION_POLICY_EXPIRED", readonly statusCode: 400 | 401 | 404 | 409 | 410 | 503 = 400) {
     super(code);
   }
 }
@@ -42,11 +46,16 @@ async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roo
     events: "SELECT count(*)::text AS count FROM room_event WHERE room_id=$1",
     media: "SELECT count(*)::text AS count FROM media_asset WHERE room_id=$1",
     derivatives: "SELECT count(*)::text AS count FROM media_derivative d JOIN media_asset m ON m.media_id=d.media_id WHERE m.room_id=$1",
-    artifacts: "SELECT count(*)::text AS count FROM derived_text_artifact WHERE room_id=$1",
-    projections: "SELECT (SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=$1) AS count",
+    artifacts: "SELECT ((SELECT count(*) FROM derived_text_artifact WHERE room_id=$1)+(SELECT count(*) FROM extraction_artifacts WHERE room_id=$1)+(SELECT count(*) FROM analytics_review_detail WHERE room_id=$1))::text AS count",
+    projections: "SELECT ((SELECT count(*) FROM analysis_projection_snapshots WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_patches WHERE room_id=$1)+(SELECT count(*) FROM analysis_projection_outbox WHERE room_id=$1)+(SELECT count(*) FROM analysis_room_heads WHERE room_id=$1)+(SELECT count(*) FROM student_analytics_promotion WHERE room_id=$1))::text AS count",
     agent_runs: "SELECT count(*)::text AS count FROM agent_run WHERE room_id=$1",
     caches: "SELECT 0::text AS count",
-    provider_copies: "SELECT 0::text AS count",
+    provider_copies: `SELECT (
+      (SELECT count(*) FROM media_asset WHERE room_id=$1)
+      +(SELECT count(*) FROM agent_run WHERE room_id=$2)
+      +(SELECT count(*) FROM derived_text_artifact
+         WHERE room_id=$3 AND provider NOT IN ('learner-authored','teacher-correction'))
+    )::text AS count`,
   };
   for (const surface of SURFACES) {
     // Capability-owned surfaces intentionally use a parameterless literal
@@ -55,7 +64,9 @@ async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roo
     // a failed probe would roll back the entire deletion request.
     const result = await tx.query<{ count: string }>(
       countQueries[surface],
-      surface === "caches" || surface === "provider_copies" ? [] : [roomId],
+      surface === "caches" ? []
+        : surface === "provider_copies" ? [roomId, roomId, roomId]
+          : [roomId],
     );
     const count = Number(result.rows[0]?.count ?? 0);
     if (!Number.isSafeInteger(count) || count < 0) throw new GovernanceError("DELETION_IN_PROGRESS", 409);
@@ -97,6 +108,26 @@ function sanitize(value: unknown): unknown {
   return undefined;
 }
 
+function exportPositiveInteger(value: unknown): number {
+  if (value === null || value === undefined || typeof value === "boolean") {
+    throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+  }
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 1) {
+    throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+  }
+  return result;
+}
+
+function exportIsoTimestamp(value: unknown): string {
+  if (value === null || value === undefined || typeof value === "boolean") {
+    throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+  }
+  const date = new Date(value as string | number | Date);
+  if (!Number.isFinite(date.getTime())) throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+  return date.toISOString();
+}
+
 export interface GovernanceServiceOptions {
   readonly auditSalt: string;
   readonly clock?: () => Date;
@@ -113,22 +144,42 @@ export class GovernanceService {
 
   sanitizeExport(value: unknown): unknown { return sanitize(value); }
 
+  /**
+   * Apply the hidden teacher-room boundary before Fastify parses a DELETE
+   * body.  requestDeletion repeats ownership under the canonical room lock,
+   * so this read is only an information-disclosure fence, not mutation
+   * authority.
+   */
+  async authorizeRoom(
+    principal: AuthSession | null,
+    roomId: string,
+  ): Promise<Extract<AuthSession, { role: "teacher" }>> {
+    teacherOnly(principal);
+    if (!UUID.test(roomId)) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+    const room = await this.pool.query(
+      "SELECT 1 FROM classroom_room WHERE room_id=$1 AND teacher_id=$2",
+      [roomId, principal.teacherId],
+    );
+    if (room.rowCount !== 1) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+    return principal;
+  }
+
   async requestDeletion(principal: AuthSession | null, roomId: string, raw: unknown) {
     teacherOnly(principal);
     if (!UUID.test(roomId)) throw new GovernanceError("ROOM_NOT_FOUND", 404);
-    let input: DeleteRoomRequest;
-    try { input = deletionLifecycleContract.parseRequest(raw); }
-    catch { throw new GovernanceError("INVALID_DELETE_REQUEST", 400); }
-    if (input.confirmation !== `DELETE ${roomId}`) throw new GovernanceError("INVALID_DELETE_REQUEST", 400);
     const accepted = await inTransaction(this.pool, async (tx) => {
       await lockRoomInTransaction(tx, roomId);
       const room = await tx.query<{ room_id: string; teacher_id: string; status: string }>(
         "SELECT room_id, teacher_id, status FROM classroom_room WHERE room_id=$1 FOR UPDATE", [roomId]);
       if (room.rows[0]?.teacher_id !== principal.teacherId) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+      let input: DeleteRoomRequest;
+      try { input = deletionLifecycleContract.parseRequest(raw); }
+      catch { throw new GovernanceError("INVALID_DELETE_REQUEST", 400); }
+      if (input.confirmation !== `DELETE ${roomId}`) throw new GovernanceError("INVALID_DELETE_REQUEST", 400);
       const existing = await tx.query<{ deletion_job_id: string }>(
         "SELECT deletion_job_id FROM deletion_job WHERE room_id=$1 AND owner_teacher_id=$2 AND status IN ('queued','running','retryable','dead') LIMIT 1 FOR UPDATE",
         [roomId, principal.teacherId]);
-      if (existing.rows[0]) return { deletionJobId: existing.rows[0].deletion_job_id, status: "queued" as const };
+      if (existing.rows[0]) throw new GovernanceError("DELETION_IN_PROGRESS", 409);
       const deletionJobId = randomUUID();
       const correlationId = randomUUID();
       const inserted = await tx.query<{ deletion_job_id: string }>(
@@ -157,25 +208,43 @@ export class GovernanceService {
     teacherOnly(principal);
     if (!UUID.test(deletionJobId)) throw new GovernanceError("ROOM_NOT_FOUND", 404);
     const result = await this.pool.query<any>(
-      `SELECT deletion_job_id,status,completed_at,surfaces_verified FROM deletion_job j
+      `SELECT j.deletion_job_id,j.status,
+              j.completed_at AS job_completed_at,
+              r.completed_at AS receipt_completed_at,
+              r.receipt_version,r.surfaces_verified
+         FROM deletion_job j
        LEFT JOIN deletion_receipt r USING (deletion_job_id)
        WHERE j.deletion_job_id=$1 AND j.owner_teacher_id=$2`, [deletionJobId, principal.teacherId]);
     const row = result.rows[0];
     if (!row) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+    if (row.deletion_job_id !== deletionJobId) throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
     if (row.status === "completed") {
-      const completed = row.completed_at === null || row.completed_at === undefined
-        ? new Date(Number.NaN) : new Date(row.completed_at);
-      if (!Number.isFinite(completed.getTime()) || row.surfaces_verified === null || row.surfaces_verified === undefined) {
+      const jobCompleted = row.job_completed_at === null || row.job_completed_at === undefined
+        ? new Date(Number.NaN) : new Date(row.job_completed_at);
+      const receiptCompleted = row.receipt_completed_at === null || row.receipt_completed_at === undefined
+        ? new Date(Number.NaN) : new Date(row.receipt_completed_at);
+      if (!Number.isFinite(jobCompleted.getTime())
+        || !Number.isFinite(receiptCompleted.getTime())
+        || jobCompleted.getTime() !== receiptCompleted.getTime()
+        || row.receipt_version !== 1
+        || !Array.isArray(row.surfaces_verified)) {
         throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
       }
       try {
-        const receipt = makeDeletionReceipt({ completedAt: completed.toISOString(), surfacesVerified: row.surfaces_verified });
+        const receipt = makeDeletionReceipt({
+          completedAt: receiptCompleted.toISOString(),
+          surfacesVerified: row.surfaces_verified,
+        });
         return deletionLifecycleContract.parseStatus({ deletionJobId, status: "completed", receipt });
       } catch {
         throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
       }
     }
     if (!["queued", "running", "retryable", "dead"].includes(row.status)) {
+      throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
+    }
+    if (row.job_completed_at !== null || row.receipt_completed_at !== null
+      || row.receipt_version !== null || row.surfaces_verified !== null) {
       throw new GovernanceError("DELETION_STATUS_CORRUPT", 503);
     }
     // Worker failure text is deliberately not part of deletion_job.  Read a
@@ -214,28 +283,157 @@ export class GovernanceService {
     return this.deletionStatus(principal, result.rows[0].deletion_job_id);
   }
 
-  async exportRoom(principal: AuthSession | null, roomId: string, format: "json" | "csv") {
+  async exportRoom(principal: AuthSession | null, roomId: string, rawQuery: unknown) {
     teacherOnly(principal);
     if (!UUID.test(roomId)) throw new GovernanceError("ROOM_NOT_FOUND", 404);
-    if (format !== "json" && format !== "csv") throw new GovernanceError("INVALID_EXPORT_FORMAT", 400);
-    const rows = await inTransaction(this.pool, async (tx) => {
-      const room = await tx.query<{ room_id: string }>(
-        "SELECT room_id FROM classroom_room WHERE room_id=$1 AND teacher_id=$2 AND retention_policy_id IS NOT NULL", [roomId, principal.teacherId]);
-      if (!room.rows[0]) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+    const exported = await inTransaction(this.pool, async (tx) => {
+      await lockRoomInTransaction(tx, roomId);
+      const room = await tx.query<{
+        room_id: string;
+        policy_current: boolean;
+        deletion_active: boolean;
+      }>(
+        `SELECT r.room_id,
+                (p.policy_id IS NOT NULL
+                 AND p.approved_at <= transaction_timestamp()
+                 AND p.expires_at > transaction_timestamp()) AS policy_current,
+                EXISTS (
+                  SELECT 1 FROM deletion_job d
+                  WHERE d.room_id=r.room_id
+                    AND d.status IN ('queued','running','retryable','dead')
+                ) AS deletion_active
+           FROM classroom_room r
+           LEFT JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
+          WHERE r.room_id=$1 AND r.teacher_id=$2`,
+        [roomId, principal.teacherId],
+      );
+      const authorized = room.rows[0];
+      if (!authorized) throw new GovernanceError("ROOM_NOT_FOUND", 404);
+      if (authorized.deletion_active === true) throw new GovernanceError("DELETION_IN_PROGRESS", 410);
+      if (authorized.deletion_active !== false) throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      if (authorized.policy_current !== true) throw new GovernanceError("RETENTION_POLICY_EXPIRED", 410);
+      if (!rawQuery || typeof rawQuery !== "object" || Array.isArray(rawQuery)) {
+        throw new GovernanceError("INVALID_EXPORT_FORMAT", 400);
+      }
+      const query = rawQuery as Record<string, unknown>;
+      const format = query.format === "json" ? "json" : query.format === "csv" ? "csv" : null;
+      if (Object.keys(query).some((key) => key !== "format") || !format) {
+        throw new GovernanceError("INVALID_EXPORT_FORMAT", 400);
+      }
       const events = await tx.query<any>(
         `SELECT event_id,room_id,room_seq,type,actor_id,actor_kind,actor_role,revision,operation,event_time,ingest_time,causation_id,correlation_id,payload
-         FROM room_event WHERE room_id=$1 ORDER BY room_seq LIMIT 10000`, [roomId]);
-      return events.rows.map((row) => ({
-        eventId: row.event_id, roomId: row.room_id, roomSeq: Number(row.room_seq), type: row.type,
+         FROM room_event WHERE room_id=$1 ORDER BY room_seq LIMIT 10001`, [roomId]);
+      if (events.rows.length > 10000) throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      const eventRows = events.rows.map((row) => ({
+        schemaVersion: 1 as const,
+        eventId: row.event_id, roomId: row.room_id, roomSeq: exportPositiveInteger(row.room_seq), type: row.type,
         actorId: row.actor_id, actorKind: row.actor_kind, actorRole: row.actor_role, revision: row.revision,
-        operation: row.operation, eventTime: new Date(row.event_time).toISOString(), ingestTime: new Date(row.ingest_time).toISOString(),
-        causationId: row.causation_id, correlationId: row.correlation_id, payload: sanitize(row.payload),
+        operation: row.operation, eventTime: exportIsoTimestamp(row.event_time), ingestTime: exportIsoTimestamp(row.ingest_time),
+        causationId: row.causation_id, correlationId: row.correlation_id, payload: row.payload,
       }));
+      const artifactResult = await tx.query<any>(
+        `SELECT artifact_id,lineage_id,room_id,event_id,room_seq,source_media_id,
+                source_modality,derivation,text_content,language_tag,review_status,
+                supersedes_artifact_id,created_at
+           FROM derived_text_artifact
+          WHERE room_id=$1 AND review_status IN ('approved','corrected')
+          ORDER BY room_seq,artifact_id LIMIT 10001`,
+        [roomId],
+      );
+      if (artifactResult.rows.length > 10000) {
+        throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      }
+      const artifacts = artifactResult.rows.map((row) => ({
+        artifactId: row.artifact_id,
+        lineageId: row.lineage_id,
+        roomId: row.room_id,
+        eventId: row.event_id,
+        roomSeq: exportPositiveInteger(row.room_seq),
+        sourceModality: row.source_modality,
+        derivation: row.derivation,
+        text: row.text_content,
+        languageTag: row.language_tag,
+        reviewStatus: row.review_status,
+        createdAt: exportIsoTimestamp(row.created_at),
+      }));
+      const artifactSources = artifactResult.rows.map((row) => ({
+        artifactId: row.artifact_id,
+        lineageId: row.lineage_id,
+        roomId: row.room_id,
+        eventId: row.event_id,
+        roomSeq: exportPositiveInteger(row.room_seq),
+        sourceMediaId: row.source_media_id,
+        sourceModality: row.source_modality,
+        derivation: row.derivation,
+        supersedesArtifactId: row.supersedes_artifact_id,
+      }));
+      const analytics = new AnalyticsRepository(tx as unknown as Pool, {
+        callerHoldsCanonicalRoomLock: true,
+      });
+      const projectionRows = [];
+      try {
+        for (const key of ["echo.teacher_shadow", "trace.teacher_bundle"] as const) {
+          const projection = await analytics.latest(roomId, key);
+          if (projection) projectionRows.push(projection);
+        }
+      } catch {
+        throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      }
+      const projections = projectionRows.map(projectionWire);
+      const projectionSources = projectionRows.map((projection) => ({
+        projectionKey: projection.projectionKey,
+        roomId: projection.roomId,
+        analysisEpoch: projection.analysisEpoch,
+        algorithmVersion: projection.algorithmVersion,
+        projectionVersion: projection.version,
+        completeThroughRoomSeq: projection.completeThroughRoomSeq,
+        watermarkEventTime: projection.watermarkEventTime,
+      }));
+      let document: TeacherRoomExport;
+      try {
+        document = teacherRoomExportContract.parse({
+          schemaVersion: 1,
+          exportKind: "teacher_room",
+          roomId,
+          throughRoomSeq: eventRows.length,
+          events: eventRows,
+          artifacts,
+          projections,
+          provenance: { artifactSources, projectionSources },
+        });
+      } catch {
+        throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      }
+      const body = format === "json"
+        ? teacherRoomExportContract.encode(document)
+        : exportCsv(document);
+      if (Buffer.byteLength(body, "utf8") > EXPORT_MAX_BYTES) {
+        throw new GovernanceError("EXPORT_UNAVAILABLE", 503);
+      }
+      await this.audit(
+        tx,
+        principal,
+        roomId,
+        randomUUID(),
+        "export.request",
+        "allowed",
+        "EXPORT_COMPLETED",
+      );
+      return { format, body };
     });
-    if (format === "json") return { filename: `learning-orbit-${roomId.slice(0, 8)}-export.json`, contentType: "application/json; charset=utf-8", body: JSON.stringify(rows) };
-    const header = "eventId,roomSeq,type,actorId,actorKind,actorRole,revision,operation,eventTime,ingestTime\n";
-    const body = rows.map((row) => [row.eventId, row.roomSeq, row.type, row.actorId, row.actorKind, row.actorRole, row.revision, row.operation, row.eventTime, row.ingestTime].map(csv).join(",")).join("\n");
-    return { filename: `learning-orbit-${roomId.slice(0, 8)}-export.csv`, contentType: "text/csv; charset=utf-8", body: header + body + (body ? "\n" : "") };
+    const { format, body } = exported;
+    if (format === "json") {
+      return {
+        filename: "learning-orbit-room-export.json",
+        contentType: "application/json; charset=utf-8",
+        body,
+      };
+    }
+    return {
+      filename: "learning-orbit-room-export.csv",
+      contentType: "text/csv; charset=utf-8",
+      body,
+    };
   }
 
   private async audit(tx: PoolClient, principal: AuthSession, roomId: string, correlationId: string, action: string, outcome: string, reasonCode: string) {
@@ -249,4 +447,22 @@ export class GovernanceService {
 function csv(value: unknown): string {
   const text = String(value ?? "");
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function exportCsv(document: TeacherRoomExport): string {
+  const manifest = {
+    schemaVersion: document.schemaVersion,
+    exportKind: document.exportKind,
+    roomId: document.roomId,
+    throughRoomSeq: document.throughRoomSeq,
+  };
+  const rows: Array<readonly [string, unknown]> = [
+    ["manifest", manifest],
+    ...document.events.map((value) => ["event", value] as const),
+    ...document.artifacts.map((value) => ["artifact", value] as const),
+    ...document.projections.map((value) => ["projection", value] as const),
+    ...document.provenance.artifactSources.map((value) => ["artifact_provenance", value] as const),
+    ...document.provenance.projectionSources.map((value) => ["projection_provenance", value] as const),
+  ];
+  return `recordType,json\n${rows.map(([kind, value]) => `${kind},${csv(JSON.stringify(value))}`).join("\n")}\n`;
 }

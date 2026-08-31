@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/teacher-room-export.v1.json",
+  "title": "TeacherRoomExport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "exportKind",
+    "roomId",
+    "throughRoomSeq",
+    "events",
+    "artifacts",
+    "projections",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "exportKind": { "const": "teacher_room" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "throughRoomSeq": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "events": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "room-event-envelope.v1.json" }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/TeacherExportArtifact" }
+    },
+    "projections": {
+      "type": "array",
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/TeacherExportProjection" }
+    },
+    "provenance": { "$ref": "#/$defs/TeacherExportProvenance" }
+  },
+  "$defs": {
+    "TeacherExportArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "lineageId",
+        "roomId",
+        "eventId",
+        "roomSeq",
+        "sourceModality",
+        "derivation",
+        "text",
+        "languageTag",
+        "reviewStatus",
+        "createdAt"
+      ],
+      "properties": {
+        "artifactId": { "type": "string", "format": "uuid" },
+        "lineageId": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "eventId": { "type": "string", "format": "uuid" },
+        "roomSeq": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "sourceModality": { "enum": ["text", "audio", "image"] },
+        "derivation": { "enum": ["direct", "asr", "ocr", "image_description", "human_correction"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "languageTag": { "type": "string", "minLength": 2, "maxLength": 35 },
+        "reviewStatus": { "enum": ["approved", "corrected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ArtifactProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "lineageId",
+        "roomId",
+        "eventId",
+        "roomSeq",
+        "sourceMediaId",
+        "sourceModality",
+        "derivation",
+        "supersedesArtifactId"
+      ],
+      "properties": {
+        "artifactId": { "type": "string", "format": "uuid" },
+        "lineageId": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "eventId": { "type": "string", "format": "uuid" },
+        "roomSeq": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "sourceMediaId": { "type": ["string", "null"], "format": "uuid" },
+        "sourceModality": { "enum": ["text", "audio", "image"] },
+        "derivation": { "enum": ["direct", "asr", "ocr", "image_description", "human_correction"] },
+        "supersedesArtifactId": { "type": ["string", "null"], "format": "uuid" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "derivation": { "const": "direct" } } },
+          "then": {
+            "properties": {
+              "sourceModality": { "const": "text" },
+              "sourceMediaId": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "derivation": { "const": "human_correction" } } },
+          "then": {
+            "properties": {
+              "supersedesArtifactId": { "type": "string", "format": "uuid" }
+            }
+          }
+        }
+      ]
+    },
+    "TeacherExportProjection": {
+      "oneOf": [
+        { "$ref": "echo-concept-projection.v1.json#/$defs/TeacherConceptMapSnapshot" },
+        { "$ref": "trace-projection.v1.json#/$defs/TeacherBundle" }
+      ]
+    },
+    "ProjectionProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectionKey",
+        "roomId",
+        "analysisEpoch",
+        "algorithmVersion",
+        "projectionVersion",
+        "completeThroughRoomSeq",
+        "watermarkEventTime"
+      ],
+      "properties": {
+        "projectionKey": { "enum": ["echo.teacher_shadow", "trace.teacher_bundle"] },
+        "roomId": { "type": "string", "format": "uuid" },
+        "analysisEpoch": { "type": "string", "format": "uuid" },
+        "algorithmVersion": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "projectionVersion": { "type": "integer", "minimum": 1 },
+        "completeThroughRoomSeq": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "watermarkEventTime": { "type": "string", "format": "date-time" }
+      }
+    },
+    "TeacherExportProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactSources", "projectionSources"],
+      "properties": {
+        "artifactSources": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/ArtifactProvenance" }
+        },
+        "projectionSources": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/ProjectionProvenance" }
+        }
+      }
+    }
+  }
+}

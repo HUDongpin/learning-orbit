@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { analyticsContract, routes } from "@learning-orbit/contracts";
+import { inTransaction } from "../../db/transactions.js";
+import { lockRoomInTransaction } from "../rooms/room-lock.js";
+import { AnalyticsPolicyError, STUDENT_PROJECTIONS } from "./analytics-policy.js";
 
 export type ProjectionKey =
   | "echo.teacher_shadow" | "echo.student_approved"
@@ -303,7 +306,79 @@ function contentHash(value: unknown): string {
 }
 
 export class AnalyticsRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: Readonly<{ callerHoldsCanonicalRoomLock?: boolean }> = {},
+  ) {}
+
+  private async fenceRoomRead(roomId: string, projectionKey: ProjectionKey): Promise<void> {
+    if (this.options.callerHoldsCanonicalRoomLock === true) return;
+    const inspect = async (tx: PoolClient) => {
+      await lockRoomInTransaction(tx, roomId);
+      const result = await tx.query<{
+        room_exists: boolean;
+        deletion_active: boolean;
+        policy_current: boolean;
+        student_projection_allowed: boolean;
+      }>(
+        `SELECT EXISTS (
+                  SELECT 1 FROM classroom_room WHERE room_id=$1
+                ) AS room_exists,
+                EXISTS (
+                  SELECT 1 FROM deletion_job
+                   WHERE room_id=$1 AND status IN ('queued','running','retryable','dead')
+                ) AS deletion_active,
+                EXISTS (
+                  SELECT 1
+                    FROM classroom_room r
+                    JOIN pilot_retention_policy p ON p.policy_id=r.retention_policy_id
+                   WHERE r.room_id=$1
+                     AND p.approved_at <= transaction_timestamp()
+                     AND p.expires_at > transaction_timestamp()
+                ) AS policy_current,
+                EXISTS (
+                  SELECT 1 FROM student_analytics_promotion promotion
+                   WHERE promotion.room_id=$1
+                     AND $2=ANY(promotion.feature_allowlist)
+                     AND promotion.revoked_at IS NULL
+                     AND promotion.starts_at <= transaction_timestamp()
+                     AND promotion.expires_at > transaction_timestamp()
+                ) AS student_projection_allowed`,
+        [roomId, projectionKey],
+      );
+      const row = result.rows[0];
+      if (!row || typeof row.room_exists !== "boolean" || typeof row.deletion_active !== "boolean") {
+        throw new AnalyticsRepositoryError();
+      }
+      if (!row.room_exists) throw new AnalyticsPolicyError(404, "ROOM_NOT_FOUND");
+      if (row.deletion_active) {
+        throw new AnalyticsPolicyError(410, "ROOM_DELETION_IN_PROGRESS");
+      }
+      if (typeof row.policy_current !== "boolean" || !row.policy_current) {
+        throw new AnalyticsPolicyError(410, "RETENTION_POLICY_EXPIRED");
+      }
+      if (typeof row.student_projection_allowed !== "boolean") {
+        throw new AnalyticsRepositoryError();
+      }
+      if (STUDENT_PROJECTIONS.has(projectionKey) && !row.student_projection_allowed) {
+        throw new AnalyticsPolicyError(403, "STUDENT_ANALYTICS_NOT_PROMOTED");
+      }
+    };
+    const connectionFactory = (this.pool as unknown as { connect?: unknown }).connect;
+    if (typeof connectionFactory === "function") {
+      await inTransaction(this.pool, inspect);
+    } else {
+      // Governance export passes its already-locked PoolClient as the
+      // queryable.  Re-taking the transaction-scoped advisory lock is safe and
+      // keeps the same final fence without opening a nested transaction.
+      await inspect(this.pool as unknown as PoolClient);
+    }
+  }
+
+  private async finishRead<T>(roomId: string, projectionKey: ProjectionKey, value: T): Promise<T> {
+    await this.fenceRoomRead(roomId, projectionKey);
+    return value;
+  }
 
   async latest(roomId: string, projectionKey: ProjectionKey): Promise<ProjectionRow | null> {
     const result = await this.pool.query(
@@ -320,7 +395,7 @@ export class AnalyticsRepository {
        LIMIT 1`,
       [roomId, projectionKey],
     );
-    return result.rows[0] ? mapProjection(result.rows[0]) : null;
+    return this.finishRead(roomId, projectionKey, result.rows[0] ? mapProjection(result.rows[0]) : null);
   }
 
   async patchesAfter(
@@ -335,17 +410,19 @@ export class AnalyticsRepository {
     }
     // TRACE is an atomic bundle. It never exposes an empty or synthetic patch
     // window, even when the caller already names the current version.
-    if (projectionKey.startsWith("trace.")) return { kind: "resync", snapshotUrl };
+    if (projectionKey.startsWith("trace.")) {
+      return this.finishRead(roomId, projectionKey, { kind: "resync", snapshotUrl } as const);
+    }
     const headResult = await this.pool.query(
       `SELECT analysis_epoch,version,algorithm_version,parameter_hash
        FROM analysis_room_heads WHERE room_id=$1 AND projection_key=$2`,
       [roomId, projectionKey],
     );
     const head = headResult.rows[0];
-    if (!head) return { kind: "resync", snapshotUrl };
+    if (!head) return this.finishRead(roomId, projectionKey, { kind: "resync", snapshotUrl } as const);
     const headVersion = numberField(head.version, "version");
     if (head.analysis_epoch !== analysisEpoch || afterProjectionVersion > headVersion) {
-      return { kind: "resync", snapshotUrl };
+      return this.finishRead(roomId, projectionKey, { kind: "resync", snapshotUrl } as const);
     }
     const result = await this.pool.query(
       `SELECT p.room_id,p.projection_key,p.analysis_epoch,p.version,p.base_version,
@@ -360,14 +437,16 @@ export class AnalyticsRepository {
          AND p.version>$4 AND p.version<=$5 ORDER BY p.version LIMIT 201`,
       [roomId, projectionKey, analysisEpoch, afterProjectionVersion, headVersion],
     );
-    if (result.rows.length > 200) return { kind: "resync", snapshotUrl };
+    if (result.rows.length > 200) {
+      return this.finishRead(roomId, projectionKey, { kind: "resync", snapshotUrl } as const);
+    }
     const patches = validatePatchChain(result.rows, afterProjectionVersion, {
       version: headVersion, analysisEpoch: head.analysis_epoch,
       algorithmVersion: head.algorithm_version, parameterHash: head.parameter_hash,
       roomId, projectionKey,
     });
-    if (patches === null) return { kind: "resync", snapshotUrl };
-    return { kind: "patches", patches };
+    if (patches === null) return this.finishRead(roomId, projectionKey, { kind: "resync", snapshotUrl } as const);
+    return this.finishRead(roomId, projectionKey, { kind: "patches", patches } as const);
   }
 
   async timeline(
@@ -383,7 +462,9 @@ export class AnalyticsRepository {
     );
     const head = headResult.rows[0];
     const headVersion = head ? numberField(head.version, "version") : 0;
-    if (!head) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion: 0 };
+    if (!head) return this.finishRead(roomId, projectionKey, {
+      kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion: 0,
+    } as const);
     const expectedCount = Math.min(limit, headVersion);
     const result = await this.pool.query(
       `SELECT p.room_id,p.projection_key,p.analysis_epoch,p.version,p.base_version,
@@ -398,16 +479,22 @@ export class AnalyticsRepository {
        ORDER BY p.version DESC LIMIT $4`, [roomId, projectionKey, analysisEpoch, limit],
     );
     if (result.rows.length !== expectedCount) {
-      return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
+      return this.finishRead(roomId, projectionKey, {
+        kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion,
+      } as const);
     }
     const patches = validatePatchChain([...result.rows].reverse(), headVersion - expectedCount, {
       version: headVersion, analysisEpoch: head.analysis_epoch,
       algorithmVersion: head.algorithm_version, parameterHash: head.parameter_hash,
       roomId, projectionKey,
     });
-    if (patches === null) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
+    if (patches === null) return this.finishRead(roomId, projectionKey, {
+      kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion,
+    } as const);
     const first = patches[0]?.version ?? headVersion;
-    if (headVersion > 0 && patches.length === 0) return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
+    if (headVersion > 0 && patches.length === 0) return this.finishRead(roomId, projectionKey, {
+      kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion,
+    } as const);
     const base = first > 1 ? await this.pool.query(
       `SELECT room_id,projection_key,analysis_epoch,version,GREATEST(0,version-1) AS base_version,complete_through_seq,
               watermark_event_time,algorithm_version,parameter_hash,requires_replay,algorithm,schema_version,
@@ -417,9 +504,11 @@ export class AnalyticsRepository {
       [roomId, projectionKey, analysisEpoch, first - 1],
     ) : { rows: [] };
     if (first > 1 && !base.rows[0]) {
-      return { kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion };
+      return this.finishRead(roomId, projectionKey, {
+        kind: "resync", baseSnapshot: null, patches: [], truncatedBeforeVersion: null, headVersion,
+      } as const);
     }
-    return {
+    return this.finishRead(roomId, projectionKey, {
       baseSnapshot: base.rows[0] ? mapProjection(base.rows[0]) : null,
       patches,
       // The suffix begins at `first`; report the first version omitted from
@@ -427,7 +516,7 @@ export class AnalyticsRepository {
       truncatedBeforeVersion: first > 1 ? first - 1 : null,
       headVersion,
       kind: "timeline",
-    };
+    });
   }
 
   /** Used by worker adapters/tests to keep projection pointers separate. */

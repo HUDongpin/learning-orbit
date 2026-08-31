@@ -24,8 +24,48 @@ const student: Extract<AuthSession, { role: "student" }> = {
     displayName: "Nova Agent",
   },
 };
+const teacher: Extract<AuthSession, { role: "teacher" }> = {
+  role: "teacher",
+  teacherId: ACTOR_ID,
+  actorId: ACTOR_ID,
+};
 
 describe("Agent Provider admission gate", () => {
+  it("maps a deletion race from the locked current-state read to the public tombstone code", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM room_member m JOIN auth_session")) {
+        return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID, deletion_active: false }], rowCount: 1 };
+      }
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 40)}`);
+    });
+    const service = new AgentService(
+      { query } as never,
+      { now: () => new Date("2026-08-31T06:00:00.000Z") },
+    );
+    vi.spyOn(service.repository, "getCurrent")
+      .mockRejectedValue(new Error("ROOM_DELETION_IN_PROGRESS"));
+
+    await expect(service.current(student, SESSION_ID, ROOM_ID))
+      .rejects.toEqual(new AgentError("ROOM_DELETION_IN_PROGRESS"));
+  });
+
+  it("blocks Agent settings once an owned room has an active deletion tombstone", async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("SELECT r.teacher_id AS actor_id")) {
+        return { rows: [{ actor_id: ACTOR_ID, deletion_active: true }], rowCount: 1 };
+      }
+      throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 40)}`);
+    });
+    const service = new AgentService(
+      { query } as never,
+      { now: () => new Date("2026-08-31T06:00:00.000Z") },
+    );
+    const write = vi.spyOn(service.repository, "setEnabled");
+    await expect(service.settings(teacher, SESSION_ID, ROOM_ID, false))
+      .rejects.toEqual(new AgentError("ROOM_DELETION_IN_PROGRESS"));
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("share-locks an existing signed health sample when it is used as create authority", async () => {
     const checkedAt = new Date("2026-08-31T05:59:50.000Z");
     const query = vi.fn(async () => ({ rows: [{ health: "healthy", checked_at: checkedAt }], rowCount: 1 }));
@@ -40,7 +80,7 @@ describe("Agent Provider admission gate", () => {
   it.each(["degraded", "unavailable"] as const)("rejects %s health before any run or job write", async (health) => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("FROM room_member m JOIN auth_session")) {
-        return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID }], rowCount: 1 };
+        return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID, deletion_active: false }], rowCount: 1 };
       }
       if (sql.startsWith("SELECT status, agent_enabled, nova_actor_id FROM classroom_room")) {
         return { rows: [{ status: "open", agent_enabled: true, nova_actor_id: NOVA_ID }], rowCount: 1 };
@@ -75,7 +115,7 @@ describe("Agent Provider admission gate", () => {
 
   it("returns an existing same-trigger run during a later Provider outage", async () => {
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes("FROM room_member m JOIN auth_session")) return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID }], rowCount: 1 };
+      if (sql.includes("FROM room_member m JOIN auth_session")) return { rows: [{ room_member_id: MEMBER_ID, actor_id: ACTOR_ID, deletion_active: false }], rowCount: 1 };
       if (sql.startsWith("SELECT status, agent_enabled, nova_actor_id FROM classroom_room")) return { rows: [{ status: "open", agent_enabled: true, nova_actor_id: NOVA_ID }], rowCount: 1 };
       if (sql.includes("FROM room_event WHERE room_id")) return { rows: [{ event_id: EVENT_ID, actor_kind: "human", operation: "add", payload: { mentions: [NOVA_ID] }, correlation_id: "00000000-0000-4000-8000-000000000016" }], rowCount: 1 };
       throw new Error(`UNEXPECTED_QUERY:${sql.slice(0, 40)}`);

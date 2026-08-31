@@ -1,6 +1,6 @@
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { authContract, analyticsContract, analyticsHttpContract, roomHttpContract, teacherRoomListContract } from "@learning-orbit/contracts";
+import { authContract, analyticsContract, analyticsHttpContract, analyticsTeacherHttpContract, roomHttpContract, teacherRoomListContract, type AuthSession } from "@learning-orbit/contracts";
 import type { MagicLinkService } from "./modules/auth/magic-link-service.js";
 import type { SessionService } from "./modules/auth/session-service.js";
 import { TeacherRoomListError, type TeacherRoomListService } from "./modules/teacher/teacher-room-list-service.js";
@@ -53,7 +53,7 @@ interface AuthRouteDependencies {
     policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
     repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
   } | undefined;
-  analyticsTeacher?: AnalyticsTeacherService | undefined;
+  analyticsTeacher?: Pick<AnalyticsTeacherService, "authorize" | "listArtifacts" | "review" | "reviewDetail"> | undefined;
   governance?: GovernanceService | undefined;
 }
 
@@ -69,7 +69,7 @@ function agentRouteError(error: unknown): { status: number; code: string } {
   const status = ["FORBIDDEN", "EXPLICIT_TRIGGER_REQUIRED"].includes(code) ? 403
     : ["ROOM_NOT_FOUND", "TRIGGER_EVENT_NOT_FOUND", "AGENT_RUN_NOT_FOUND"].includes(code) ? 404
       : ["INVALID_AGENT_COMMAND", "AGENT_CANNOT_TRIGGER_AGENT", "TRIGGER_EVENT_NOT_ACTIVE"].includes(code) ? 422
-        : ["ROOM_NOT_OPEN", "AGENT_DISABLED", "AGENT_RUN_ALREADY_ACTIVE", "AGENT_RUN_NOT_ACTIVE"].includes(code) ? 409
+        : ["ROOM_NOT_OPEN", "ROOM_DELETION_IN_PROGRESS", "AGENT_DISABLED", "AGENT_RUN_ALREADY_ACTIVE", "AGENT_RUN_NOT_ACTIVE"].includes(code) ? 409
           : code === "RATE_LIMITED" ? 429
             : code === "AGENT_SERVICE_UNAVAILABLE" ? 503
               : 500;
@@ -247,16 +247,51 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     }
   });
 
-  app.post("/v1/rooms/:roomId/commands", async (request, reply) => {
-    const identity = await dependencies.sessions?.get(request.cookies.lo_session);
-    if (!identity) return reply.code(401).send({ code: "AUTH_REQUIRED" });
+  const commandAuth = new WeakMap<object, { principal: AuthSession; sessionId: string }>();
+  const authenticateCommand = async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.header("Cache-Control", "no-store");
+    if (!dependencies.sessions) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+    try {
+      const identity = await dependencies.sessions.get(request.cookies.lo_session);
+      if (!identity) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+      if (!dependencies.realtime) return reply.code(503).type("application/json").send({ code: "ROOM_SERVICE_UNAVAILABLE" });
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      const authorization = await dependencies.realtime.authorizer.authenticateToken(
+        request.cookies.lo_session ?? "",
+        roomId,
+      );
+      if (!authorization.ok) {
+        return authorization.closeCode === 4410
+          ? reply.code(409).type("application/json").send({ code: "ROOM_DELETION_IN_PROGRESS" })
+          : reply.code(404).type("application/json").send({ code: "ROOM_NOT_FOUND" });
+      }
+      commandAuth.set(request, { principal: authorization.principal, sessionId: authorization.sessionId });
+    } catch {
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    }
+  };
+  const commandBodyError = (error: FastifyError, _request: FastifyRequest, reply: FastifyReply) => {
+    reply.header("Cache-Control", "no-store");
+    if (["FST_ERR_CTP_INVALID_JSON_BODY", "FST_ERR_CTP_EMPTY_JSON_BODY"].includes(error.code)) {
+      return reply.code(409).type("application/json").send({ code: "INVALID_COMMAND" });
+    }
+    return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+  };
+  app.post("/v1/rooms/:roomId/commands", {
+    onRequest: authenticateCommand,
+    errorHandler: commandBodyError,
+  }, async (request, reply) => {
+    const authenticated = commandAuth.get(request);
+    if (!authenticated) return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     if (!dependencies.commands) return reply.code(503).send({ code: "ROOM_SERVICE_UNAVAILABLE" });
     const pathRoomId = (request.params as { roomId?: string }).roomId;
     if (typeof pathRoomId !== "string" || (request.body as { roomId?: string })?.roomId !== pathRoomId) return reply.code(409).send({ code: "INVALID_COMMAND" });
     try {
-      const sessionId = await dependencies.sessions?.getSessionId(request.cookies.lo_session);
-      if (!sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
-      const result = await dependencies.commands.dispatch(identity, request.body, sessionId);
+      const result = await dependencies.commands.dispatch(
+        authenticated.principal,
+        request.body,
+        authenticated.sessionId,
+      );
       return reply.code(200).send(result);
     } catch (error) {
       if (error instanceof RoomError) {
@@ -271,6 +306,7 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
   });
 
   app.get("/v1/rooms/:roomId", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
     const identity = await dependencies.sessions?.get(request.cookies.lo_session);
     if (!identity) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     if (!dependencies.rooms) {
@@ -285,11 +321,15 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       if (error instanceof RoomServiceError && error.code === "ROOM_NOT_FOUND") {
         return reply.code(404).type("application/json").send({ code: "ROOM_NOT_FOUND" });
       }
+      if (error instanceof RoomServiceError && error.code === "DELETION_IN_PROGRESS") {
+        return reply.code(410).type("application/json").send({ code: "DELETION_IN_PROGRESS" });
+      }
       throw error;
     }
   });
 
   app.get("/v1/rooms/:roomId/events", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
     const roomId = (request.params as { roomId?: string }).roomId ?? "";
     const identity = await dependencies.sessions?.get(request.cookies.lo_session);
     if (!identity) return reply.code(401).send({ code: "AUTH_REQUIRED" });
@@ -298,6 +338,7 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     const auth = await dependencies.realtime.authorizer.authenticateToken(token, roomId);
     const accessFailure = roomEventHttpAccessFailure(auth);
     if (accessFailure) return reply.code(accessFailure.statusCode).send({ code: accessFailure.code });
+    if (!auth.ok) return reply.code(404).send({ code: "ROOM_NOT_FOUND" });
     if (!dependencies.lifecycle) return reply.code(503).send({ code: "ROOM_SERVICE_UNAVAILABLE" });
     const query = request.query as { afterSeq?: string; limit?: string };
     if (Object.keys(query as Record<string, unknown>).some((key) => key !== "afterSeq" && key !== "limit")) return reply.code(400).send({ code: "INVALID_QUERY" });
@@ -305,6 +346,10 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
     const limit = query.limit === undefined ? 500 : Number(query.limit);
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) return reply.code(400).send({ code: "INVALID_QUERY" });
     const events = await dependencies.lifecycle.events.eventsAfter(roomId, afterSeq, limit);
+    const finalAuthorization = await dependencies.realtime.authorizer.reauthorize(auth.sessionId, roomId);
+    if (!finalAuthorization.ok || finalAuthorization.actorId !== auth.actorId) {
+      return reply.code(404).send({ code: "ROOM_NOT_FOUND" });
+    }
     const throughRoomSeq = events.length ? events[events.length - 1]!.roomSeq : afterSeq;
     return reply.type("application/json").send(roomHttpContract.encodeRoomEventPage({ events, throughRoomSeq, ...(events.length === limit ? { nextAfterSeq: throughRoomSeq } : {}) }));
   });
@@ -455,64 +500,94 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       }
       return reply.code(500).type("application/json").send({ code: "INTERNAL" });
     };
-    app.get("/v1/rooms/:roomId/analytics/artifacts", async (request, reply) => {
+    const teacherAuth = new WeakMap<object, { principal: AuthSession; sessionId: string }>();
+    const authenticateTeacher = async (request: FastifyRequest, reply: FastifyReply) => {
+      reply.header("Cache-Control", "no-store");
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
-      const query = request.query as Record<string, unknown>;
-      const allowed = ["reviewStatus", "afterArtifactId", "includeHistory", "limit"];
-      if (Object.keys(query).some((key) => !allowed.includes(key))
-        || Object.values(query).some((value) => typeof value !== "string")) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const limit = query.limit === undefined ? 50 : Number(query.limit);
-      const includeHistory = query.includeHistory === undefined ? false : query.includeHistory === true || query.includeHistory === "true";
-      if (query.includeHistory !== undefined && query.includeHistory !== true && query.includeHistory !== false && query.includeHistory !== "true" && query.includeHistory !== "false") return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
-      const reviewStatus = query.reviewStatus;
-      if (reviewStatus !== undefined && !["unreviewed", "approved", "rejected", "corrected"].includes(String(reviewStatus))) return reply.code(400).send({ code: "INVALID_ANALYTICS_QUERY" });
       try {
         const principal = await dependencies.sessions!.get(request.cookies.lo_session);
         const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
-        const page = await dependencies.analyticsTeacher!.listArtifacts(principal, sessionId ?? undefined, roomId, {
-          ...(reviewStatus === undefined ? {} : { reviewStatus: reviewStatus as "unreviewed" | "approved" | "rejected" | "corrected" }),
-          ...(typeof query.afterArtifactId === "string" ? { afterArtifactId: query.afterArtifactId } : {}),
-          includeHistory, limit,
-        });
+        if (!principal || !sessionId) {
+          return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+        }
+        await dependencies.analyticsTeacher!.authorize(principal, sessionId, roomId);
+        teacherAuth.set(request, { principal, sessionId });
+      } catch (error) { return teacherError(reply, error); }
+    };
+    const teacherReviewErrorHandler = (error: FastifyError, _request: FastifyRequest, reply: FastifyReply) => {
+      reply.header("Cache-Control", "no-store");
+      if (["FST_ERR_CTP_INVALID_JSON_BODY", "FST_ERR_CTP_EMPTY_JSON_BODY"].includes(error.code)) {
+        return reply.code(400).type("application/json").send({ code: "INVALID_ANALYTICS_REVIEW_COMMAND" });
+      }
+      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    };
+    app.get("/v1/rooms/:roomId/analytics/artifacts", { onRequest: authenticateTeacher }, async (request, reply) => {
+      const auth = teacherAuth.get(request);
+      if (!auth) return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      try {
+        const page = await dependencies.analyticsTeacher!.listArtifacts(
+          auth.principal, auth.sessionId, roomId, request.query,
+        );
         return reply.type("application/json").send(JSON.parse(analyticsContract.encodeArtifactPage(page)));
       } catch (error) { return teacherError(reply, error); }
     });
-    app.post("/v1/rooms/:roomId/analytics/reviews", async (request, reply) => {
+    app.post("/v1/rooms/:roomId/analytics/reviews", {
+      onRequest: authenticateTeacher,
+      errorHandler: teacherReviewErrorHandler,
+    }, async (request, reply) => {
+      const auth = teacherAuth.get(request);
+      if (!auth) return reply.code(500).type("application/json").send({ code: "INTERNAL" });
       const roomId = (request.params as { roomId?: string }).roomId ?? "";
       try {
-        const principal = await dependencies.sessions!.get(request.cookies.lo_session);
-        const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
-        const result = await dependencies.analyticsTeacher!.review(principal, sessionId ?? undefined, roomId, request.body);
-        return reply.code(201).type("application/json").send(result);
+        const result = await dependencies.analyticsTeacher!.review(auth.principal, auth.sessionId, roomId, request.body);
+        const { created, ...accepted } = result;
+        return reply.code(created ? 201 : 200).type("application/json")
+          .send(JSON.parse(analyticsTeacherHttpContract.encodeAccepted(accepted)));
       } catch (error) { return teacherError(reply, error); }
     });
-    app.get("/v1/rooms/:roomId/analytics/reviews/:reviewEventId", async (request, reply) => {
+    app.get("/v1/rooms/:roomId/analytics/reviews/:reviewEventId", { onRequest: authenticateTeacher }, async (request, reply) => {
+      const auth = teacherAuth.get(request);
+      if (!auth) return reply.code(500).type("application/json").send({ code: "INTERNAL" });
       const params = request.params as { roomId?: string; reviewEventId?: string };
       try {
-        const principal = await dependencies.sessions!.get(request.cookies.lo_session);
-        const sessionId = await dependencies.sessions!.getSessionId(request.cookies.lo_session);
         const result = await dependencies.analyticsTeacher!.reviewDetail(
-          principal, sessionId ?? undefined, params.roomId ?? "", params.reviewEventId ?? "",
+          auth.principal, auth.sessionId, params.roomId ?? "", params.reviewEventId ?? "",
         );
-        return reply.header("Cache-Control", "no-store").type("application/json").send(result);
+        return reply.type("application/json")
+          .send(JSON.parse(analyticsTeacherHttpContract.encodeDetail(result)));
       } catch (error) { return teacherError(reply, error); }
     });
   }
 
-  const runRoute = async (request: any, reply: any, action: "request" | "cancel" | "current" | "settings") => {
+  const agentAuth = new WeakMap<object, { session: AuthSession; sessionId: string }>();
+  const authenticateAgent = (teacherOnly: boolean) => async (request: FastifyRequest, reply: FastifyReply) => {
     reply.header("Cache-Control", "no-store");
     if (!dependencies.sessions) {
       return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     }
-    let session;
-    let sessionId;
     try {
-      session = await dependencies.sessions.get(request.cookies.lo_session);
-      sessionId = await dependencies.sessions.getSessionId(request.cookies.lo_session);
-    } catch {
-      return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      const session = await dependencies.sessions.get(request.cookies.lo_session);
+      const sessionId = await dependencies.sessions.getSessionId(request.cookies.lo_session);
+      if (!session || !sessionId) {
+        return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+      }
+      if (teacherOnly && session.role !== "teacher") {
+        return reply.code(403).type("application/json").send({ code: "FORBIDDEN" });
+      }
+      const roomId = (request.params as { roomId?: string }).roomId ?? "";
+      if (dependencies.agent) await dependencies.agent.authorize(session, sessionId, roomId);
+      agentAuth.set(request, { session, sessionId });
+    } catch (error) {
+      const result = agentRouteError(error);
+      return reply.code(result.status).type("application/json").send({ code: result.code });
     }
-    if (!session || !sessionId) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
+  };
+  const runRoute = async (request: any, reply: any, action: "request" | "cancel" | "current" | "settings") => {
+    reply.header("Cache-Control", "no-store");
+    const authenticated = agentAuth.get(request);
+    if (!authenticated) return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+    const { session, sessionId } = authenticated;
     if (Object.keys(request.query as Record<string, unknown>).length !== 0) {
       return reply.code(400).type("application/json").send({ code: "INVALID_QUERY" });
     }
@@ -556,10 +631,10 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       return reply.code(result.status).type("application/json").send({ code: result.code });
     }
   };
-  app.post("/v1/rooms/:roomId/agent/runs", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "request"));
-  app.post("/v1/rooms/:roomId/agent/runs/:agentRunId/cancel", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "cancel"));
-  app.get("/v1/rooms/:roomId/agent/current", async (request, reply) => runRoute(request, reply, "current"));
-  app.put("/v1/rooms/:roomId/agent/settings", { errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "settings"));
+  app.post("/v1/rooms/:roomId/agent/runs", { onRequest: authenticateAgent(false), errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "request"));
+  app.post("/v1/rooms/:roomId/agent/runs/:agentRunId/cancel", { onRequest: authenticateAgent(true), errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "cancel"));
+  app.get("/v1/rooms/:roomId/agent/current", { onRequest: authenticateAgent(false) }, async (request, reply) => runRoute(request, reply, "current"));
+  app.put("/v1/rooms/:roomId/agent/settings", { onRequest: authenticateAgent(true), errorHandler: agentCommandErrorHandler }, async (request, reply) => runRoute(request, reply, "settings"));
 
   if (dependencies.agentProviderHealth) {
     app.post(routes.internal.agent.health(), async (request, reply) => {

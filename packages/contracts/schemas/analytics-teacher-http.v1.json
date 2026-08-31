@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/analytics-teacher-http.v1.json",
+  "title": "AnalyticsTeacherHttpResponse",
+  "oneOf": [
+    { "$ref": "#/$defs/AnalyticsReviewAccepted" },
+    { "$ref": "#/$defs/AnalyticsReviewDetail" }
+  ],
+  "$defs": {
+    "AnalyticsReviewAccepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "reviewEventId", "changeKind", "replayJobId"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "reviewEventId": { "type": "string", "format": "uuid" },
+        "changeKind": { "enum": ["review", "correction"] },
+        "replayJobId": { "type": "string", "format": "uuid" }
+      }
+    },
+    "AnalyticsReviewDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "reviewEventId", "roomId", "changeKind", "payload", "createdAt"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "reviewEventId": { "type": "string", "format": "uuid" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "changeKind": { "enum": ["review", "correction"] },
+        "payload": { "$ref": "analytics-review-command.v1.json" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
