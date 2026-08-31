@@ -1,7 +1,7 @@
 "use client";
 
 import type { AuthSession, MediaStatusFrame } from "@learning-orbit/contracts";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { MediaAttachment } from "../media/media-attachment";
 import type { MediaGateway } from "../media/media-upload";
@@ -45,6 +45,7 @@ export function MessageCard({
 }: MessageCardProps) {
   const [edit, setEdit] = useState<{ text: string; baseRevision: number }>();
   const [actionError, setActionError] = useState<string>();
+  const actionErrorRef = useRef<HTMLParagraphElement>(null);
   const author = roster.find(({ actorId }) => actorId === message.actorId);
   const ownStudentMessage = viewer.role === "student" && viewer.actorId === message.actorId && message.actorKind === "human";
   const canRevise = ownStudentMessage && message.operation !== "retract";
@@ -59,6 +60,10 @@ export function MessageCard({
         : "課堂目前不能修改訊息；草稿未送出。");
     }
   }, [edit, message.revision, roomStatus]);
+
+  useEffect(() => {
+    if (actionError) actionErrorRef.current?.focus();
+  }, [actionError]);
 
   return (
     <article className={`message ${ownStudentMessage ? "self" : ""} ${message.actorKind === "agent" ? "agent" : ""} ${message.operation === "retract" ? "retracted" : ""}`} id={`message-seq-${message.firstRoomSeq}`} tabIndex={-1}>
@@ -113,7 +118,7 @@ export function MessageCard({
             <button className="tiny-action" type="button" onClick={() => { setEdit(undefined); setActionError(undefined); }}>取消</button>
           </form>
         ) : null}
-        {actionError ? <p className="composer-error" role="alert">{actionError}</p> : null}
+        {actionError ? <p ref={actionErrorRef} className="composer-error" role="alert" tabIndex={-1}>{actionError}</p> : null}
         <div className="message-actions">
           {viewer.role === "student" && message.operation !== "retract" ? <button className="tiny-action" disabled={roomStatus !== "open"} type="button" onClick={() => onReply(message.messageId)}>回覆{label}</button> : null}
           {canRevise ? <button className="tiny-action" disabled={roomStatus !== "open"} type="button" onClick={() => { setActionError(undefined); setEdit({ text: message.text, baseRevision: message.revision }); }}>修訂{label}</button> : null}

@@ -44,6 +44,7 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
   const emailInput = useRef<HTMLInputElement>(null);
   const studentTab = useRef<HTMLButtonElement>(null);
   const teacherTab = useRef<HTMLButtonElement>(null);
+  const recoveryHeading = useRef<HTMLHeadingElement>(null);
 
   const checkSession = useCallback(async () => {
     setSessionCheck("checking");
@@ -81,6 +82,10 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
     })();
     return () => { active = false; };
   }, [api, router]);
+
+  useEffect(() => {
+    if (sessionCheck === "unavailable") recoveryHeading.current?.focus();
+  }, [sessionCheck]);
 
   function selectRole(nextRole: LoginRole, focus: "field" | "tab" = "field") {
     setRole(nextRole);
@@ -176,7 +181,7 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
       <main className="login-shell login-status-page">
         <div className="login-status-card">
           <span className="login-eyebrow">Learning Orbit</span>
-          <h1>暫時無法確認登入狀態</h1>
+          <h1 ref={recoveryHeading} tabIndex={-1}>暫時無法確認登入狀態</h1>
           <p>我們沒有載入任何模擬課堂。請檢查本地服務後再試。</p>
           <button className="login-primary" type="button" onClick={() => void checkSession()}>重新嘗試</button>
         </div>
@@ -201,7 +206,7 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
         </ul>
       </section>
 
-      <section className="login-card" id="login-form" aria-label="登入 Learning Orbit">
+      <section className="login-card" id="login-form" tabIndex={-1} aria-label="登入 Learning Orbit">
         <div className="login-tabs" role="tablist" aria-label="選擇登入角色">
           <button
             aria-controls="student-login-panel"

@@ -61,6 +61,8 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   const [copyStatus, setCopyStatus] = useState<string>();
   const inviteHeading = useRef<HTMLHeadingElement>(null);
   const dismissedHeading = useRef<HTMLHeadingElement>(null);
+  const actionErrorAlert = useRef<HTMLParagraphElement>(null);
+  const recoveryHeading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     if (created) inviteHeading.current?.focus();
@@ -69,6 +71,14 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   useEffect(() => {
     if (codesDismissed) dismissedHeading.current?.focus();
   }, [codesDismissed]);
+
+  useEffect(() => {
+    if (actionError) actionErrorAlert.current?.focus();
+  }, [actionError]);
+
+  useEffect(() => {
+    if (workspace.kind === "student" || workspace.kind === "unavailable") recoveryHeading.current?.focus();
+  }, [workspace.kind]);
 
   useEffect(() => {
     if (!created) return;
@@ -182,7 +192,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
       <main className="teacher-shell teacher-centered">
         <section className="teacher-recovery">
           <p className="login-eyebrow">角色不相符</p>
-          <h1>這個頁面只供教師使用</h1>
+          <h1 ref={recoveryHeading} tabIndex={-1}>這個頁面只供教師使用</h1>
           <p>目前 Session 是學生身份，因此沒有載入教師房間、代碼或監督資料。</p>
           <a className="teacher-link-button" href={`/session/${workspace.roomId}`}>返回我的課堂</a>
         </section>
@@ -195,9 +205,9 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
       <main className="teacher-shell teacher-centered">
         <section className="teacher-recovery">
           <p className="login-eyebrow">Fail closed</p>
-          <h1>暫時無法載入教師工作台</h1>
+          <h1 ref={recoveryHeading} tabIndex={-1}>暫時無法載入教師工作台</h1>
           <p>未能確認教師 Session 或房間清單；系統沒有載入任何模擬資料。</p>
-          {actionError ? <p className="teacher-alert" role="alert">{actionError}</p> : null}
+          {actionError ? <p className="teacher-alert" ref={actionErrorAlert} role="alert" tabIndex={-1}>{actionError}</p> : null}
           <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
             {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
           </button>
@@ -221,7 +231,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
         </button>
       </header>
 
-      <div className="teacher-main" id="teacher-main">
+      <div className="teacher-main" id="teacher-main" tabIndex={-1}>
         <section className="teacher-hero">
           <div>
             <p className="login-eyebrow">Playful Research Lab</p>
@@ -233,7 +243,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           </button>
         </section>
 
-        {actionError ? <p className="teacher-alert" role="alert">{actionError}</p> : null}
+        {actionError ? <p className="teacher-alert" ref={actionErrorAlert} role="alert" tabIndex={-1}>{actionError}</p> : null}
 
         {created ? (
           <section className="invite-card" aria-labelledby="invite-title">

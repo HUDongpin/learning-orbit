@@ -86,6 +86,14 @@ function gateway(overrides: Partial<SessionGateway> = {}): SessionGateway {
     getMedia: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getMediaDownloadGrant: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getAgentCurrent: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+    setAgentSettings: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+    getDerivedTextArtifacts: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    submitAnalyticsReview: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    getAnalyticsReviewDetail: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    requestRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    getDeletionStatus: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    getRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    exportRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
     getProjectionLatest: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getProjectionPatches: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getConceptTimeline: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
@@ -113,7 +121,7 @@ describe("teacher workspace", () => {
   it("shows a role-mismatch recovery page for students without constructing teacher state", async () => {
     const api = gateway({ getSession: vi.fn(async () => student) });
     render(<TeacherClient gateway={api} />);
-    expect(await screen.findByRole("heading", { name: "這個頁面只供教師使用" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "這個頁面只供教師使用" })).toHaveFocus();
     expect(screen.getByRole("link", { name: "返回我的課堂" })).toHaveAttribute("href", `/session/${student.roomId}`);
     expect(api.getTeacherRooms).not.toHaveBeenCalled();
   });
@@ -121,6 +129,8 @@ describe("teacher workspace", () => {
   it("lists active and recent rooms without revealing invite codes", async () => {
     render(<TeacherClient gateway={gateway()} />);
     expect(await screen.findByRole("heading", { name: "教師工作台" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "跳至主要內容" })).toHaveAttribute("href", "#teacher-main");
+    expect(document.getElementById("teacher-main")).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("link", { name: /開啟課堂.*進行中/ })).toHaveAttribute(
       "href",
       `/session/${roomList.rooms[0]!.roomId}/teacher`,
@@ -128,6 +138,30 @@ describe("teacher workspace", () => {
     expect(screen.getByText("已結束")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("座位代碼");
     expect(document.body.textContent).not.toContain("ABC234");
+  });
+
+  it("renders hostile server topic text literally without creating executable markup", async () => {
+    const hostileTopic = `<img src=x onerror="globalThis.__xss=1">`;
+    const hostileRooms: TeacherRoomListResponse = {
+      ...roomList,
+      rooms: [{ ...roomList.rooms[0]!, topic: hostileTopic }],
+    };
+    render(<TeacherClient gateway={gateway({ getTeacherRooms: vi.fn(async () => hostileRooms) })} />);
+
+    expect(await screen.findByText(hostileTopic)).toBeInTheDocument();
+    expect(document.querySelector("img")).toBeNull();
+    expect(Reflect.get(globalThis, "__xss")).toBeUndefined();
+  });
+
+  it("moves focus to an asynchronous room-creation error", async () => {
+    const api = gateway({
+      createRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_SERVICE_UNAVAILABLE"); }),
+    });
+    render(<TeacherClient gateway={api} />);
+    await screen.findByRole("heading", { name: "教師工作台" });
+    await userEvent.click(screen.getByRole("button", { name: "建立新課堂" }));
+
+    expect(await screen.findByRole("alert")).toHaveFocus();
   });
 
   it("creates the fixed topic and exposes all invite codes only until the teacher confirms saving them", async () => {
@@ -188,7 +222,7 @@ describe("teacher workspace", () => {
       getTeacherRooms: vi.fn(async () => { throw new SessionGatewayError("ROOM_LIST_UNAVAILABLE"); }),
     });
     render(<TeacherClient gateway={api} />);
-    expect(await screen.findByRole("heading", { name: "暫時無法載入教師工作台" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "暫時無法載入教師工作台" })).toHaveFocus();
     await userEvent.click(screen.getByRole("button", { name: "清除 Session 並返回登入" }));
     await waitFor(() => expect(api.logout).toHaveBeenCalledTimes(1));
     expect(replace).toHaveBeenCalledWith("/login?role=teacher");

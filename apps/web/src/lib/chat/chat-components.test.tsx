@@ -145,6 +145,20 @@ describe("event-backed chat components", () => {
     confirm.mockRestore();
   });
 
+  it("moves keyboard focus to a message action error", async () => {
+    const onCommand = vi.fn(() => { throw new Error("COMMAND_QUEUE_UNAVAILABLE"); });
+    render(<MessageCard message={ownMessage} roster={roomRoster(room)} roomStatus="open" viewer={student} onCommand={onCommand} onReply={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "修訂訊息 1" }));
+    await userEvent.clear(screen.getByLabelText("修訂內容"));
+    await userEvent.type(screen.getByLabelText("修訂內容"), "修正後的觀察");
+    await userEvent.click(screen.getByRole("button", { name: "送出修訂" }));
+    const error = await screen.findByRole("alert");
+
+    expect(error).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => expect(error).toHaveFocus());
+  });
+
   it("cancels an edit when a newer server revision arrives and never upgrades a stale draft base", async () => {
     const onCommand = vi.fn();
     const view = (message: LedgerMessage) => (

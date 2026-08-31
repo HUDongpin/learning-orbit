@@ -167,8 +167,11 @@ describe("server projection panels", () => {
     expect(screen.getByRole("status", { name: "分析解讀警告" })).toHaveTextContent("裝置時間超前");
     expect(container.querySelector(".analysis-svg")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByRole("list", { name: "概念關係等價列表" })).toHaveTextContent("provides energy to");
-    await user.click(screen.getByRole("button", { name: /sun provides energy to producers/u }));
+    const studentEdge = screen.getByRole("button", { name: /sun provides energy to producers/u });
+    studentEdge.focus();
+    await user.keyboard("{Enter}");
     expect(screen.getByRole("region", { name: "ECHO Inspector" })).toHaveTextContent("provides energy to");
+    expect(screen.getByRole("region", { name: "ECHO Inspector" })).toHaveAttribute("aria-live", "polite");
     expect(document.body.textContent).not.toMatch(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
     expect(document.body.textContent).not.toContain("activityScore");
 
@@ -197,6 +200,12 @@ describe("server projection panels", () => {
     expect(screen.getByRole("status", { name: "分析解讀警告" })).not.toHaveTextContent("近期群體互動");
     expect(document.body.textContent).not.toContain(nodes[0]!.nodeId);
     expect(document.body.textContent).not.toMatch(/weight|channels|rank|能力分數/iu);
+
+    const lineageEdge = screen.getByRole("button", { name: /探索者 A → 探索者 B/u });
+    lineageEdge.focus();
+    await user.keyboard(" ");
+    expect(screen.getByRole("region", { name: "TRACE Inspector" })).toHaveTextContent("互動層：uptake");
+    expect(screen.getByRole("region", { name: "TRACE Inspector" })).toHaveAttribute("aria-live", "polite");
   });
 
   it("loads a generated ECHO Timeline and previews a reconstructed version without replacing canonical latest", async () => {

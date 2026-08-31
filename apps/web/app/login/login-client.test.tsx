@@ -60,6 +60,14 @@ function gateway(overrides: Partial<SessionGateway> = {}): SessionGateway {
     getMedia: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getMediaDownloadGrant: vi.fn(async () => { throw new SessionGatewayError("MEDIA_SERVICE_UNAVAILABLE"); }),
     getAgentCurrent: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+    setAgentSettings: vi.fn(async () => { throw new SessionGatewayError("AGENT_SERVICE_UNAVAILABLE"); }),
+    getDerivedTextArtifacts: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    submitAnalyticsReview: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    getAnalyticsReviewDetail: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
+    requestRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    getDeletionStatus: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    getRoomDeletion: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
+    exportRoom: vi.fn(async () => { throw new SessionGatewayError("ROOM_NOT_FOUND"); }),
     getProjectionLatest: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getProjectionPatches: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
     getConceptTimeline: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
@@ -87,6 +95,19 @@ describe("unified login page", () => {
     expect(api.joinStudent).not.toHaveBeenCalled();
   });
 
+  it("provides a focusable skip target and moves focus to the first invalid field", async () => {
+    render(<LoginClient gateway={gateway()} initialRole="student" />);
+    const skipLink = await screen.findByRole("link", { name: "跳至登入表格" });
+    expect(skipLink).toHaveAttribute("href", "#login-form");
+    expect(document.getElementById("login-form")).toHaveAttribute("tabindex", "-1");
+
+    await userEvent.click(screen.getByRole("button", { name: "加入課堂" }));
+    const roomInput = screen.getByLabelText("房間代碼");
+    expect(roomInput).toHaveFocus();
+    expect(roomInput).toHaveAttribute("aria-invalid", "true");
+    expect(roomInput).toHaveAccessibleDescription("房間代碼須為 6 個英文字母或數字。");
+  });
+
   it("normalizes valid codes, waits for server session, then navigates", async () => {
     const api = gateway();
     render(<LoginClient gateway={api} initialRole="student" />);
@@ -108,7 +129,7 @@ describe("unified login page", () => {
     await screen.findByRole("heading", { name: "教師登入" });
     await userEvent.type(screen.getByLabelText("教師電郵"), "Teacher@Example.EDU");
     await userEvent.click(screen.getByRole("button", { name: "傳送登入連結" }));
-    expect(await screen.findByText("如果此電郵已獲授權，登入連結將會送出。請檢查收件匣。")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("如果此電郵已獲授權，登入連結將會送出。請檢查收件匣。");
     expect(document.body.textContent).not.toMatch(/token=|\/consume/);
   });
 
@@ -127,6 +148,14 @@ describe("unified login page", () => {
     render(<LoginClient gateway={gateway({ getSession: vi.fn(async () => teacher) })} initialRole="student" />);
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/teacher"));
     expect(screen.queryByText("Demo")).not.toBeInTheDocument();
+  });
+
+  it("moves focus to the fail-closed Session recovery heading", async () => {
+    render(<LoginClient gateway={gateway({
+      getSession: vi.fn(async () => { throw new SessionGatewayError("SESSION_NETWORK_FAILURE"); }),
+    })} initialRole="student" />);
+
+    expect(await screen.findByRole("heading", { name: "暫時無法確認登入狀態" })).toHaveFocus();
   });
 
   it("shows one non-enumerating recovery message for rejected student codes", async () => {

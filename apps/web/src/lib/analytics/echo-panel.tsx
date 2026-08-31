@@ -176,7 +176,7 @@ export function EchoPanel({ slot, onLoadTimeline, onRetry }: Readonly<{
                 })}
               </ul>
             </div>
-            <section className="analysis-inspector" aria-label="ECHO Inspector">
+            <section className="analysis-inspector" aria-label="ECHO Inspector" aria-live="polite">
               <h3>Inspector</h3>
               {selectedNode ? <><p className="inspector-title">{selectedNode.label}</p><p>伺服器證據狀態：{selectedNode.evidenceStatus}</p><p>顯示狀態：{selectedNode.displayStatus}</p></>
                 : selectedEdge ? <>

@@ -131,7 +131,7 @@ export function TracePanel({ slot, onRetry }: Readonly<{ slot: ProjectionSlot; o
                   {adapted!.edges.map((edge) => <li key={edge.key}><button aria-pressed={selectedEdge?.key === edge.key} type="button" onClick={() => setSelectedKey(edge.key)}><strong>{edge.sourceLabel} → {edge.targetLabel}</strong><span>{edge.layer}</span></button></li>)}
                 </ul>
               </div>
-              <section className="analysis-inspector" aria-label="TRACE Inspector">
+              <section className="analysis-inspector" aria-label="TRACE Inspector" aria-live="polite">
                 <h3>Inspector</h3>
                 {selectedNode ? <><p className="inspector-title">{selectedNode.label}</p><p>節點類型：{selectedNode.kind}</p><p>此處不產生個人排名、能力或貢獻分數。</p></>
                   : selectedEdge ? <><p className="inspector-title">{selectedEdge.sourceLabel} → {selectedEdge.targetLabel}</p><p>互動層：{selectedEdge.layer}</p>{selectedEdge.weight !== undefined ? <p>伺服器權重：{selectedEdge.weight}</p> : null}{selectedEdge.evidenceCount !== undefined ? <p>{selectedEdge.evidenceCount} 項伺服器證據；識別碼不在畫面顯示。</p> : null}</>
