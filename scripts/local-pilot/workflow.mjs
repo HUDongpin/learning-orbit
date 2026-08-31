@@ -4,7 +4,7 @@ const SHA = /^[0-9a-f]{40}$/;
 
 function stableCode(error, fallback) {
   const message = error instanceof Error ? error.message : "";
-  const match = /^((?:LOCAL_PILOT|REQUIRED_TEST)_[A-Z0-9_]+)/.exec(message);
+  const match = /^((?:LOCAL_PILOT|REQUIRED_TEST|MAILPIT)_[A-Z0-9_]+)/.exec(message);
   return match?.[1] ?? fallback;
 }
 
@@ -35,12 +35,14 @@ export class CleanupStack {
     const receipts = [];
     for (const entry of [...this.#entries].reverse()) {
       let status = "passed";
+      let failureCode = null;
       try {
         await entry.cleanup();
-      } catch {
+      } catch (error) {
         status = "failed";
+        failureCode = stableCode(error, "LOCAL_PILOT_CLEANUP_ACTION_FAILED");
       }
-      receipts.push(Object.freeze({ id: entry.id, status }));
+      receipts.push(Object.freeze({ id: entry.id, status, failureCode }));
     }
     return Object.freeze(receipts);
   }

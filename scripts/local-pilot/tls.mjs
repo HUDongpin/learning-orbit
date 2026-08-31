@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, realpath, rm } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
 export const OPENSSL_PATH = "/opt/homebrew/bin/openssl";
@@ -24,8 +24,16 @@ async function assertRealDirectory(directory, code) {
   return realpath(directory);
 }
 
-export async function createLocalTlsMaterial({ parentDirectory, runId, opensslPath = OPENSSL_PATH }) {
+export async function createLocalTlsMaterial({
+  parentDirectory,
+  runId,
+  opensslPath = OPENSSL_PATH,
+  commandEvidence,
+}) {
   assertRunId(runId);
+  if (commandEvidence !== undefined && typeof commandEvidence?.recordCommand !== "function") {
+    fail("LOCAL_PILOT_TLS_EVIDENCE_INVALID");
+  }
   const parent = await assertRealDirectory(parentDirectory, "LOCAL_PILOT_TLS_PARENT_INVALID");
   if (opensslPath !== OPENSSL_PATH) fail("LOCAL_PILOT_OPENSSL_PATH_INVALID");
   const opensslInfo = await lstat(opensslPath);
@@ -47,11 +55,36 @@ export async function createLocalTlsMaterial({ parentDirectory, runId, opensslPa
     "-out", certificatePath,
   ];
   try {
-    await execFileAsync(opensslPath, argv, {
-      windowsHide: true,
-      maxBuffer: 64 * 1024,
-      timeout: 30_000,
-      killSignal: "SIGTERM",
+    const startedAt = new Date().toISOString();
+    let commandResult;
+    try {
+      commandResult = await execFileAsync(opensslPath, argv, {
+        windowsHide: true,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024,
+        timeout: 30_000,
+        killSignal: "SIGTERM",
+      });
+    } catch (error) {
+      commandEvidence?.recordCommand({
+        executable: opensslPath,
+        argv,
+        exitCode: Number.isSafeInteger(error?.code) ? error.code : 1,
+        startedAt,
+        endedAt: new Date().toISOString(),
+        stdout: error?.stdout,
+        stderr: error?.stderr,
+      });
+      throw error;
+    }
+    commandEvidence?.recordCommand({
+      executable: opensslPath,
+      argv,
+      exitCode: 0,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      stdout: commandResult.stdout,
+      stderr: commandResult.stderr,
     });
     await Promise.all([chmod(privateKeyPath, 0o600), chmod(certificatePath, 0o600)]);
     const certificate = new X509Certificate(await readFile(certificatePath));
@@ -82,7 +115,6 @@ export async function createLocalTlsMaterial({ parentDirectory, runId, opensslPa
 export async function removeLocalTlsMaterial(material, expectedParent) {
   assertRunId(material.runId);
   if (!isAbsolute(material.directory) || !isAbsolute(expectedParent)
-    || resolve(dirname(material.directory)) !== resolve(expectedParent)
     || basename(material.directory) !== `lo-pilot-tls-${material.runId}`
     || material.privateKeyPath !== join(material.directory, "key.pem")
     || material.certificatePath !== join(material.directory, "cert.pem")) {

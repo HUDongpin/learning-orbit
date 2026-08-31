@@ -34,8 +34,8 @@ describe("local pilot fail-fast workflow and receipt", () => {
       ["resources", "passed"],
     ]);
     expect(receipt.cleanup).toEqual([
-      { id: "second", status: "passed" },
-      { id: "first", status: "passed" },
+      { id: "second", status: "passed", failureCode: null },
+      { id: "first", status: "passed", failureCode: null },
     ]);
   });
 
@@ -64,15 +64,30 @@ describe("local pilot fail-fast workflow and receipt", () => {
   it("makes any cleanup failure invalidate an otherwise passing run", async () => {
     const cleanup = new CleanupStack();
     const ran = vi.fn();
-    await expect(runLocalPilotWorkflow({
+    const failedRun = runLocalPilotWorkflow({
       runId: "1111111111111111",
       sourceSha: "c".repeat(40),
       cleanup,
       stages: [{ id: "gate", run: async () => {
-        cleanup.register("bad-cleanup", async () => { throw new Error("sensitive cleanup detail"); });
+        cleanup.register("bad-cleanup", async () => {
+          throw new Error("LOCAL_PILOT_WORKTREE_FINAL_DIRTY:sensitive cleanup detail");
+        });
         cleanup.register("good-cleanup", async () => { ran(); });
       } }],
-    })).rejects.toBeInstanceOf(LocalPilotFailure);
+    });
+    await expect(failedRun).rejects.toBeInstanceOf(LocalPilotFailure);
+    await expect(failedRun).rejects.toMatchObject({
+      receipt: expect.objectContaining({
+        cleanup: [
+          { id: "good-cleanup", status: "passed", failureCode: null },
+          {
+            id: "bad-cleanup",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_WORKTREE_FINAL_DIRTY",
+          },
+        ],
+      }),
+    });
     expect(ran).toHaveBeenCalledTimes(1);
     try {
       await runLocalPilotWorkflow({

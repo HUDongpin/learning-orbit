@@ -38,6 +38,7 @@ const REQUIRED_VIEWPORTS = [
 
 type Invite = Readonly<{ pseudonym: typeof PSEUDONYMS[number]; code: string }>;
 type StudentBrowser = Readonly<{ context: BrowserContext; page: Page; pseudonym: typeof PSEUDONYMS[number] }>;
+type TeacherProjectionKey = "echo.teacher_shadow" | "trace.teacher_bundle";
 
 async function assertNoPageOverflow(page: Page, code: string): Promise<void> {
   const valid = await page.evaluate(() => (
@@ -105,12 +106,16 @@ async function assertProtectedSurfaceQuality(page: Page, code: string): Promise<
   if (axe.violations.length !== 0) fail(`PILOT_AXE_${code}`);
 }
 
-async function readTeacherEchoAuthority(page: Page, roomId: string): Promise<Readonly<{
+async function readTeacherProjectionAuthority(
+  page: Page,
+  roomId: string,
+  projectionKey: TeacherProjectionKey,
+): Promise<Readonly<{
   analysisEpoch: string;
   completeThroughRoomSeq: number;
   projectionVersion: number;
 }>> {
-  const result = await page.evaluate(async ({ path, expectedRoomId }) => {
+  const result = await page.evaluate(async ({ path, expectedProjectionKey, expectedRoomId }) => {
     const response = await fetch(path, { credentials: "include", cache: "no-store" });
     let body: unknown;
     try { body = await response.json(); } catch { return { valid: false } as const; }
@@ -119,7 +124,7 @@ async function readTeacherEchoAuthority(page: Page, roomId: string): Promise<Rea
     return {
       valid: response.status === 200
         && value.roomId === expectedRoomId
-        && value.projectionKey === "echo.teacher_shadow"
+        && value.projectionKey === expectedProjectionKey
         && typeof value.analysisEpoch === "string"
         && typeof value.completeThroughRoomSeq === "number"
         && typeof value.projectionVersion === "number",
@@ -127,20 +132,56 @@ async function readTeacherEchoAuthority(page: Page, roomId: string): Promise<Rea
       completeThroughRoomSeq: value.completeThroughRoomSeq,
       projectionVersion: value.projectionVersion,
     };
-  }, { path: routes.analytics.latest(roomId, "echo.teacher_shadow"), expectedRoomId: roomId });
+  }, {
+    path: routes.analytics.latest(roomId, projectionKey),
+    expectedProjectionKey: projectionKey,
+    expectedRoomId: roomId,
+  });
   if (!result.valid || typeof result.analysisEpoch !== "string"
     || typeof result.completeThroughRoomSeq !== "number"
     || !Number.isSafeInteger(result.completeThroughRoomSeq)
     || result.completeThroughRoomSeq < 0
     || typeof result.projectionVersion !== "number"
     || !Number.isSafeInteger(result.projectionVersion)) {
-    fail("PILOT_ECHO_AUTHORITY_INVALID");
+    fail(projectionKey === "echo.teacher_shadow"
+      ? "PILOT_ECHO_AUTHORITY_INVALID"
+      : "PILOT_TRACE_AUTHORITY_INVALID");
   }
   return {
     analysisEpoch: result.analysisEpoch,
     completeThroughRoomSeq: result.completeThroughRoomSeq,
     projectionVersion: result.projectionVersion,
   };
+}
+
+function readTeacherEchoAuthority(page: Page, roomId: string) {
+  return readTeacherProjectionAuthority(page, roomId, "echo.teacher_shadow");
+}
+
+function readTeacherTraceAuthority(page: Page, roomId: string) {
+  return readTeacherProjectionAuthority(page, roomId, "trace.teacher_bundle");
+}
+
+async function submitTeacherAnalyticsFact(
+  page: Page,
+  roomId: string,
+  buttonName: "提交審閱" | "提交修正",
+): Promise<void> {
+  const responsePromise = page.waitForResponse((response) => {
+    try {
+      return new URL(response.url()).pathname === routes.analytics.reviews(roomId)
+        && response.request().method() === "POST";
+    } catch {
+      return false;
+    }
+  });
+  await page.getByRole("button", { name: buttonName }).click();
+  const response = await responsePromise;
+  if (response.status() !== 200 && response.status() !== 201) {
+    fail(buttonName === "提交審閱"
+      ? "PILOT_REVIEW_REQUEST_REJECTED"
+      : "PILOT_CORRECTION_REQUEST_REJECTED");
+  }
 }
 
 async function readRoomThroughSeq(page: Page, roomId: string): Promise<number> {
@@ -477,7 +518,6 @@ test("real teacher and four-student classroom journey remains server-authoritati
       await expect(teacherTrace.getByRole("region", { name: "TRACE Inspector" }))
         .not.toContainText("從等價列表選擇節點或方向以查看說明。");
       await expect(teacherTrace.locator("svg.analysis-svg")).toHaveAttribute("aria-hidden", "true");
-      await teacherTrace.getByRole("button", { name: "暫停圖譜呈現" }).click();
 
       const teacherEcho = teacherPage.getByRole("region", { name: "概念與論證" });
       const echoListItem = teacherEcho.getByRole("list", { name: "概念關係等價列表" })
@@ -499,6 +539,13 @@ test("real teacher and four-student classroom journey remains server-authoritati
     });
 
     await test.step("submit real teacher Review and Correction through Worker replay", async () => {
+      const teacherTrace = teacherPage.getByRole("region", { name: "互動網絡" });
+      const beforeReviewTrace = await readTeacherTraceAuthority(teacherPage, roomId);
+      const pausedTraceVersion = await teacherTrace.locator(".analysis-version").innerText();
+      const pausedTraceTimeRange = await teacherTrace.locator(".analysis-time-range").innerText();
+      await teacherTrace.getByRole("button", { name: "暫停圖譜呈現" }).click();
+      await expect(teacherTrace.getByRole("button", { name: "顯示最新已驗證版本" })).toBeVisible();
+
       const firstArtifact = teacherPage.locator(".artifact-review-list button").first();
       await expect(firstArtifact).toBeVisible({ timeout: 60_000 });
       await firstArtifact.click();
@@ -509,17 +556,41 @@ test("real teacher and four-student classroom journey remains server-authoritati
       ).completeThroughRoomSeq, { timeout: 60_000 }).toBe(beforeReviewRoomSeq);
       const beforeReview = await readTeacherEchoAuthority(teacherPage, roomId);
       await teacherPage.getByLabel("審閱理由").fill("原始文字與目前概念關係一致。");
-      await teacherPage.getByRole("button", { name: "提交審閱" }).click();
-      await expect(teacherPage.locator(".teacher-action-status")).toContainText("審閱已記錄", { timeout: 30_000 });
+      await submitTeacherAnalyticsFact(teacherPage, roomId, "提交審閱");
       await expect.poll(async () => (
         await readTeacherEchoAuthority(teacherPage, roomId)
       ).completeThroughRoomSeq, { timeout: 60_000 }).toBeGreaterThan(beforeReview.completeThroughRoomSeq);
+      await expect.poll(async () => (
+        await readTeacherEchoAuthority(teacherPage, roomId)
+      ).analysisEpoch, { timeout: 60_000 }).not.toBe(beforeReview.analysisEpoch);
 
       const afterReview = await readTeacherEchoAuthority(teacherPage, roomId);
       if (`${afterReview.analysisEpoch}:${afterReview.projectionVersion}`
         === `${beforeReview.analysisEpoch}:${beforeReview.projectionVersion}`) {
         fail("PILOT_REVIEW_PROJECTION_AUTHORITY_UNCHANGED");
       }
+      await expect.poll(async () => (
+        await readTeacherTraceAuthority(teacherPage, roomId)
+      ).analysisEpoch, { timeout: 60_000 }).not.toBe(beforeReviewTrace.analysisEpoch);
+      const afterReviewTrace = await readTeacherTraceAuthority(teacherPage, roomId);
+      if (afterReviewTrace.completeThroughRoomSeq <= beforeReviewTrace.completeThroughRoomSeq) {
+        fail("PILOT_REVIEW_TRACE_CURSOR_UNCHANGED");
+      }
+      if (`${afterReviewTrace.analysisEpoch}:${afterReviewTrace.projectionVersion}`
+        === `${beforeReviewTrace.analysisEpoch}:${beforeReviewTrace.projectionVersion}`) {
+        fail("PILOT_REVIEW_TRACE_AUTHORITY_UNCHANGED");
+      }
+
+      await expect(teacherTrace.getByRole("button", { name: "顯示最新已驗證版本" })).toBeVisible();
+      await expect(teacherTrace.getByText(/背景已驗證 1 個較新版本/u)).toBeVisible({ timeout: 60_000 });
+      await expect(teacherTrace.locator(".analysis-version")).toHaveText(pausedTraceVersion);
+      await expect(teacherTrace.locator(".analysis-time-range")).toHaveText(pausedTraceTimeRange);
+      await teacherTrace.getByRole("button", { name: "顯示最新已驗證版本" }).click();
+      await expect(teacherTrace.getByRole("button", { name: "暫停圖譜呈現" })).toBeVisible();
+      await expect(teacherTrace.getByText(/背景已驗證 \d+ 個較新版本/u)).toHaveCount(0);
+      await expect(teacherTrace.locator(".analysis-version")).toHaveText(`v${afterReviewTrace.projectionVersion}`);
+      await expect(teacherTrace.locator(".analysis-time-range")).not.toHaveText(pausedTraceTimeRange);
+
       const correctionArtifact = teacherPage.locator(".artifact-review-list button").first();
       await expect(correctionArtifact).toBeVisible({ timeout: 60_000 });
       await correctionArtifact.click();
@@ -528,20 +599,19 @@ test("real teacher and four-student classroom journey remains server-authoritati
       await teacherPage.getByLabel("替換文字").fill("修正後：太陽能由生產者轉換，並沿食物鏈傳遞。");
       await teacherPage.getByLabel("修正理由").fill("補充能量轉換與傳遞的完整表述。");
       await expect(teacherPage.getByRole("button", { name: "提交修正" })).toBeEnabled();
-      await teacherPage.getByRole("button", { name: "提交修正" }).click();
-      await expect(teacherPage.locator(".teacher-action-status")).toContainText("修正已記錄", { timeout: 30_000 });
+      await submitTeacherAnalyticsFact(teacherPage, roomId, "提交修正");
       await expect.poll(async () => (
         await readTeacherEchoAuthority(teacherPage, roomId)
       ).completeThroughRoomSeq, { timeout: 60_000 }).toBeGreaterThan(afterReview.completeThroughRoomSeq);
+      await expect.poll(async () => (
+        await readTeacherEchoAuthority(teacherPage, roomId)
+      ).analysisEpoch, { timeout: 60_000 }).not.toBe(afterReview.analysisEpoch);
       const afterCorrection = await readTeacherEchoAuthority(teacherPage, roomId);
       if (`${afterCorrection.analysisEpoch}:${afterCorrection.projectionVersion}`
         === `${afterReview.analysisEpoch}:${afterReview.projectionVersion}`) {
         fail("PILOT_CORRECTION_PROJECTION_AUTHORITY_UNCHANGED");
       }
 
-      await expect(teacherPage.getByText(/背景已驗證 \d+ 個較新版本/u)).toBeVisible({ timeout: 60_000 });
-      await teacherPage.getByRole("button", { name: "顯示最新已驗證版本" }).click();
-      await expect(teacherPage.getByRole("button", { name: "暫停圖譜呈現" })).toBeVisible();
       await assertNoUuidInVisibleText(teacherPage);
     });
 

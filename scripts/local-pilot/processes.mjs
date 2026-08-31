@@ -56,7 +56,7 @@ export function buildLocalProcessSpecs({ checkout, nodePath, pythonPath, tls, en
         "--experimental-https-key", tls.privateKeyPath,
         "--experimental-https-cert", tls.certificatePath,
       ],
-      cwd: checkout,
+      cwd: resolve(checkout, "apps/web"),
       env: environments.next,
       shell: false,
     },
@@ -80,18 +80,23 @@ function waitWithTimeout(promise, milliseconds) {
 export class OwnedProcessSet {
   #spawn;
   #stopTimeoutMs;
+  #commandEvidence;
   #handles = [];
 
   failures = [];
   stopOrder = [];
 
-  constructor({ spawn = nodeSpawn, stopTimeoutMs = 10_000 } = {}) {
+  constructor({ spawn = nodeSpawn, stopTimeoutMs = 10_000, commandEvidence } = {}) {
     if (typeof spawn !== "function" || !Number.isSafeInteger(stopTimeoutMs)
-      || stopTimeoutMs < 1 || stopTimeoutMs > 60_000) {
+      || stopTimeoutMs < 1 || stopTimeoutMs > 60_000
+      || (commandEvidence !== undefined
+        && (typeof commandEvidence?.assertCommand !== "function"
+          || typeof commandEvidence?.recordCommand !== "function"))) {
       fail("LOCAL_PILOT_PROCESS_SUPERVISOR_INVALID");
     }
     this.#spawn = spawn;
     this.#stopTimeoutMs = stopTimeoutMs;
+    this.#commandEvidence = commandEvidence;
   }
 
   start(spec) {
@@ -99,6 +104,20 @@ export class OwnedProcessSet {
     if (this.#handles.some((handle) => handle.name === spec.name)) {
       fail("LOCAL_PILOT_CHILD_DUPLICATE");
     }
+    this.#commandEvidence?.assertCommand({ executable: spec.executable, argv: spec.argv });
+    const startedAt = new Date().toISOString();
+    // This receipt covers only the synchronous spawn attempt. Readiness and
+    // eventual process termination are separate dynamic checks in the pilot
+    // workflow, so an accepted spawn can never stand in for a healthy child.
+    const recordLaunch = (exitCode) => this.#commandEvidence?.recordCommand({
+      executable: spec.executable,
+      argv: spec.argv,
+      exitCode,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      stdout: "",
+      stderr: "",
+    });
     let child;
     try {
       child = this.#spawn(spec.executable, [...spec.argv], {
@@ -109,15 +128,19 @@ export class OwnedProcessSet {
         windowsHide: true,
       });
     } catch {
+      recordLaunch(1);
       fail(`LOCAL_PILOT_CHILD_FAILED_${spec.name}`);
     }
     if (!child || typeof child.on !== "function" || typeof child.kill !== "function") {
+      recordLaunch(1);
       fail(`LOCAL_PILOT_CHILD_FAILED_${spec.name}`);
     }
     if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
       child.on("error", () => undefined);
+      recordLaunch(1);
       fail(`LOCAL_PILOT_CHILD_FAILED_${spec.name}`);
     }
+    recordLaunch(0);
     let resolveTerminal;
     const terminalPromise = new Promise((resolvePromise) => { resolveTerminal = resolvePromise; });
     const handle = {

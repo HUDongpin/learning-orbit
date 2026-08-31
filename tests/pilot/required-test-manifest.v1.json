@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 296
+      "expectedTests": 308
     },
     {
       "id": "web-vitest",
@@ -47,7 +47,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/web-vitest.summary.json",
-      "expectedTests": 278
+      "expectedTests": 284
     },
     {
       "id": "pilot-harness-vitest",
@@ -64,7 +64,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/pilot-harness-vitest.summary.json",
-      "expectedTests": 74
+      "expectedTests": 80
     },
     {
       "id": "worker-python",

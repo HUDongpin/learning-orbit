@@ -236,6 +236,7 @@ export async function executeRequiredGateSet({
         endedAt: timestamp(now),
         exitCode: 0,
         reportSha256: createHash("sha256").update(summaryBytes).digest("hex"),
+        summary: Object.freeze({ ...summary }),
         noSkipCount: summary.skipped + summary.pending + summary.focused,
         expectedTests: gate.expectedTests,
       });
@@ -253,6 +254,7 @@ export async function executeRequiredGateSet({
         reportSha256: summaryBytes
           ? createHash("sha256").update(summaryBytes).digest("hex")
           : null,
+        summary: summary ? Object.freeze({ ...summary }) : null,
         noSkipCount: summary ? summary.skipped + summary.pending + summary.focused : null,
         expectedTests: gate.expectedTests,
       }));

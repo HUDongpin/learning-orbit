@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  assertOwnedDirectory,
   assertOwnershipMarker,
   buildRunIdentity,
   removeOwnedDirectory,
@@ -30,7 +31,8 @@ async function realDirectory(path, code) {
   return realpath(path);
 }
 
-async function runGit(sourceRepository, args) {
+async function runGit(sourceRepository, args, commandEvidence) {
+  const startedAt = new Date().toISOString();
   try {
     const env = {
       GIT_CONFIG_NOSYSTEM: "1",
@@ -41,9 +43,10 @@ async function runGit(sourceRepository, args) {
       const value = process.env[name];
       if (typeof value === "string" && value.length > 0 && !value.includes("\u0000")) env[name] = value;
     }
-    return await execFileAsync("git", [
+    const argv = [
       "-c", "core.hooksPath=/dev/null", "-C", sourceRepository, ...args,
-    ], {
+    ];
+    const result = await execFileAsync("git", argv, {
       encoding: "utf8",
       env,
       maxBuffer: 1024 * 1024,
@@ -51,7 +54,26 @@ async function runGit(sourceRepository, args) {
       timeout: 60_000,
       killSignal: "SIGTERM",
     });
-  } catch {
+    commandEvidence?.recordCommand({
+      executable: "git",
+      argv,
+      exitCode: 0,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
+    return result;
+  } catch (error) {
+    commandEvidence?.recordCommand({
+      executable: "git",
+      argv: ["-c", "core.hooksPath=/dev/null", "-C", sourceRepository, ...args],
+      exitCode: Number.isSafeInteger(error?.code) ? error.code : 1,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      stdout: error?.stdout,
+      stderr: error?.stderr,
+    });
     fail("LOCAL_PILOT_GIT_COMMAND_FAILED");
   }
 }
@@ -116,22 +138,27 @@ export async function createDetachedPilotWorktree({
   sourceRepository,
   targetParent,
   identity,
-  runCommand = runGit,
+  runCommand,
+  commandEvidence,
 }) {
   assertIdentity(identity);
-  if (typeof runCommand !== "function") fail("LOCAL_PILOT_WORKTREE_RUNNER_INVALID");
+  if ((runCommand !== undefined && typeof runCommand !== "function")
+    || (commandEvidence !== undefined && typeof commandEvidence?.recordCommand !== "function")) {
+    fail("LOCAL_PILOT_WORKTREE_RUNNER_INVALID");
+  }
+  const runner = runCommand ?? ((source, args) => runGit(source, args, commandEvidence));
   const source = await realDirectory(sourceRepository, "LOCAL_PILOT_SOURCE_REPOSITORY_INVALID");
   const parent = await realDirectory(targetParent, "LOCAL_PILOT_TARGET_PARENT_INVALID");
-  await assertSourceSnapshot(source, identity, runCommand);
+  await assertSourceSnapshot(source, identity, runner);
   const runDirectory = join(parent, `lo-pilot-run-${identity.runId}`);
   const worktreePath = join(runDirectory, "checkout");
   const markerPath = await writeOwnershipMarker(runDirectory, identity);
   try {
-    await runCommand(source, ["worktree", "add", "--detach", worktreePath, identity.sourceSha]);
+    await runner(source, ["worktree", "add", "--detach", worktreePath, identity.sourceSha]);
     const [{ stdout: checkoutHead }, { stdout: checkoutBranch }, records] = await Promise.all([
-      runCommand(worktreePath, ["rev-parse", "HEAD"]),
-      runCommand(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]),
-      registeredWorktrees(source, runCommand),
+      runner(worktreePath, ["rev-parse", "HEAD"]),
+      runner(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      registeredWorktrees(source, runner),
     ]);
     const registered = records.filter((record) => resolve(record.path) === resolve(worktreePath));
     if (checkoutHead.trim() !== identity.sourceSha || checkoutBranch.trim() !== "HEAD"
@@ -142,12 +169,12 @@ export async function createDetachedPilotWorktree({
     return Object.freeze({ runDirectory, worktreePath, markerPath });
   } catch (error) {
     try {
-      const records = await registeredWorktrees(source, runCommand);
+      const records = await registeredWorktrees(source, runner);
       const registered = records.filter((record) => resolve(record.path) === resolve(worktreePath));
       if (registered.length > 1) fail("LOCAL_PILOT_WORKTREE_SETUP_CLEANUP_FAILED");
       if (registered.length === 1) {
-        await runCommand(source, ["worktree", "remove", "--force", worktreePath]);
-        const remaining = await registeredWorktrees(source, runCommand);
+        await runner(source, ["worktree", "remove", "--force", worktreePath]);
+        const remaining = await registeredWorktrees(source, runner);
         if (remaining.some((record) => resolve(record.path) === resolve(worktreePath))) {
           fail("LOCAL_PILOT_WORKTREE_SETUP_CLEANUP_FAILED");
         }
@@ -163,8 +190,20 @@ export async function createDetachedPilotWorktree({
   }
 }
 
-export async function removeDetachedPilotWorktree({ sourceRepository, targetParent, owned, identity }) {
+export async function removeDetachedPilotWorktree({
+  sourceRepository,
+  targetParent,
+  owned,
+  identity,
+  runCommand,
+  commandEvidence,
+}) {
   assertIdentity(identity);
+  if ((runCommand !== undefined && typeof runCommand !== "function")
+    || (commandEvidence !== undefined && typeof commandEvidence?.recordCommand !== "function")) {
+    fail("LOCAL_PILOT_WORKTREE_RUNNER_INVALID");
+  }
+  const runner = runCommand ?? ((sourcePath, args) => runGit(sourcePath, args, commandEvidence));
   const source = await realDirectory(sourceRepository, "LOCAL_PILOT_SOURCE_REPOSITORY_INVALID");
   const parent = await realDirectory(targetParent, "LOCAL_PILOT_TARGET_PARENT_INVALID");
   if (!owned || resolve(owned.runDirectory) !== resolve(join(parent, `lo-pilot-run-${identity.runId}`))
@@ -177,16 +216,41 @@ export async function removeDetachedPilotWorktree({ sourceRepository, targetPare
     fail("LOCAL_PILOT_OWNERSHIP_MARKER_INVALID");
   }
   assertOwnershipMarker(JSON.parse(await readFile(owned.markerPath, "utf8")), identity);
-  const records = await registeredWorktrees(source);
+  await assertOwnedDirectory({
+    directory: owned.runDirectory,
+    expectedParent: parent,
+    identity,
+  });
+  const records = await registeredWorktrees(source, runner);
   const registered = records.filter((record) => resolve(record.path) === resolve(owned.worktreePath));
   if (registered.length !== 1 || registered[0].sha !== identity.sourceSha
     || registered[0].detached !== true) {
     fail("LOCAL_PILOT_WORKTREE_REGISTRATION_MISMATCH");
   }
-  await runGit(source, ["worktree", "remove", "--force", owned.worktreePath]);
-  const remaining = await registeredWorktrees(source);
+  let finalStateFailure;
+  try {
+    const { stdout: headBefore } = await runner(owned.worktreePath, ["rev-parse", "HEAD"]);
+    const { stdout: status } = await runner(
+      owned.worktreePath,
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    );
+    const { stdout: headAfter } = await runner(owned.worktreePath, ["rev-parse", "HEAD"]);
+    if (headBefore.trim() !== identity.sourceSha || headAfter.trim() !== identity.sourceSha) {
+      finalStateFailure = "LOCAL_PILOT_WORKTREE_FINAL_SHA_DRIFT";
+    } else if (status !== "") {
+      finalStateFailure = "LOCAL_PILOT_WORKTREE_FINAL_DIRTY";
+    }
+  } catch {
+    finalStateFailure = "LOCAL_PILOT_WORKTREE_FINAL_CHECK_FAILED";
+  }
+  // The exact registration, detached SHA and owner marker above are the
+  // deletion capability. Even when final-state evidence fails, remove only
+  // this proven run-owned checkout, then surface the failure to the workflow.
+  await runner(source, ["worktree", "remove", "--force", owned.worktreePath]);
+  const remaining = await registeredWorktrees(source, runner);
   if (remaining.some((record) => resolve(record.path) === resolve(owned.worktreePath))) {
     fail("LOCAL_PILOT_WORKTREE_REMOVE_FAILED");
   }
   await removeOwnedDirectory({ directory: owned.runDirectory, expectedParent: parent, identity });
+  if (finalStateFailure) fail(finalStateFailure);
 }

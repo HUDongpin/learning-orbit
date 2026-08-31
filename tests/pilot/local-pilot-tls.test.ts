@@ -8,6 +8,7 @@ import {
   createLocalTlsMaterial,
   removeLocalTlsMaterial,
 } from "../../scripts/local-pilot/tls.mjs";
+import { createLocalPilotEvidenceRecorder } from "../../scripts/local-pilot/stage-evidence.mjs";
 
 describe("local pilot TLS material", () => {
   const cleanup: string[] = [];
@@ -18,10 +19,12 @@ describe("local pilot TLS material", () => {
   it("creates short-lived 0600 material with both required SANs", async () => {
     const parent = await mkdtemp(join(tmpdir(), "lo-pilot-tls-parent-"));
     cleanup.push(parent);
+    const commandEvidence = createLocalPilotEvidenceRecorder({ id: "disposable-worktree" });
     const material = await createLocalTlsMaterial({
       parentDirectory: parent,
       runId: "fedcba9876543210",
       opensslPath: OPENSSL_PATH,
+      commandEvidence,
     });
     expect((await stat(material.directory)).mode & 0o777).toBe(0o700);
     expect((await stat(material.privateKeyPath)).mode & 0o777).toBe(0o600);
@@ -30,6 +33,14 @@ describe("local pilot TLS material", () => {
     expect(material.sans).toEqual(["IP:127.0.0.1", "DNS:localhost"]);
     expect(material.notAfter.getTime()).toBeGreaterThan(Date.now());
     expect(material.notAfter.getTime()).toBeLessThanOrEqual(Date.now() + 25 * 60 * 60 * 1000);
+    expect(commandEvidence.snapshot().commands).toEqual([
+      expect.objectContaining({
+        argv: expect.arrayContaining(["openssl", "req", "<absolute:key.pem>", "<absolute:cert.pem>"]),
+        exitCode: 0,
+        outputSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+    ]);
+    expect(JSON.stringify(commandEvidence.snapshot())).not.toContain(parent);
 
     await removeLocalTlsMaterial(material, parent);
     await expect(stat(material.directory)).rejects.toMatchObject({ code: "ENOENT" });

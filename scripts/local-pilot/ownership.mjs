@@ -1,5 +1,5 @@
 import { chmod, lstat, mkdir, open, readFile, realpath, rm } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 const MARKER_NAME = "ownership.json";
 const MARKER_KEYS = Object.freeze([
@@ -65,18 +65,18 @@ export async function writeOwnershipMarker(directory, identity) {
   if (!isAbsolute(directory)) fail("LOCAL_PILOT_DIRECTORY_INVALID");
   const parent = dirname(directory);
   const actualParent = await assertRealDirectory(parent);
-  if (resolve(parent) !== actualParent) fail("LOCAL_PILOT_DIRECTORY_INVALID");
+  const actualDirectory = join(actualParent, basename(directory));
   try {
-    await mkdir(directory, { mode: 0o700, recursive: false });
+    await mkdir(actualDirectory, { mode: 0o700, recursive: false });
   } catch (error) {
     if (error && typeof error === "object" && error.code === "EEXIST") {
       fail("LOCAL_PILOT_TARGET_ALREADY_EXISTS");
     }
     fail("LOCAL_PILOT_DIRECTORY_CREATE_FAILED");
   }
-  await chmod(directory, 0o700);
-  await assertRealDirectory(directory);
-  const markerPath = join(directory, MARKER_NAME);
+  await chmod(actualDirectory, 0o700);
+  await assertRealDirectory(actualDirectory);
+  const markerPath = join(actualDirectory, MARKER_NAME);
   let handle;
   try {
     handle = await open(markerPath, "wx", 0o600);
@@ -86,16 +86,15 @@ export async function writeOwnershipMarker(directory, identity) {
     await chmod(markerPath, 0o600);
   } catch {
     await handle?.close().catch(() => undefined);
-    await rm(directory, { recursive: true, force: true });
+    await rm(actualDirectory, { recursive: true, force: true });
     fail("LOCAL_PILOT_OWNERSHIP_MARKER_WRITE_FAILED");
   }
   return markerPath;
 }
 
-export async function removeOwnedDirectory({ directory, expectedParent, identity }) {
+export async function assertOwnedDirectory({ directory, expectedParent, identity }) {
   buildRunIdentity(identity);
   if (!isAbsolute(directory) || !isAbsolute(expectedParent)
-    || resolve(dirname(directory)) !== resolve(expectedParent)
     || basename(directory) !== `lo-pilot-run-${identity.runId}`) {
     fail("LOCAL_PILOT_DELETE_SCOPE_INVALID");
   }
@@ -117,5 +116,10 @@ export async function removeOwnedDirectory({ directory, expectedParent, identity
   }
   const marker = JSON.parse(await readFile(markerPath, "utf8"));
   assertOwnershipMarker(marker, identity);
-  await rm(actualDirectory, { recursive: true });
+  return Object.freeze({ directory: actualDirectory, markerPath });
+}
+
+export async function removeOwnedDirectory({ directory, expectedParent, identity }) {
+  const owned = await assertOwnedDirectory({ directory, expectedParent, identity });
+  await rm(owned.directory, { recursive: true });
 }

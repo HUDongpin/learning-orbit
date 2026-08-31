@@ -8,6 +8,7 @@ import {
   registerAndStartOwnedProcesses,
   waitForReadiness,
 } from "../../scripts/local-pilot/processes.mjs";
+import { createLocalPilotEvidenceRecorder } from "../../scripts/local-pilot/stage-evidence.mjs";
 import { CleanupStack } from "../../scripts/local-pilot/workflow.mjs";
 
 class FakeChild extends EventEmitter {
@@ -65,13 +66,19 @@ describe("run-owned application process lifecycle", () => {
       "--experimental-https-key", "/tmp/key.pem",
       "--experimental-https-cert", "/tmp/cert.pem",
     ]);
+    expect(specs[2]?.cwd).toBe(resolve(repoRoot, "apps/web"));
     expect(specs.every((spec) => spec.shell === false)).toBe(true);
   });
 
   it("starts in declared order and stops only its children in reverse order", async () => {
     const children = [new FakeChild(101), new FakeChild(102), new FakeChild(103)];
     const spawn = vi.fn(() => children.shift()!);
-    const processes = new OwnedProcessSet({ spawn, stopTimeoutMs: 1_000 });
+    const commandEvidence = createLocalPilotEvidenceRecorder({ id: "application-startup" });
+    const processes = new OwnedProcessSet({
+      spawn,
+      stopTimeoutMs: 1_000,
+      commandEvidence,
+    });
     const specs = ["fastify", "worker", "next"].map((name) => ({
       name,
       executable: `/approved/${name}`,
@@ -83,6 +90,9 @@ describe("run-owned application process lifecycle", () => {
     const handles = specs.map((spec) => processes.start(spec));
     expect(handles.map(({ pid }) => pid)).toEqual([101, 102, 103]);
     expect(spawn).toHaveBeenCalledTimes(3);
+    expect(commandEvidence.snapshot().commands).toHaveLength(3);
+    expect(commandEvidence.snapshot().commands.every(({ exitCode }) => exitCode === 0)).toBe(true);
+    expect(JSON.stringify(commandEvidence.snapshot())).not.toContain("ROLE");
     await processes.stopAll();
     expect(handles.map(({ child }) => (child as FakeChild).signals)).toEqual([
       ["SIGTERM"],
@@ -92,11 +102,13 @@ describe("run-owned application process lifecycle", () => {
     expect(processes.stopOrder).toEqual(["next", "worker", "fastify"]);
 
     const partialChild = new FakeChild(104);
+    const partialEvidence = createLocalPilotEvidenceRecorder({ id: "application-startup" });
     const partial = new OwnedProcessSet({
       spawn: vi.fn()
         .mockReturnValueOnce(partialChild)
         .mockImplementationOnce(() => { throw new Error("sensitive spawn failure"); }),
       stopTimeoutMs: 1_000,
+      commandEvidence: partialEvidence,
     });
     const partialCleanup = new CleanupStack();
     expect(() => registerAndStartOwnedProcesses({
@@ -104,8 +116,14 @@ describe("run-owned application process lifecycle", () => {
       specs: specs.slice(0, 2),
       cleanup: partialCleanup,
     })).toThrow("LOCAL_PILOT_CHILD_FAILED_worker");
-    expect(await partialCleanup.run()).toEqual([{ id: "application-processes", status: "passed" }]);
+    expect(await partialCleanup.run()).toEqual([{
+      id: "application-processes",
+      status: "passed",
+      failureCode: null,
+    }]);
     expect(partialChild.signals).toEqual(["SIGTERM"]);
+    expect(partialEvidence.snapshot().commands.map(({ exitCode }) => exitCode)).toEqual([0, 1]);
+    expect(JSON.stringify(partialEvidence.snapshot())).not.toContain("sensitive spawn failure");
   });
 
   it("records an early child error once even if exit follows", () => {

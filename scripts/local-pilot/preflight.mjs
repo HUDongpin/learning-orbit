@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { lstat, readFile, realpath, statfs as nodeStatfs } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
@@ -15,6 +17,12 @@ export const MAILPIT_IMAGE = "axllent/mailpit:v1.31.0@sha256:c96991d9bef73594c24
 export const PLAYWRIGHT_TEST_VERSION = "1.62.1";
 export const PLAYWRIGHT_CHROMIUM_REVISION = "1234";
 export const PLAYWRIGHT_CHROMIUM_VERSION = "151.0.7922.34";
+export const RUNTIME_EXECUTABLE_SHA256 = Object.freeze({
+  node: "27db838bb204ef7c21df2931f5656e4c8fb32e6e947f363a402b49714d32b5b1",
+  pnpm: "cbed0a17e28f10bc29cfd6ea913043aac47a3169ed39a6e5290f0b4b1cc7dae8",
+  pnpmCli: "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+  python: "71720f1fc66989ebd691e81c96111b47ae6ff3f1a478666084d1cacbf0fccbf2",
+});
 
 const CHROMIUM_EXECUTABLE_RELATIVE = [
   "chrome-mac-arm64",
@@ -35,6 +43,82 @@ export function assertRuntimeFingerprints({ node, pnpm, python }) {
     fail("LOCAL_PILOT_PYTHON_VERSION_MISMATCH");
   }
   return Object.freeze({ node: node.trim(), pnpm: pnpm.trim(), python: python.trim() });
+}
+
+async function fileFingerprint(path, { executable, allowRequestedSymlink }) {
+  if (!isAbsolute(path)) fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+  let requested;
+  let canonical;
+  let info;
+  try {
+    requested = await lstat(path);
+    canonical = await realpath(path);
+    info = await lstat(canonical);
+  } catch {
+    fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+  }
+  if ((!requested.isFile() && !(allowRequestedSymlink && requested.isSymbolicLink()))
+    || !info.isFile() || info.isSymbolicLink()
+    || (executable && (info.mode & 0o111) === 0)) {
+    fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+  }
+  const hash = createHash("sha256");
+  try {
+    for await (const chunk of createReadStream(canonical)) hash.update(chunk);
+  } catch {
+    fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+  }
+  return Object.freeze({ canonical, sha256: hash.digest("hex") });
+}
+
+export async function probeRuntimeExecutableFingerprints({ nodePath, pnpmPath, pythonPath }) {
+  const [node, pnpm, python] = await Promise.all([
+    fileFingerprint(nodePath, { executable: true, allowRequestedSymlink: true }),
+    fileFingerprint(pnpmPath, { executable: true, allowRequestedSymlink: true }),
+    fileFingerprint(pythonPath, { executable: true, allowRequestedSymlink: true }),
+  ]);
+  const expectedPnpmNode = resolve(dirname(pnpm.canonical), "../../node/bin/node");
+  const pnpmCliPath = resolve(dirname(pnpm.canonical), "../../node/node_modules/pnpm/bin/pnpm.mjs");
+  let canonicalPnpmNode;
+  try {
+    canonicalPnpmNode = await realpath(expectedPnpmNode);
+  } catch {
+    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+  }
+  if (canonicalPnpmNode !== node.canonical) {
+    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+  }
+  const pnpmCli = await fileFingerprint(pnpmCliPath, {
+    executable: false,
+    allowRequestedSymlink: false,
+  });
+  if (pnpmCli.canonical !== pnpmCliPath) {
+    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+  }
+  return Object.freeze({
+    node: node.sha256,
+    pnpm: pnpm.sha256,
+    pnpmCli: pnpmCli.sha256,
+    python: python.sha256,
+  });
+}
+
+export function assertRuntimeExecutableFingerprints(fingerprints) {
+  if (!fingerprints || typeof fingerprints !== "object" || Array.isArray(fingerprints)) {
+    fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+  }
+  for (const name of ["node", "pnpm", "pnpmCli", "python"]) {
+    if (fingerprints[name] !== RUNTIME_EXECUTABLE_SHA256[name]) {
+      const label = name === "pnpmCli" ? "PNPM_CLI" : name.toUpperCase();
+      fail(`LOCAL_PILOT_${label}_EXECUTABLE_MISMATCH`);
+    }
+  }
+  return Object.freeze({
+    nodeBinarySha256: RUNTIME_EXECUTABLE_SHA256.node,
+    pnpmBinarySha256: RUNTIME_EXECUTABLE_SHA256.pnpm,
+    pnpmCliSha256: RUNTIME_EXECUTABLE_SHA256.pnpmCli,
+    pythonBinarySha256: RUNTIME_EXECUTABLE_SHA256.python,
+  });
 }
 
 function assertManagedChromiumInstall(fingerprint, homeDirectory) {
@@ -286,13 +370,15 @@ export async function captureLocalPilotPreflight({
   statFileSystem = nodeStatfs,
   checkPort = checkLoopbackPortFree,
   browserProbe = probeManagedPlaywrightChromium,
+  runtimeExecutableProbe = probeRuntimeExecutableFingerprints,
   baseEnvironment = process.env,
 }) {
   if (!isAbsolute(repository) || !isAbsolute(nodePath) || !isAbsolute(pnpmPath)
     || !isAbsolute(pythonPath) || opensslPath !== "/opt/homebrew/bin/openssl"
     || typeof dockerPath !== "string" || dockerPath.length === 0
     || typeof runCommand !== "function" || typeof statFileSystem !== "function"
-    || typeof checkPort !== "function" || typeof browserProbe !== "function") {
+    || typeof checkPort !== "function" || typeof browserProbe !== "function"
+    || typeof runtimeExecutableProbe !== "function") {
     fail("LOCAL_PILOT_PREFLIGHT_CONFIG_INVALID");
   }
   const tempRoot = baseEnvironment?.TMPDIR;
@@ -337,6 +423,7 @@ export async function captureLocalPilotPreflight({
   }
 
   let runtime;
+  let runtimeExecutables;
   let openssl;
   let compose;
   let dockerServer;
@@ -353,6 +440,11 @@ export async function captureLocalPilotPreflight({
       pnpm: pnpm.stdout,
       python: python.stdout,
     });
+    runtimeExecutables = assertRuntimeExecutableFingerprints(await runtimeExecutableProbe({
+      nodePath,
+      pnpmPath,
+      pythonPath,
+    }));
     openssl = opensslResult.stdout.trim();
     compose = composeResult.stdout.trim();
     if (!/^OpenSSL 3\.[0-9]+\.[0-9]+\b/.test(openssl)
@@ -410,6 +502,7 @@ export async function captureLocalPilotPreflight({
   return Object.freeze({
     ...git,
     ...runtime,
+    ...runtimeExecutables,
     availableBytes,
     tempAvailableBytes,
     tempRoot,

@@ -119,6 +119,8 @@ describe("local pilot closed required-test execution", () => {
         { id: "contracts-vitest", exitCode: 0, noSkipCount: 0, reportSha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
         { id: "server-vitest", exitCode: 0, noSkipCount: 0, reportSha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
       ]);
+    expect(result.every(({ summary }) => summary.expected === 2
+      && summary.executed === 2 && summary.passed === 2)).toBe(true);
   });
 
   it("fails fast on a skipped required test and never runs the next gate", async () => {

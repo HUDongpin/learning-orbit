@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildRunIdentity } from "../../scripts/local-pilot/ownership.mjs";
+import { createLocalPilotEvidenceRecorder } from "../../scripts/local-pilot/stage-evidence.mjs";
 import {
   createDetachedPilotWorktree,
   parseWorktreePorcelain,
@@ -53,25 +54,32 @@ describe("disposable detached pilot worktree", () => {
       sourceSha: stdout.trim(),
       creatorPid: process.pid,
     });
+    const commandEvidence = createLocalPilotEvidenceRecorder({ id: "disposable-worktree" });
 
     const owned = await createDetachedPilotWorktree({
       sourceRepository: source,
       targetParent: runParent,
       identity,
+      commandEvidence,
     });
-    expect(owned.worktreePath).toBe(join(runParent, `lo-pilot-run-${identity.runId}`, "checkout"));
+    expect(owned.worktreePath).toBe(join(
+      await realpath(runParent),
+      `lo-pilot-run-${identity.runId}`,
+      "checkout",
+    ));
     expect((await readFile(join(owned.worktreePath, "tracked.txt"), "utf8"))).toBe("baseline\n");
     expect((await stat(owned.markerPath)).mode & 0o777).toBe(0o600);
     expect((await execFileAsync("git", ["-C", owned.worktreePath, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim()).toBe("HEAD");
 
     await writeFile(join(owned.worktreePath, "derived-output.txt"), "owned output\n");
     await writeFile(join(source, "tracked.txt"), "source drift must survive cleanup\n");
-    await removeDetachedPilotWorktree({
+    await expect(removeDetachedPilotWorktree({
       sourceRepository: source,
       targetParent: runParent,
       owned,
       identity,
-    });
+      commandEvidence,
+    })).rejects.toThrow("LOCAL_PILOT_WORKTREE_FINAL_DIRTY");
     await expect(stat(owned.runDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     const listed = parseWorktreePorcelain((await execFileAsync(
       "git", ["-C", source, "worktree", "list", "--porcelain", "-z"],
@@ -79,15 +87,19 @@ describe("disposable detached pilot worktree", () => {
     expect(listed.some((item) => item.path === owned.worktreePath)).toBe(false);
     expect(await readFile(join(source, "tracked.txt"), "utf8")).toBe("source drift must survive cleanup\n");
     expect((await execFileAsync("git", ["-C", source, "status", "--porcelain=v1"])).stdout.trim()).toBe("M tracked.txt");
+    expect(commandEvidence.snapshot().commands.length).toBeGreaterThan(0);
+    expect(commandEvidence.snapshot().commands.every(({ argv }) => argv[0] === "git")).toBe(true);
+    expect(JSON.stringify(commandEvidence.snapshot())).not.toContain(parent);
   });
 
   it("refuses a mismatched source SHA before registering a worktree", async () => {
     const parent = await mkdtemp(join(tmpdir(), "lo-pilot-worktree-parent-"));
     cleanup.push(parent);
-    const source = join(parent, "source");
+    const sourceInput = join(parent, "source");
     const runParent = join(parent, "runs");
-    await mkdir(source);
+    await mkdir(sourceInput);
     await mkdir(runParent);
+    const source = await realpath(sourceInput);
     await execFileAsync("git", ["-C", source, "init", "--quiet"]);
     await execFileAsync("git", ["-C", source, "config", "user.name", "Learning Orbit Test"]);
     await execFileAsync("git", ["-C", source, "config", "user.email", "local-pilot@example.invalid"]);
@@ -109,17 +121,22 @@ describe("disposable detached pilot worktree", () => {
   it("removes its exact registration when post-add verification fails", async () => {
     const parent = await mkdtemp(join(tmpdir(), "lo-pilot-worktree-parent-"));
     cleanup.push(parent);
-    const source = join(parent, "source");
+    const sourceInput = join(parent, "source");
     const runParent = join(parent, "runs");
-    await mkdir(source);
+    await mkdir(sourceInput);
     await mkdir(runParent);
+    const source = await realpath(sourceInput);
     const sha = "a".repeat(40);
     const identity = buildRunIdentity({
       runId: "1122334455667788",
       sourceSha: sha,
       creatorPid: process.pid,
     });
-    const worktreePath = join(runParent, `lo-pilot-run-${identity.runId}`, "checkout");
+    const worktreePath = join(
+      await realpath(runParent),
+      `lo-pilot-run-${identity.runId}`,
+      "checkout",
+    );
     let registered = false;
     const calls: string[] = [];
     const runCommand = async (cwd: string, argv: string[]) => {
@@ -187,5 +204,47 @@ describe("disposable detached pilot worktree", () => {
       identity,
     })).rejects.toThrow("LOCAL_PILOT_TARGET_ALREADY_EXISTS");
     expect(await readFile(join(preExisting, "owner-data.txt"), "utf8")).toBe("must survive\n");
+  });
+
+  it("validates owner-only marker mode before destructive worktree removal", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "lo-pilot-worktree-parent-"));
+    cleanup.push(parent);
+    const source = join(parent, "source");
+    const runParent = join(parent, "runs");
+    await mkdir(source);
+    await mkdir(runParent);
+    await execFileAsync("git", ["-C", source, "init", "--quiet"]);
+    await execFileAsync("git", ["-C", source, "config", "user.name", "Learning Orbit Test"]);
+    await execFileAsync("git", ["-C", source, "config", "user.email", "local-pilot@example.invalid"]);
+    await writeFile(join(source, "tracked.txt"), "baseline\n");
+    await execFileAsync("git", ["-C", source, "add", "--", "tracked.txt"]);
+    await execFileAsync("git", ["-C", source, "commit", "--quiet", "-m", "baseline"]);
+    const { stdout } = await execFileAsync("git", ["-C", source, "rev-parse", "HEAD"]);
+    const identity = buildRunIdentity({
+      runId: "cafebabecafebabe",
+      sourceSha: stdout.trim(),
+      creatorPid: process.pid,
+    });
+    const owned = await createDetachedPilotWorktree({
+      sourceRepository: source,
+      targetParent: runParent,
+      identity,
+    });
+    await chmod(owned.markerPath, 0o644);
+    let destructiveRemoveCalled = false;
+    const runCommand = async (cwd: string, argv: string[]) => {
+      if (argv[0] === "worktree" && argv[1] === "remove") destructiveRemoveCalled = true;
+      return execFileAsync("git", ["-C", cwd, ...argv], { encoding: "utf8" });
+    };
+
+    await expect(removeDetachedPilotWorktree({
+      sourceRepository: source,
+      targetParent: runParent,
+      owned,
+      identity,
+      runCommand,
+    })).rejects.toThrow("LOCAL_PILOT_OWNERSHIP_MARKER_INVALID");
+    expect(destructiveRemoveCalled).toBe(false);
+    expect(await readFile(join(owned.worktreePath, "tracked.txt"), "utf8")).toBe("baseline\n");
   });
 });

@@ -1,4 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +15,7 @@ import {
   assertPostgres18,
   assertPythonLockMinor,
   captureLocalPilotPreflight,
+  probeRuntimeExecutableFingerprints,
 } from "../../scripts/local-pilot/preflight.mjs";
 
 const managedChromiumFingerprint = (overrides: Record<string, unknown> = {}) => ({
@@ -24,6 +28,13 @@ const managedChromiumFingerprint = (overrides: Record<string, unknown> = {}) => 
   executableMode: 0o100755,
   launchedChromiumVersion: "151.0.7922.34",
   closed: true,
+  ...overrides,
+});
+const runtimeExecutableFingerprints = (overrides: Record<string, unknown> = {}) => ({
+  node: "27db838bb204ef7c21df2931f5656e4c8fb32e6e947f363a402b49714d32b5b1",
+  pnpm: "cbed0a17e28f10bc29cfd6ea913043aac47a3169ed39a6e5290f0b4b1cc7dae8",
+  pnpmCli: "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+  python: "71720f1fc66989ebd691e81c96111b47ae6ff3f1a478666084d1cacbf0fccbf2",
   ...overrides,
 });
 
@@ -55,6 +66,39 @@ describe("local pilot preflight contracts", () => {
     expect(() => assertMinimumFreeBytes(MINIMUM_FREE_BYTES - 1)).toThrow(
       "LOCAL_PILOT_DISK_SPACE_INSUFFICIENT",
     );
+  });
+
+  it("fingerprints the pnpm wrapper, its actual CLI payload, and the wrapper-owned Node", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lo-pilot-runtime-closure-"));
+    try {
+      const nodePath = join(root, "node/bin/node");
+      const pnpmPath = join(root, "bin/fallback/pnpm");
+      const pnpmCliPath = join(root, "node/node_modules/pnpm/bin/pnpm.mjs");
+      const pythonPath = join(root, "python/bin/python3.12");
+      await Promise.all([
+        mkdir(join(root, "node/bin"), { recursive: true }),
+        mkdir(join(root, "bin/fallback"), { recursive: true }),
+        mkdir(join(root, "node/node_modules/pnpm/bin"), { recursive: true }),
+        mkdir(join(root, "python/bin"), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(nodePath, "pinned node\n"),
+        writeFile(pnpmPath, "pinned wrapper\n"),
+        writeFile(pnpmCliPath, "pinned pnpm payload\n"),
+        writeFile(pythonPath, "pinned python\n"),
+      ]);
+      await Promise.all([chmod(nodePath, 0o700), chmod(pnpmPath, 0o700), chmod(pythonPath, 0o700)]);
+
+      const result = await probeRuntimeExecutableFingerprints({ nodePath, pnpmPath, pythonPath });
+      expect(result.pnpmCli).toBe(createHash("sha256").update("pinned pnpm payload\n").digest("hex"));
+      expect(result.pnpm).not.toBe(result.pnpmCli);
+
+      await rm(pnpmCliPath);
+      await expect(probeRuntimeExecutableFingerprints({ nodePath, pnpmPath, pythonPath }))
+        .rejects.toThrow("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("pins the Python lock minor and both isolated service image digests", () => {
@@ -156,6 +200,7 @@ describe("local pilot preflight contracts", () => {
       statFileSystem: async () => ({ bavail: 30 * 1024 ** 3, bsize: 1 }),
       checkPort: async () => true,
       browserProbe: async () => managedChromiumFingerprint(),
+      runtimeExecutableProbe: async () => runtimeExecutableFingerprints(),
     };
     const result = await captureLocalPilotPreflight(captureOptions);
     expect(result).toMatchObject({
@@ -172,6 +217,10 @@ describe("local pilot preflight contracts", () => {
       chromiumVersion: "151.0.7922.34",
       chromiumExecutable: "managed",
       chromiumHeadlessLaunch: "passed",
+      nodeBinarySha256: runtimeExecutableFingerprints().node,
+      pnpmBinarySha256: runtimeExecutableFingerprints().pnpm,
+      pnpmCliSha256: runtimeExecutableFingerprints().pnpmCli,
+      pythonBinarySha256: runtimeExecutableFingerprints().python,
     });
     expect(calls.every(({ shell }) => shell === false)).toBe(true);
     expect(calls.every(({ env }) => !("FORBIDDEN_SECRET_SENTINEL" in env))).toBe(true);
@@ -183,6 +232,11 @@ describe("local pilot preflight contracts", () => {
     expect(verifySource).toContain("playwright: snapshot.playwright");
     expect(verifySource).toContain("chromiumRevision: snapshot.chromiumRevision");
     expect(verifySource).toContain("chromium: snapshot.chromiumVersion");
+    expect(verifySource).toContain("nodeBinarySha256: snapshot.nodeBinarySha256");
+    expect(verifySource).toContain("pnpmCliSha256: snapshot.pnpmCliSha256");
+    expect(verifySource).toContain("createLocalPilotEvidenceRecorder");
+    expect(verifySource).toContain("state.stageEvidence[stageId] = evidence");
+    expect(verifySource).not.toContain("STAGE_CHECKS");
 
     await expect(captureLocalPilotPreflight({
       ...captureOptions,
@@ -219,6 +273,14 @@ describe("local pilot preflight contracts", () => {
       ...captureOptions,
       browserProbe: async () => managedChromiumFingerprint({ closed: false }),
     })).rejects.toThrow("LOCAL_PILOT_CHROMIUM_CLOSE_FAILED");
+    await expect(captureLocalPilotPreflight({
+      ...captureOptions,
+      runtimeExecutableProbe: async () => runtimeExecutableFingerprints({ node: "0".repeat(64) }),
+    })).rejects.toThrow("LOCAL_PILOT_NODE_EXECUTABLE_MISMATCH");
+    await expect(captureLocalPilotPreflight({
+      ...captureOptions,
+      runtimeExecutableProbe: async () => runtimeExecutableFingerprints({ pnpmCli: "0".repeat(64) }),
+    })).rejects.toThrow("LOCAL_PILOT_PNPM_CLI_EXECUTABLE_MISMATCH");
   });
 
   it("turns Docker and listener failures into stable content-free codes", async () => {
@@ -242,12 +304,18 @@ describe("local pilot preflight contracts", () => {
       nodePath: "/approved/node",
       pnpmPath: "/approved/pnpm",
       pythonPath: "/approved/python",
+      baseEnvironment: {
+        PATH: "/approved/bin",
+        HOME: process.env.HOME ?? "/approved/home",
+        TMPDIR: tmpdir(),
+      },
       statFileSystem: async () => ({ bavail: 30 * 1024 ** 3, bsize: 1 }),
       checkPort: async () => true,
       browserProbe: async () => managedChromiumFingerprint({
         executablePath: `${process.env.HOME}/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
         realExecutablePath: `${process.env.HOME}/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
       }),
+      runtimeExecutableProbe: async () => runtimeExecutableFingerprints(),
     };
     await expect(captureLocalPilotPreflight({
       ...options,

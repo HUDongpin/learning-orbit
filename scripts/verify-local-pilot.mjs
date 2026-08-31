@@ -38,7 +38,6 @@ import {
 import {
   OwnedProcessSet,
   buildLocalProcessSpecs,
-  registerAndStartOwnedProcesses,
   waitForReadiness,
 } from "./local-pilot/processes.mjs";
 import {
@@ -46,6 +45,7 @@ import {
   assertRequiredGateEntrypoints,
   executeRequiredGateSet,
 } from "./local-pilot/required-test-runner.mjs";
+import { createLocalPilotEvidenceRecorder } from "./local-pilot/stage-evidence.mjs";
 import { createLocalTlsMaterial, removeLocalTlsMaterial } from "./local-pilot/tls.mjs";
 import {
   createDetachedPilotWorktree,
@@ -95,9 +95,12 @@ async function execute(executable, argv, {
   signal,
   capture = false,
   timeoutMs = COMMAND_TIMEOUT_MS,
+  evidence,
 }) {
+  const startedAt = new Date().toISOString();
+  let result;
   try {
-    const result = await execFileAsync(executable, argv, {
+    result = await execFileAsync(executable, argv, {
       cwd,
       env,
       shell: false,
@@ -108,11 +111,29 @@ async function execute(executable, argv, {
       timeout: timeoutMs,
       killSignal: "SIGTERM",
     });
-    return capture ? result : undefined;
   } catch (error) {
+    evidence?.recordCommand({
+      executable,
+      argv,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      exitCode: Number.isSafeInteger(error?.code) ? error.code : 1,
+      stdout: error?.stdout,
+      stderr: error?.stderr,
+    });
     if (signal?.aborted) throw new Error("LOCAL_PILOT_INTERRUPTED");
     throw new Error(code);
   }
+  evidence?.recordCommand({
+    executable,
+    argv,
+    startedAt,
+    endedAt: new Date().toISOString(),
+    exitCode: 0,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+  return capture ? result : undefined;
 }
 
 async function evidenceSet(root) {
@@ -120,12 +141,13 @@ async function evidenceSet(root) {
     .filter((entry) => entry.isFile() && entry.name.endsWith(suffix))
     .map((entry) => `${directory}/${entry.name}`)
     .sort();
-  const [migrations, schemas, contractGenerated, workerGenerated, prototype] = await Promise.all([
+  const [migrations, schemas, contractGenerated, workerGenerated, prototype, pilotScripts] = await Promise.all([
     list("infra/postgres/migrations", ".sql"),
     list("packages/contracts/schemas", ".json"),
     list("packages/contracts/src/generated", ".ts"),
     list("services/worker/src/learning_orbit_worker/generated", ".py"),
     list("packages/test-fixtures/prototype", ".html"),
+    list("scripts/local-pilot", ".mjs"),
   ]);
   return Object.freeze({
     dependencyLocks: Object.freeze(["pnpm-lock.yaml", "services/worker/requirements.lock"]),
@@ -141,6 +163,7 @@ async function evidenceSet(root) {
     browserAndGate: Object.freeze([
       "apps/web/playwright.config.ts",
       manifestRelative,
+      ...pilotScripts,
       "scripts/verify-local-pilot.mjs",
     ]),
     prototypeBaseline: Object.freeze(["packages/test-fixtures/prototype/baseline.json", ...prototype]),
@@ -178,8 +201,12 @@ function makeReceipt(workflow, snapshot, state) {
   const cleanupStatus = workflow.cleanup.every(({ status }) => status === "passed") ? "passed" : "failed";
   const runtimes = Object.freeze({
     node: snapshot.node,
+    nodeBinarySha256: snapshot.nodeBinarySha256,
     pnpm: snapshot.pnpm,
+    pnpmBinarySha256: snapshot.pnpmBinarySha256,
+    pnpmCliSha256: snapshot.pnpmCliSha256,
     python: snapshot.python,
+    pythonBinarySha256: snapshot.pythonBinarySha256,
     openssl: snapshot.openssl,
     compose: snapshot.compose,
     docker: snapshot.dockerServer,
@@ -195,6 +222,10 @@ function makeReceipt(workflow, snapshot, state) {
     hashes: state.hashes,
     cleanupStatus,
   }));
+  const cleanup = workflow.cleanup.map((entry) => Object.freeze({
+    ...entry,
+    ...(state.cleanupEvidence?.[entry.id]?.snapshot() ?? { checks: [], commands: [] }),
+  }));
   return Object.freeze({
     schemaVersion: 1,
     runId: workflow.runId,
@@ -206,9 +237,12 @@ function makeReceipt(workflow, snapshot, state) {
     endedAt: workflow.endedAt,
     runtimes,
     hashes: state.hashes,
-    stages: workflow.stages,
+    stages: workflow.stages.map((stage) => Object.freeze({
+      ...stage,
+      ...(state.stageEvidence?.[stage.id]?.snapshot() ?? { checks: [], commands: [] }),
+    })),
     gates,
-    cleanup: workflow.cleanup,
+    cleanup,
     noSkipCount: gates.every((gate) => Number.isSafeInteger(gate.noSkipCount))
       ? gates.reduce((sum, gate) => sum + gate.noSkipCount, 0)
       : null,
@@ -227,82 +261,128 @@ async function main() {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
-  const state = { gates: [] };
+  const state = {
+    gates: [],
+    stageEvidence: Object.create(null),
+    cleanupEvidence: Object.create(null),
+  };
+  const registerCleanup = (cleanup, id, work) => {
+    const evidence = createLocalPilotEvidenceRecorder({ id });
+    state.cleanupEvidence[id] = evidence;
+    cleanup.register(id, () => work(evidence));
+  };
   let snapshot;
   let workflow;
   try {
-    const operations = {
-      "disposable-worktree": async ({ identity, cleanup }) => {
+    const operationImplementations = {
+      "disposable-worktree": async ({ identity, cleanup, evidence }) => {
         state.identity = identity;
-        cleanup.register("final-state", async () => {
+        registerCleanup(cleanup, "final-state", async (cleanupEvidence) => {
           const runDocker = (argv) => execute(dockerPath, argv, {
             cwd: repository,
             env: commandEnvironment,
             code: "LOCAL_PILOT_COMPOSE_RESIDUE_CHECK_FAILED",
             capture: true,
+            evidence: cleanupEvidence,
           });
-          await assertComposeProjectAbsent({ identity, runDocker });
-          for (const path of [
-            state.worktree?.runDirectory,
-            state.material?.directory,
-            state.tls?.directory,
-          ].filter(Boolean)) {
-            try {
-              await lstat(path);
-              throw new Error("LOCAL_PILOT_TEMP_RESIDUE");
-            } catch (error) {
-              if (error?.code !== "ENOENT") throw error;
+          await cleanupEvidence.runCheck("compose-residue-absent", () => (
+            assertComposeProjectAbsent({ identity, runDocker })
+          ));
+          await cleanupEvidence.runCheck("temporary-material-absent", async () => {
+            for (const path of [
+              state.worktree?.runDirectory,
+              state.material?.directory,
+              state.tls?.directory,
+            ].filter(Boolean)) {
+              try {
+                await lstat(path);
+                throw new Error("LOCAL_PILOT_TEMP_RESIDUE");
+              } catch (error) {
+                if (error?.code !== "ENOENT") throw error;
+              }
             }
-          }
-          await assertFinalRepositoryState({
-            repository,
-            sourceSha: identity.sourceSha,
-            expectedHashes: state.hashes,
-            evidenceSet: state.evidenceSet,
           });
+          await cleanupEvidence.runCheck("repository-final-state", () => (
+            assertFinalRepositoryState({
+              repository,
+              sourceSha: identity.sourceSha,
+              expectedHashes: state.hashes,
+              evidenceSet: state.evidenceSet,
+              runGit: (argv) => execute("git", [
+                "-c", "core.hooksPath=/dev/null", "-C", repository, ...argv,
+              ], {
+                cwd: repository,
+                env: commandEnvironment,
+                code: "LOCAL_PILOT_FINAL_GIT_CHECK_FAILED",
+                capture: true,
+                evidence: cleanupEvidence,
+              }),
+            })
+          ));
         });
-        const tls = await createLocalTlsMaterial({
+        const tls = await evidence.runCheck("tls-material", () => createLocalTlsMaterial({
           parentDirectory: snapshot.tempRoot,
           runId: identity.runId,
-        });
+          commandEvidence: evidence,
+        }));
         state.tls = tls;
-        cleanup.register("tls-material", () => removeLocalTlsMaterial(tls, snapshot.tempRoot));
-        const material = await createRuntimeMaterial({ parentDirectory: snapshot.tempRoot, identity });
+        registerCleanup(cleanup, "tls-material", (cleanupEvidence) => (
+          cleanupEvidence.runCheck("remove-tls-material", () => (
+            removeLocalTlsMaterial(tls, snapshot.tempRoot)
+          ))
+        ));
+        const material = await evidence.runCheck("runtime-material", () => (
+          createRuntimeMaterial({ parentDirectory: snapshot.tempRoot, identity })
+        ));
         state.material = material;
-        cleanup.register("runtime-material", () => removeRuntimeMaterial({
-          material,
-          parentDirectory: snapshot.tempRoot,
-          identity,
-        }));
-        const worktree = await createDetachedPilotWorktree({
-          sourceRepository: repository,
-          targetParent: snapshot.tempRoot,
-          identity,
-        });
+        registerCleanup(cleanup, "runtime-material", (cleanupEvidence) => (
+          cleanupEvidence.runCheck("remove-runtime-material", () => removeRuntimeMaterial({
+            material,
+            parentDirectory: snapshot.tempRoot,
+            identity,
+          }))
+        ));
+        const worktree = await evidence.runCheck("detached-worktree", () => (
+          createDetachedPilotWorktree({
+            sourceRepository: repository,
+            targetParent: snapshot.tempRoot,
+            identity,
+            commandEvidence: evidence,
+          })
+        ));
         state.worktree = worktree;
-        cleanup.register("disposable-worktree", () => removeDetachedPilotWorktree({
-          sourceRepository: repository,
-          targetParent: snapshot.tempRoot,
-          owned: worktree,
-          identity,
-        }));
+        registerCleanup(cleanup, "disposable-worktree", (cleanupEvidence) => (
+          cleanupEvidence.runCheck("remove-detached-worktree", () => removeDetachedPilotWorktree({
+            sourceRepository: repository,
+            targetParent: snapshot.tempRoot,
+            owned: worktree,
+            identity,
+            commandEvidence: cleanupEvidence,
+          }))
+        ));
       },
-      "frozen-dependencies": async () => {
+      "frozen-dependencies": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
-        await execute(pnpmPath, ["install", "--frozen-lockfile"], {
+        await evidence.runCheck("pnpm-frozen-lock", () => execute(pnpmPath, ["install", "--frozen-lockfile"], {
           cwd: checkout,
           env: commandEnvironment,
           code: "LOCAL_PILOT_PNPM_INSTALL_FAILED",
           signal: abort.signal,
-        });
-        await execute(sourcePythonPath, ["-m", "venv", resolve(checkout, ".venv")], {
-          cwd: checkout,
-          env: commandEnvironment,
-          code: "LOCAL_PILOT_PYTHON_VENV_FAILED",
-          signal: abort.signal,
-        });
+          evidence,
+        }));
+        await evidence.runCheck("python-venv", () => execute(
+          sourcePythonPath,
+          ["-m", "venv", resolve(checkout, ".venv")],
+          {
+            cwd: checkout,
+            env: commandEnvironment,
+            code: "LOCAL_PILOT_PYTHON_VENV_FAILED",
+            signal: abort.signal,
+            evidence,
+          },
+        ));
         const python = resolve(checkout, ".venv/bin/python");
-        await execute(python, [
+        await evidence.runCheck("python-hash-lock", () => execute(python, [
           "-m", "pip", "install", "--disable-pip-version-check", "--no-input",
           "--require-hashes", "-r", workerLockRelative,
         ], {
@@ -310,10 +390,11 @@ async function main() {
           env: commandEnvironment,
           code: "LOCAL_PILOT_PYTHON_INSTALL_FAILED",
           signal: abort.signal,
-        });
+          evidence,
+        }));
         state.python = python;
       },
-      "isolated-postgres": async ({ identity, cleanup }) => {
+      "isolated-postgres": async ({ identity, cleanup, evidence }) => {
         const checkout = state.worktree.worktreePath;
         const composeFile = resolve(checkout, composeRelative);
         const composeEnvironment = buildComposeEnvironment({
@@ -327,58 +408,84 @@ async function main() {
           code: "LOCAL_PILOT_DOCKER_COMMAND_FAILED",
           signal: abort.signal,
           capture: true,
+          evidence,
         });
-        await assertComposeProjectAbsent({ identity, runDocker });
-        await execute(dockerPath, [...buildComposeArgv({ identity, composeFile, operation: "config" }), "--quiet"], {
-          cwd: checkout,
-          env: composeEnvironment,
-          code: "LOCAL_PILOT_COMPOSE_CONFIG_FAILED",
-          signal: abort.signal,
-        });
+        await evidence.runCheck("compose-project-absent", () => (
+          assertComposeProjectAbsent({ identity, runDocker })
+        ));
+        await evidence.runCheck("compose-config", () => execute(
+          dockerPath,
+          [...buildComposeArgv({ identity, composeFile, operation: "config" }), "--quiet"],
+          {
+            cwd: checkout,
+            env: composeEnvironment,
+            code: "LOCAL_PILOT_COMPOSE_CONFIG_FAILED",
+            signal: abort.signal,
+            evidence,
+          },
+        ));
         const marker = JSON.parse(await readFile(state.worktree.markerPath, "utf8"));
         // Register cleanup before `up`: Docker Compose may create a network,
         // volume, or one healthy container and then return a non-zero status.
         // Teardown re-discovers the exact random project and derives its down
         // capability only when every discovered resource still carries this
         // run's labels and marker tuple.
-        cleanup.register("compose-project", async () => {
+        registerCleanup(cleanup, "compose-project", async (cleanupEvidence) => {
           const cleanupRunDocker = (argv) => execute(dockerPath, argv, {
             cwd: checkout,
             env: composeEnvironment,
             code: "LOCAL_PILOT_COMPOSE_CLEANUP_FAILED",
             capture: true,
+            evidence: cleanupEvidence,
           });
           const currentMarker = JSON.parse(await readFile(state.worktree.markerPath, "utf8"));
-          const cleanupOwnership = await inspectComposeCleanupOwnership({
-            identity,
-            marker: currentMarker,
-            composeFile,
-            runDocker: cleanupRunDocker,
-          });
-          if (cleanupOwnership) {
-            await execute(dockerPath, buildComposeArgv({
+          const cleanupOwnership = await cleanupEvidence.runCheck(
+            "compose-cleanup-ownership",
+            () => inspectComposeCleanupOwnership({
               identity,
+              marker: currentMarker,
               composeFile,
-              operation: "down",
-              ownership: cleanupOwnership,
-            }), {
-              cwd: checkout,
-              env: composeEnvironment,
-              code: "LOCAL_PILOT_COMPOSE_CLEANUP_FAILED",
-              timeoutMs: 60_000,
-            });
+              runDocker: cleanupRunDocker,
+            }),
+          );
+          if (cleanupOwnership) {
+            await cleanupEvidence.runCheck("compose-down", () => execute(
+              dockerPath,
+              buildComposeArgv({
+                identity,
+                composeFile,
+                operation: "down",
+                ownership: cleanupOwnership,
+              }),
+              {
+                cwd: checkout,
+                env: composeEnvironment,
+                code: "LOCAL_PILOT_COMPOSE_CLEANUP_FAILED",
+                timeoutMs: 60_000,
+                evidence: cleanupEvidence,
+              },
+            ));
           }
-          await assertComposeProjectAbsent({ identity, runDocker: cleanupRunDocker });
+          await cleanupEvidence.runCheck("compose-project-absent", () => (
+            assertComposeProjectAbsent({ identity, runDocker: cleanupRunDocker })
+          ));
         });
-        await execute(dockerPath, buildComposeArgv({ identity, composeFile, operation: "up" }), {
-          cwd: checkout,
-          env: composeEnvironment,
-          code: "LOCAL_PILOT_COMPOSE_UP_FAILED",
-          signal: abort.signal,
-        });
-        const ownership = await inspectComposeOwnership({ identity, marker, composeFile, runDocker });
+        await evidence.runCheck("compose-up", () => execute(
+          dockerPath,
+          buildComposeArgv({ identity, composeFile, operation: "up" }),
+          {
+            cwd: checkout,
+            env: composeEnvironment,
+            code: "LOCAL_PILOT_COMPOSE_UP_FAILED",
+            signal: abort.signal,
+            evidence,
+          },
+        ));
+        const ownership = await evidence.runCheck("compose-ownership", () => (
+          inspectComposeOwnership({ identity, marker, composeFile, runDocker })
+        ));
         state.compose = { composeFile, composeEnvironment, marker, ownership };
-        const postgresVersion = await execute(dockerPath, [
+        const postgresVersion = await evidence.runCheck("postgres-18", () => execute(dockerPath, [
           "compose", "--project-name", identity.composeProject, "--file", composeFile,
           "exec", "--no-TTY", "postgres", "psql", "-U", "learning_orbit", "-d",
           identity.databaseName, "-Atqc", "SHOW server_version_num",
@@ -388,71 +495,93 @@ async function main() {
           code: "LOCAL_PILOT_POSTGRES_VERSION_CHECK_FAILED",
           signal: abort.signal,
           capture: true,
-        });
+          evidence,
+        }));
         state.postgres = assertPostgres18(postgresVersion.stdout);
         state.databaseUrl = databaseUrl(identity, state.material);
         state.mailpit = new MailpitClient();
-        await state.mailpit.assertReady();
+        await evidence.runCheck("mailpit-ready", () => state.mailpit.assertReady());
       },
-      "repository-foundations": async () => {
+      "repository-foundations": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
         const common = {
           ...commandEnvironment,
           PYTHONPATH: resolve(checkout, "services/worker/src"),
         };
-        for (const [executable, argv, code] of [
-          [nodePath, ["scripts/verify-layout.mjs"], "LOCAL_PILOT_LAYOUT_FAILED"],
-          [nodePath, ["scripts/assert-root-scripts.mjs"], "LOCAL_PILOT_ROOT_SCRIPTS_FAILED"],
-          [nodePath, ["scripts/verify-python-lock.mjs"], "LOCAL_PILOT_PYTHON_LOCK_FAILED"],
-          [nodePath, ["scripts/assert-baseline.mjs"], "LOCAL_PILOT_DEMO_BASELINE_FAILED"],
-          [pnpmPath, ["contracts:generate"], "LOCAL_PILOT_CONTRACT_GENERATION_FAILED"],
+        for (const [checkId, executable, argv, code] of [
+          ["layout", nodePath, ["scripts/verify-layout.mjs"], "LOCAL_PILOT_LAYOUT_FAILED"],
+          ["root-scripts", nodePath, ["scripts/assert-root-scripts.mjs"], "LOCAL_PILOT_ROOT_SCRIPTS_FAILED"],
+          ["python-lock", nodePath, ["scripts/verify-python-lock.mjs"], "LOCAL_PILOT_PYTHON_LOCK_FAILED"],
+          ["demo-baseline", nodePath, ["scripts/assert-baseline.mjs"], "LOCAL_PILOT_DEMO_BASELINE_FAILED"],
+          ["contract-generation", pnpmPath, ["contracts:generate"], "LOCAL_PILOT_CONTRACT_GENERATION_FAILED"],
         ]) {
-          await execute(executable, argv, { cwd: checkout, env: common, code, signal: abort.signal });
+          await evidence.runCheck(checkId, () => execute(executable, argv, {
+            cwd: checkout,
+            env: common,
+            code,
+            signal: abort.signal,
+            evidence,
+          }));
         }
-        const generatedDiff = await execute("git", [
-          "-c", "core.hooksPath=/dev/null", "-C", checkout, "status", "--porcelain=v1", "-z",
-          "--untracked-files=all",
-        ], {
-          cwd: checkout,
-          env: common,
-          code: "LOCAL_PILOT_GENERATED_DIFF_CHECK_FAILED",
-          signal: abort.signal,
-          capture: true,
+        await evidence.runCheck("generated-drift", async () => {
+          const generatedDiff = await execute("git", [
+            "-c", "core.hooksPath=/dev/null", "-C", checkout, "status", "--porcelain=v1", "-z",
+            "--untracked-files=all",
+          ], {
+            cwd: checkout,
+            env: common,
+            code: "LOCAL_PILOT_GENERATED_DIFF_CHECK_FAILED",
+            signal: abort.signal,
+            capture: true,
+            evidence,
+          });
+          if (generatedDiff.stdout !== "") throw new Error("LOCAL_PILOT_GENERATED_DRIFT");
         });
-        if (generatedDiff.stdout !== "") throw new Error("LOCAL_PILOT_GENERATED_DRIFT");
       },
-      "production-builds": async () => {
+      "production-builds": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
         const environment = {
           ...commandEnvironment,
           PYTHONPATH: resolve(checkout, "services/worker/src"),
         };
-        await execute(pnpmPath, ["typecheck"], {
+        await evidence.runCheck("typescript", () => execute(pnpmPath, ["typecheck"], {
           cwd: checkout,
           env: environment,
           code: "LOCAL_PILOT_TYPECHECK_FAILED",
           signal: abort.signal,
-        });
-        await execute(pnpmPath, ["build"], {
+          evidence,
+        }));
+        await evidence.runCheck("production-build", () => execute(pnpmPath, ["build"], {
           cwd: checkout,
           env: environment,
           code: "LOCAL_PILOT_BUILD_FAILED",
           signal: abort.signal,
-        });
-        await execute(state.python, ["-m", "compileall", "-q", "services/worker/src"], {
-          cwd: checkout,
-          env: environment,
-          code: "LOCAL_PILOT_WORKER_BUILD_FAILED",
-          signal: abort.signal,
-        });
-        await execute(state.python, ["-c", "import learning_orbit_worker.main"], {
-          cwd: checkout,
-          env: environment,
-          code: "LOCAL_PILOT_WORKER_IMPORT_FAILED",
-          signal: abort.signal,
-        });
+          evidence,
+        }));
+        await evidence.runCheck("worker-compile", () => execute(
+          state.python,
+          ["-m", "compileall", "-q", "services/worker/src"],
+          {
+            cwd: checkout,
+            env: environment,
+            code: "LOCAL_PILOT_WORKER_BUILD_FAILED",
+            signal: abort.signal,
+            evidence,
+          },
+        ));
+        await evidence.runCheck("worker-import", () => execute(
+          state.python,
+          ["-c", "import learning_orbit_worker.main"],
+          {
+            cwd: checkout,
+            env: environment,
+            code: "LOCAL_PILOT_WORKER_IMPORT_FAILED",
+            signal: abort.signal,
+            evidence,
+          },
+        ));
       },
-      "required-tests": async () => {
+      "required-tests": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
         const common = {
           ...commandEnvironment,
@@ -464,13 +593,14 @@ async function main() {
         // Migration is the only necessary dependency before the PostgreSQL
         // integration suites.  Typecheck and every production build have
         // already passed at this exact SHA before any test result is accepted.
-        await execute(pnpmPath, ["db:migrate:test"], {
+        await evidence.runCheck("migration", () => execute(pnpmPath, ["db:migrate:test"], {
           cwd: checkout,
           env: common,
           code: "LOCAL_PILOT_MIGRATION_FAILED",
           signal: abort.signal,
-        });
-        await executeRequiredGateSet({
+          evidence,
+        }));
+        await evidence.runCheck("required-gate-set", () => executeRequiredGateSet({
           manifest: state.manifest,
           gateIds: [
             "contracts-vitest", "server-vitest", "web-vitest", "pilot-harness-vitest", "worker-python",
@@ -481,15 +611,19 @@ async function main() {
           environment: common,
           recordReceipt: async (receipt) => { state.gates.push(receipt); },
           signal: abort.signal,
-        });
+        }));
       },
-      "application-startup": async ({ identity, cleanup }) => {
+      "application-startup": async ({ identity, cleanup, evidence }) => {
         const checkout = state.worktree.worktreePath;
         const recipient = `pilot-${identity.runId}@example.invalid`;
         state.recipient = recipient;
-        cleanup.register("mailpit-residual", async () => {
-          await state.mailpit.deleteRecipientMessages(recipient);
-          await state.mailpit.assertRecipientEmpty(recipient);
+        registerCleanup(cleanup, "mailpit-residual", async (cleanupEvidence) => {
+          await cleanupEvidence.runCheck("delete-recipient-messages", () => (
+            state.mailpit.deleteRecipientMessages(recipient)
+          ));
+          await cleanupEvidence.runCheck("recipient-empty", () => (
+            state.mailpit.assertRecipientEmpty(recipient)
+          ));
         });
         const childEnvironments = buildChildEnvironments({
           material: state.material,
@@ -504,7 +638,7 @@ async function main() {
           },
           next: childEnvironments.next,
         };
-        const processes = new OwnedProcessSet();
+        const processes = new OwnedProcessSet({ commandEvidence: evidence });
         state.processes = processes;
         const specs = buildLocalProcessSpecs({
           checkout,
@@ -513,9 +647,14 @@ async function main() {
           tls: state.tls,
           environments,
         });
-        registerAndStartOwnedProcesses({ processes, specs, cleanup });
+        await evidence.runCheck("application-processes", async () => {
+          registerCleanup(cleanup, "application-processes", (cleanupEvidence) => (
+            cleanupEvidence.runCheck("stop-processes", () => processes.stopAll())
+          ));
+          specs.forEach((spec) => processes.start(spec));
+        });
         const certificate = await readFile(state.tls.certificatePath);
-        await waitForReadiness({
+        await evidence.runCheck("fastify-ready", () => waitForReadiness({
           name: "fastify",
           timeoutMs: 60_000,
           intervalMs: 250,
@@ -523,8 +662,8 @@ async function main() {
             processes.assertRunning();
             return probe({ protocol: "http:", path: "/v1/auth/session" });
           },
-        });
-        await waitForReadiness({
+        }));
+        await evidence.runCheck("next-https-ready", () => waitForReadiness({
           name: "next",
           timeoutMs: 60_000,
           intervalMs: 250,
@@ -532,14 +671,14 @@ async function main() {
             processes.assertRunning();
             return probe({ protocol: "https:", path: "/login", certificate });
           },
-        });
+        }));
         processes.assertRunning();
-        await state.mailpit.assertReady();
+        await evidence.runCheck("mailpit-ready", () => state.mailpit.assertReady());
       },
-      "browser-verification": async () => {
+      "browser-verification": async ({ evidence }) => {
         state.processes.assertRunning();
         const checkout = state.worktree.worktreePath;
-        await executeRequiredGateSet({
+        await evidence.runCheck("playwright-required-gate", () => executeRequiredGateSet({
           manifest: state.manifest,
           gateIds: ["browser-playwright"],
           checkout,
@@ -555,12 +694,12 @@ async function main() {
           },
           recordReceipt: async (receipt) => { state.gates.push(receipt); },
           signal: abort.signal,
-        });
+        }));
       },
-      "pilot-load": async () => {
+      "pilot-load": async ({ evidence }) => {
         state.processes.assertRunning();
         const checkout = state.worktree.worktreePath;
-        await executeRequiredGateSet({
+        await evidence.runCheck("controlled-10x5-load", () => executeRequiredGateSet({
           manifest: state.manifest,
           gateIds: ["pilot-load"],
           checkout,
@@ -575,11 +714,11 @@ async function main() {
           },
           recordReceipt: async (receipt) => { state.gates.push(receipt); },
           signal: abort.signal,
-        });
+        }));
       },
-      "manifest-verification": async () => {
+      "manifest-verification": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
-        await execute(nodePath, [
+        await evidence.runCheck("closed-summary-set", () => execute(nodePath, [
           "scripts/local-pilot/verify-required-test-summaries.mjs",
           "--manifest", manifestRelative,
         ], {
@@ -587,9 +726,17 @@ async function main() {
           env: commandEnvironment,
           code: "REQUIRED_TEST_VERIFICATION_FAILED",
           signal: abort.signal,
-        });
+          evidence,
+        }));
       },
     };
+    const operations = Object.fromEntries(Object.entries(operationImplementations).map(
+      ([stageId, operation]) => [stageId, async (context) => {
+        const evidence = createLocalPilotEvidenceRecorder({ id: stageId });
+        state.stageEvidence[stageId] = evidence;
+        return operation(Object.freeze({ ...context, evidence }));
+      }],
+    ));
 
     workflow = await runLocalPilotOrchestrator({
       preflight: async () => {
