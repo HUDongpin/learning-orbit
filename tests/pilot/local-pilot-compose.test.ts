@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildComposeArgv,
   buildComposeEnvironment,
+  inspectComposeCleanupOwnership,
   inspectComposeOwnership,
   assertComposeProjectAbsent,
+  verifyComposeCleanupResourceLabels,
   verifyComposeResourceLabels,
 } from "../../scripts/local-pilot/compose.mjs";
 import { buildRunIdentity } from "../../scripts/local-pilot/ownership.mjs";
@@ -146,6 +148,35 @@ describe("run-owned pilot Compose project", () => {
     );
   });
 
+  it("derives a bounded teardown capability from a valid partial project but never from foreign labels", () => {
+    const labels = {
+      "com.docker.compose.project": identity.composeProject,
+      "io.learning-orbit.local-pilot.run-id": identity.runId,
+      "io.learning-orbit.local-pilot.database-name": identity.databaseName,
+    };
+    const marker = {
+      runId: identity.runId,
+      sourceSha: identity.sourceSha,
+      creatorPid: identity.creatorPid,
+      composeProject: identity.composeProject,
+      databaseName: identity.databaseName,
+    };
+    const partial = verifyComposeCleanupResourceLabels([
+      { kind: "container", name: "postgres", labels },
+      { kind: "network", name: "default", labels },
+    ], identity, marker);
+    expect(partial).not.toBeNull();
+    expect(buildComposeArgv({ identity, composeFile, operation: "down", ownership: partial ?? undefined })[5])
+      .toBe("down");
+    expect(verifyComposeCleanupResourceLabels([], identity, marker)).toBeNull();
+    expect(() => verifyComposeCleanupResourceLabels([
+      { kind: "container", name: "postgres", labels: { ...labels, "io.learning-orbit.local-pilot.run-id": "ffffffffffffffff" } },
+    ], identity, marker)).toThrow("LOCAL_PILOT_COMPOSE_OWNERSHIP_MISMATCH");
+    expect(() => verifyComposeCleanupResourceLabels([
+      { kind: "container", name: "unexpected", labels },
+    ], identity, marker)).toThrow("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
+  });
+
   it("checks project collisions and derives teardown capability only from live inspect labels", async () => {
     const marker = {
       runId: identity.runId,
@@ -197,5 +228,37 @@ describe("run-owned pilot Compose project", () => {
         return result;
       },
     })).rejects.toThrow("LOCAL_PILOT_COMPOSE_OWNERSHIP_MISMATCH");
+  });
+
+  it("discovers and validates a partially created project for failure cleanup", async () => {
+    const marker = {
+      runId: identity.runId,
+      sourceSha: identity.sourceSha,
+      creatorPid: identity.creatorPid,
+      composeProject: identity.composeProject,
+      databaseName: identity.databaseName,
+    };
+    const labels = {
+      "com.docker.compose.project": identity.composeProject,
+      "io.learning-orbit.local-pilot.run-id": identity.runId,
+      "io.learning-orbit.local-pilot.database-name": identity.databaseName,
+    };
+    const ownership = await inspectComposeCleanupOwnership({
+      identity,
+      marker,
+      composeFile,
+      runDocker: async (argv: string[]) => {
+        const joined = argv.join(" ");
+        if (joined.startsWith("ps --all")) return { stdout: "postgres-id|postgres\n" };
+        if (joined.startsWith("volume ls")) return { stdout: `${identity.composeProject}_pilot_postgres_data\n` };
+        if (joined.startsWith("network ls")) return { stdout: "" };
+        if (joined.includes("inspect --type container")) return { stdout: JSON.stringify(labels) };
+        if (joined.includes("volume inspect")) return { stdout: JSON.stringify(labels) };
+        throw new Error(`unexpected: ${joined}`);
+      },
+    });
+    expect(ownership).not.toBeNull();
+    expect(buildComposeArgv({ identity, composeFile, operation: "down", ownership: ownership ?? undefined })[5])
+      .toBe("down");
   });
 });

@@ -15,7 +15,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/contracts-vitest.summary.json",
-      "expectedTests": 51
+      "expectedTests": 63
     },
     {
       "id": "server-vitest",
@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 250
+      "expectedTests": 296
     },
     {
       "id": "web-vitest",
@@ -47,7 +47,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/web-vitest.summary.json",
-      "expectedTests": 196
+      "expectedTests": 278
     },
     {
       "id": "pilot-harness-vitest",
@@ -64,7 +64,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/pilot-harness-vitest.summary.json",
-      "expectedTests": 47
+      "expectedTests": 74
     },
     {
       "id": "worker-python",
@@ -76,7 +76,7 @@
         "services/worker/tests"
       ],
       "report": "test-results/local-pilot/summaries/worker-python.summary.json",
-      "expectedTests": 67
+      "expectedTests": 80
     },
     {
       "id": "browser-playwright",
@@ -91,7 +91,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/browser-playwright.summary.json",
-      "expectedTests": 1
+      "expectedTests": 2
     },
     {
       "id": "pilot-load",

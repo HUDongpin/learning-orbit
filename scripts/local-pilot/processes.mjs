@@ -201,6 +201,16 @@ export class OwnedProcessSet {
   }
 }
 
+export function registerAndStartOwnedProcesses({ processes, specs, cleanup }) {
+  if (!(processes instanceof OwnedProcessSet) || !Array.isArray(specs) || specs.length === 0
+    || !cleanup || typeof cleanup.register !== "function") {
+    fail("LOCAL_PILOT_PROCESS_START_CONFIG_INVALID");
+  }
+  specs.forEach(assertSpec);
+  cleanup.register("application-processes", () => processes.stopAll());
+  return Object.freeze(specs.map((spec) => processes.start(spec)));
+}
+
 export async function waitForReadiness({ name, probe, timeoutMs, intervalMs }) {
   if (typeof name !== "string" || !/^[a-z][a-z0-9-]{0,31}$/.test(name)
     || typeof probe !== "function" || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1

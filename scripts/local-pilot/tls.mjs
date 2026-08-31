@@ -47,7 +47,12 @@ export async function createLocalTlsMaterial({ parentDirectory, runId, opensslPa
     "-out", certificatePath,
   ];
   try {
-    await execFileAsync(opensslPath, argv, { windowsHide: true, maxBuffer: 64 * 1024 });
+    await execFileAsync(opensslPath, argv, {
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+      timeout: 30_000,
+      killSignal: "SIGTERM",
+    });
     await Promise.all([chmod(privateKeyPath, 0o600), chmod(certificatePath, 0o600)]);
     const certificate = new X509Certificate(await readFile(certificatePath));
     if (certificate.checkIP("127.0.0.1") !== "127.0.0.1"

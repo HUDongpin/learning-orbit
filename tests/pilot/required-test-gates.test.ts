@@ -61,6 +61,18 @@ test("the checked-in required-test manifest is closed and valid", async () => {
   assert.equal(validateRequiredTestManifest(manifest), manifest);
   assert.ok(manifest.gates.some(({ runner }) => runner === "playwright"));
   assert.ok(manifest.gates.some(({ runner }) => runner === "load"));
+  assert.deepEqual(
+    Object.fromEntries(manifest.gates.map(({ id, expectedTests }) => [id, expectedTests])),
+    {
+      "contracts-vitest": 63,
+      "server-vitest": 296,
+      "web-vitest": 278,
+      "pilot-harness-vitest": 74,
+      "worker-python": 80,
+      "browser-playwright": 2,
+      "pilot-load": 1,
+    },
+  );
 });
 
 test("manifest validation rejects open shapes, duplicate ownership, and unsafe empty runs", () => {

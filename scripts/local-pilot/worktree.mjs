@@ -48,6 +48,8 @@ async function runGit(sourceRepository, args) {
       env,
       maxBuffer: 1024 * 1024,
       windowsHide: true,
+      timeout: 60_000,
+      killSignal: "SIGTERM",
     });
   } catch {
     fail("LOCAL_PILOT_GIT_COMMAND_FAILED");
@@ -95,35 +97,41 @@ export function parseWorktreePorcelain(text) {
   return records;
 }
 
-async function registeredWorktrees(sourceRepository) {
-  const { stdout } = await runGit(sourceRepository, ["worktree", "list", "--porcelain", "-z"]);
+async function registeredWorktrees(sourceRepository, runCommand = runGit) {
+  const { stdout } = await runCommand(sourceRepository, ["worktree", "list", "--porcelain", "-z"]);
   return parseWorktreePorcelain(stdout);
 }
 
-async function assertSourceSnapshot(sourceRepository, identity) {
-  const { stdout: headBefore } = await runGit(sourceRepository, ["rev-parse", "HEAD"]);
-  const { stdout: status } = await runGit(sourceRepository, ["status", "--porcelain=v1", "-z"]);
-  const { stdout: headAfter } = await runGit(sourceRepository, ["rev-parse", "HEAD"]);
+async function assertSourceSnapshot(sourceRepository, identity, runCommand = runGit) {
+  const { stdout: headBefore } = await runCommand(sourceRepository, ["rev-parse", "HEAD"]);
+  const { stdout: status } = await runCommand(sourceRepository, ["status", "--porcelain=v1", "-z"]);
+  const { stdout: headAfter } = await runCommand(sourceRepository, ["rev-parse", "HEAD"]);
   if (headBefore.trim() !== identity.sourceSha || headAfter.trim() !== identity.sourceSha) {
     fail("LOCAL_PILOT_SOURCE_SHA_MISMATCH");
   }
   if (status !== "") fail("LOCAL_PILOT_SOURCE_WORKTREE_DIRTY");
 }
 
-export async function createDetachedPilotWorktree({ sourceRepository, targetParent, identity }) {
+export async function createDetachedPilotWorktree({
+  sourceRepository,
+  targetParent,
+  identity,
+  runCommand = runGit,
+}) {
   assertIdentity(identity);
+  if (typeof runCommand !== "function") fail("LOCAL_PILOT_WORKTREE_RUNNER_INVALID");
   const source = await realDirectory(sourceRepository, "LOCAL_PILOT_SOURCE_REPOSITORY_INVALID");
   const parent = await realDirectory(targetParent, "LOCAL_PILOT_TARGET_PARENT_INVALID");
-  await assertSourceSnapshot(source, identity);
+  await assertSourceSnapshot(source, identity, runCommand);
   const runDirectory = join(parent, `lo-pilot-run-${identity.runId}`);
   const worktreePath = join(runDirectory, "checkout");
   const markerPath = await writeOwnershipMarker(runDirectory, identity);
   try {
-    await runGit(source, ["worktree", "add", "--detach", worktreePath, identity.sourceSha]);
+    await runCommand(source, ["worktree", "add", "--detach", worktreePath, identity.sourceSha]);
     const [{ stdout: checkoutHead }, { stdout: checkoutBranch }, records] = await Promise.all([
-      runGit(worktreePath, ["rev-parse", "HEAD"]),
-      runGit(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]),
-      registeredWorktrees(source),
+      runCommand(worktreePath, ["rev-parse", "HEAD"]),
+      runCommand(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      registeredWorktrees(source, runCommand),
     ]);
     const registered = records.filter((record) => resolve(record.path) === resolve(worktreePath));
     if (checkoutHead.trim() !== identity.sourceSha || checkoutBranch.trim() !== "HEAD"
@@ -133,9 +141,23 @@ export async function createDetachedPilotWorktree({ sourceRepository, targetPare
     }
     return Object.freeze({ runDirectory, worktreePath, markerPath });
   } catch (error) {
-    const records = await registeredWorktrees(source).catch(() => []);
-    if (!records.some((record) => resolve(record.path) === resolve(worktreePath))) {
+    try {
+      const records = await registeredWorktrees(source, runCommand);
+      const registered = records.filter((record) => resolve(record.path) === resolve(worktreePath));
+      if (registered.length > 1) fail("LOCAL_PILOT_WORKTREE_SETUP_CLEANUP_FAILED");
+      if (registered.length === 1) {
+        await runCommand(source, ["worktree", "remove", "--force", worktreePath]);
+        const remaining = await registeredWorktrees(source, runCommand);
+        if (remaining.some((record) => resolve(record.path) === resolve(worktreePath))) {
+          fail("LOCAL_PILOT_WORKTREE_SETUP_CLEANUP_FAILED");
+        }
+      }
       await removeOwnedDirectory({ directory: runDirectory, expectedParent: parent, identity });
+    } catch {
+      // Preserve the exact owner-marked directory when registration cannot be
+      // proven absent. Removing bytes while leaving unknown Git metadata would
+      // lose the only safe recovery handle.
+      fail("LOCAL_PILOT_WORKTREE_SETUP_CLEANUP_FAILED");
     }
     throw error;
   }

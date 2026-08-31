@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   OwnedProcessSet,
   buildLocalProcessSpecs,
+  registerAndStartOwnedProcesses,
   waitForReadiness,
 } from "../../scripts/local-pilot/processes.mjs";
+import { CleanupStack } from "../../scripts/local-pilot/workflow.mjs";
 
 class FakeChild extends EventEmitter {
   pid: number;
@@ -88,6 +90,22 @@ describe("run-owned application process lifecycle", () => {
       ["SIGTERM"],
     ]);
     expect(processes.stopOrder).toEqual(["next", "worker", "fastify"]);
+
+    const partialChild = new FakeChild(104);
+    const partial = new OwnedProcessSet({
+      spawn: vi.fn()
+        .mockReturnValueOnce(partialChild)
+        .mockImplementationOnce(() => { throw new Error("sensitive spawn failure"); }),
+      stopTimeoutMs: 1_000,
+    });
+    const partialCleanup = new CleanupStack();
+    expect(() => registerAndStartOwnedProcesses({
+      processes: partial,
+      specs: specs.slice(0, 2),
+      cleanup: partialCleanup,
+    })).toThrow("LOCAL_PILOT_CHILD_FAILED_worker");
+    expect(await partialCleanup.run()).toEqual([{ id: "application-processes", status: "passed" }]);
+    expect(partialChild.signals).toEqual(["SIGTERM"]);
   });
 
   it("records an early child error once even if exit follows", () => {

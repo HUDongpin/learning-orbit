@@ -159,6 +159,7 @@ export function buildChildEnvironments({ material, databaseUrl, baseEnvironment 
       LO_PUBLIC_BASE_ORIGIN: "https://127.0.0.1:3000",
       LO_ALLOWED_ORIGINS: "https://127.0.0.1:3000",
       LO_TRUSTED_PROXY_CIDRS: "",
+      LO_STORAGE_BROWSER_ORIGINS: "",
       LO_SMTP_HOST: "127.0.0.1",
       LO_SMTP_PORT: "1025",
       LO_SMTP_FROM: "no-reply@learning-orbit.local",

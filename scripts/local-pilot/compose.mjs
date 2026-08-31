@@ -4,6 +4,12 @@ import { basename, dirname, isAbsolute } from "node:path";
 import { assertOwnershipMarker, buildRunIdentity } from "./ownership.mjs";
 
 const composeOwnershipCapability = Symbol("composeOwnershipCapability");
+const expectedComposeResources = new Set([
+  "container:postgres",
+  "container:mailpit",
+  "volume:pilot_postgres_data",
+  "network:default",
+]);
 
 const fail = (code) => {
   throw new Error(code);
@@ -77,20 +83,15 @@ export function buildComposeArgv({ identity, composeFile, operation, ownership }
   fail("LOCAL_PILOT_COMPOSE_OPERATION_INVALID");
 }
 
-export function verifyComposeResourceLabels(resources, identity, marker) {
+function verifyResourceLabels(resources, identity, marker, requireComplete) {
   assertIdentity(identity);
   assertOwnershipMarker(marker, identity);
   if (!Array.isArray(resources)) fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
-  const expected = new Set([
-    "container:postgres",
-    "container:mailpit",
-    "volume:pilot_postgres_data",
-    "network:default",
-  ]);
   const observed = new Set();
   for (const resource of resources) {
     if (!resource || typeof resource !== "object" || Array.isArray(resource)
-      || !expected.has(`${resource.kind}:${resource.name}`) || observed.has(`${resource.kind}:${resource.name}`)) {
+      || !expectedComposeResources.has(`${resource.kind}:${resource.name}`)
+      || observed.has(`${resource.kind}:${resource.name}`)) {
       fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
     }
     const labels = resource.labels;
@@ -102,9 +103,12 @@ export function verifyComposeResourceLabels(resources, identity, marker) {
     }
     observed.add(`${resource.kind}:${resource.name}`);
   }
-  if (observed.size !== expected.size || [...expected].some((item) => !observed.has(item))) {
+  if (requireComplete
+    && (observed.size !== expectedComposeResources.size
+      || [...expectedComposeResources].some((item) => !observed.has(item)))) {
     fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
   }
+  if (!requireComplete && observed.size === 0) return null;
   return Object.freeze({
     [composeOwnershipCapability]: true,
     runId: identity.runId,
@@ -113,6 +117,21 @@ export function verifyComposeResourceLabels(resources, identity, marker) {
     composeProject: identity.composeProject,
     databaseName: identity.databaseName,
   });
+}
+
+export function verifyComposeResourceLabels(resources, identity, marker) {
+  return verifyResourceLabels(resources, identity, marker, true);
+}
+
+/**
+ * A failed `compose up` may leave only a subset of the declared project.  The
+ * unique project was proved absent immediately before startup, but cleanup
+ * still revalidates every live resource label and the run-owned marker before
+ * deriving the destructive `down` capability.  Unknown resources or labels
+ * always fail closed.
+ */
+export function verifyComposeCleanupResourceLabels(resources, identity, marker) {
+  return verifyResourceLabels(resources, identity, marker, false);
 }
 
 function boundedOutput(result, code) {
@@ -157,6 +176,80 @@ function parseLabels(result) {
     fail("LOCAL_PILOT_COMPOSE_INSPECT_FAILED");
   }
   return labels;
+}
+
+function outputLines(result, code) {
+  const text = boundedOutput(result, code);
+  return text === "" ? [] : text.split("\n");
+}
+
+export async function inspectComposeCleanupOwnership({
+  identity,
+  marker,
+  composeFile,
+  runDocker,
+}) {
+  assertIdentity(identity);
+  assertComposeFile(composeFile);
+  assertOwnershipMarker(marker, identity);
+  if (typeof runDocker !== "function") fail("LOCAL_PILOT_COMPOSE_CLEANUP_INSPECT_FAILED");
+  const filter = `label=com.docker.compose.project=${identity.composeProject}`;
+  try {
+    const resources = [];
+    const containers = outputLines(await runDocker([
+      "ps", "--all", "--filter", filter,
+      "--format", "{{.ID}}|{{.Label \"com.docker.compose.service\"}}",
+    ]), "LOCAL_PILOT_COMPOSE_CLEANUP_INSPECT_FAILED");
+    for (const line of containers) {
+      const match = /^([A-Za-z0-9_-]{1,128})\|(postgres|mailpit)$/.exec(line);
+      if (!match) fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
+      resources.push({
+        kind: "container",
+        name: match[2],
+        labels: parseLabels(await runDocker([
+          "inspect", "--type", "container", "--format", "{{json .Config.Labels}}", match[1],
+        ])),
+      });
+    }
+
+    const volumeName = `${identity.composeProject}_pilot_postgres_data`;
+    const volumes = outputLines(await runDocker([
+      "volume", "ls", "--filter", filter, "--format", "{{.Name}}",
+    ]), "LOCAL_PILOT_COMPOSE_CLEANUP_INSPECT_FAILED");
+    for (const name of volumes) {
+      if (name !== volumeName) fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
+      resources.push({
+        kind: "volume",
+        name: "pilot_postgres_data",
+        labels: parseLabels(await runDocker([
+          "volume", "inspect", "--format", "{{json .Labels}}", name,
+        ])),
+      });
+    }
+
+    const networkName = `${identity.composeProject}_default`;
+    const networks = outputLines(await runDocker([
+      "network", "ls", "--filter", filter, "--format", "{{.Name}}",
+    ]), "LOCAL_PILOT_COMPOSE_CLEANUP_INSPECT_FAILED");
+    for (const name of networks) {
+      if (name !== networkName) fail("LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE");
+      resources.push({
+        kind: "network",
+        name: "default",
+        labels: parseLabels(await runDocker([
+          "network", "inspect", "--format", "{{json .Labels}}", name,
+        ])),
+      });
+    }
+    return verifyComposeCleanupResourceLabels(resources, identity, marker);
+  } catch (error) {
+    if (error instanceof Error && [
+      "LOCAL_PILOT_COMPOSE_OWNERSHIP_MISMATCH",
+      "LOCAL_PILOT_COMPOSE_RESOURCE_SET_INCOMPLETE",
+      "LOCAL_PILOT_OWNERSHIP_MISMATCH",
+    ].includes(error.message)) throw error;
+    fail("LOCAL_PILOT_COMPOSE_CLEANUP_INSPECT_FAILED");
+  }
 }
 
 export async function inspectComposeOwnership({ identity, marker, composeFile, runDocker }) {

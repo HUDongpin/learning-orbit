@@ -106,6 +106,59 @@ describe("disposable detached pilot worktree", () => {
     })).rejects.toThrow("LOCAL_PILOT_SOURCE_SHA_MISMATCH");
   });
 
+  it("removes its exact registration when post-add verification fails", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "lo-pilot-worktree-parent-"));
+    cleanup.push(parent);
+    const source = join(parent, "source");
+    const runParent = join(parent, "runs");
+    await mkdir(source);
+    await mkdir(runParent);
+    const sha = "a".repeat(40);
+    const identity = buildRunIdentity({
+      runId: "1122334455667788",
+      sourceSha: sha,
+      creatorPid: process.pid,
+    });
+    const worktreePath = join(runParent, `lo-pilot-run-${identity.runId}`, "checkout");
+    let registered = false;
+    const calls: string[] = [];
+    const runCommand = async (cwd: string, argv: string[]) => {
+      calls.push(`${cwd}\0${argv.join("\0")}`);
+      if (argv.join(" ") === "rev-parse HEAD") {
+        return { stdout: cwd === source ? `${sha}\n` : `${"b".repeat(40)}\n` };
+      }
+      if (argv.join(" ") === "status --porcelain=v1 -z") return { stdout: "" };
+      if (argv.join(" ") === "worktree add --detach " + worktreePath + " " + sha) {
+        registered = true;
+        return { stdout: "" };
+      }
+      if (argv.join(" ") === "rev-parse --abbrev-ref HEAD") return { stdout: "HEAD\n" };
+      if (argv.join(" ") === "worktree list --porcelain -z") {
+        const sourceRecord = `worktree ${source}\0HEAD ${sha}\0branch refs/heads/main\0\0`;
+        const ownedRecord = registered
+          ? `worktree ${worktreePath}\0HEAD ${sha}\0detached\0\0`
+          : "";
+        return { stdout: sourceRecord + ownedRecord };
+      }
+      if (argv.join(" ") === "worktree remove --force " + worktreePath) {
+        registered = false;
+        return { stdout: "" };
+      }
+      throw new Error(`unexpected command ${argv.join(" ")}`);
+    };
+
+    await expect(createDetachedPilotWorktree({
+      sourceRepository: source,
+      targetParent: runParent,
+      identity,
+      runCommand,
+    })).rejects.toThrow("LOCAL_PILOT_WORKTREE_REGISTRATION_MISMATCH");
+    expect(registered).toBe(false);
+    expect(calls.some((call) => call.includes(`worktree\0remove\0--force\0${worktreePath}`))).toBe(true);
+    await expect(stat(join(runParent, `lo-pilot-run-${identity.runId}`)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("never adopts or removes a pre-existing run directory", async () => {
     const parent = await mkdtemp(join(tmpdir(), "lo-pilot-worktree-parent-"));
     cleanup.push(parent);
