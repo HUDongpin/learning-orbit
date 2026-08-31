@@ -236,6 +236,10 @@ describe("local pilot preflight contracts", () => {
     expect(verifySource).toContain("pnpmCliSha256: snapshot.pnpmCliSha256");
     expect(verifySource).toContain("createLocalPilotEvidenceRecorder");
     expect(verifySource).toContain("state.stageEvidence[stageId] = evidence");
+    expect(verifySource).toContain('gateIds: ["worker-python"]');
+    expect(verifySource).toContain(
+      "LO_ANALYTICS_PSEUDONYM_KEY: state.material.analyticsPseudonymKey",
+    );
     expect(verifySource).not.toContain("STAGE_CHECKS");
 
     await expect(captureLocalPilotPreflight({

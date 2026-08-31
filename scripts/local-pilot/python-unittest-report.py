@@ -38,7 +38,11 @@ def main(argv: list[str]) -> int:
         "focused": 0,
     }
     sys.stdout.write(json.dumps(report, separators=(",", ":")) + "\n")
-    return 0 if result.wasSuccessful() else 1
+    # A successfully produced closed report is transport success even when
+    # tests failed. The outer required-gate validator owns the zero-failure,
+    # zero-error, and zero-skip policy and can now persist exact counts in the
+    # content-free Receipt instead of collapsing them into a runner error.
+    return 0
 
 
 if __name__ == "__main__":

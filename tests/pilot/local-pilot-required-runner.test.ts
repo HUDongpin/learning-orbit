@@ -1,6 +1,8 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,6 +14,7 @@ import {
 } from "../../scripts/local-pilot/required-test-runner.mjs";
 
 const roots: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -168,5 +171,37 @@ describe("local pilot closed required-test execution", () => {
       .toThrow("REQUIRED_TEST_ARGV_SENSITIVE");
     expect(() => sanitizeGateArgv(["pnpm", "test", "postgres://user:secret@127.0.0.1/db"]))
       .toThrow("REQUIRED_TEST_ARGV_SENSITIVE");
+  });
+
+  it("returns a closed JSON failure summary for the outer required gate to evaluate", async () => {
+    const suite = await mkdtemp(join(tmpdir(), "lo-python-summary-"));
+    roots.push(suite);
+    await writeFile(join(suite, "test_failure.py"), [
+      "import unittest",
+      "class ExpectedFailureReport(unittest.TestCase):",
+      "    def test_failure(self):",
+      "        self.assertEqual(1, 2)",
+      "",
+    ].join("\n"));
+
+    const { stdout, stderr } = await execFileAsync(
+      resolve(".venv/bin/python"),
+      [
+        resolve("scripts/local-pilot/python-unittest-report.py"),
+        "--start-directory",
+        suite,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toEqual({
+      testsRun: 1,
+      failures: 1,
+      errors: 0,
+      skipped: 0,
+      expectedFailures: 0,
+      unexpectedSuccesses: 0,
+      focused: 0,
+    });
   });
 });

@@ -600,18 +600,33 @@ async function main() {
           signal: abort.signal,
           evidence,
         }));
-        await evidence.runCheck("required-gate-set", () => executeRequiredGateSet({
-          manifest: state.manifest,
-          gateIds: [
-            "contracts-vitest", "server-vitest", "web-vitest", "pilot-harness-vitest", "worker-python",
-          ],
-          checkout,
-          pnpmPath,
-          pythonPath: state.python,
-          environment: common,
-          recordReceipt: async (receipt) => { state.gates.push(receipt); },
-          signal: abort.signal,
-        }));
+        await evidence.runCheck("required-gate-set", async () => {
+          await executeRequiredGateSet({
+            manifest: state.manifest,
+            gateIds: [
+              "contracts-vitest", "server-vitest", "web-vitest", "pilot-harness-vitest",
+            ],
+            checkout,
+            pnpmPath,
+            pythonPath: state.python,
+            environment: common,
+            recordReceipt: async (receipt) => { state.gates.push(receipt); },
+            signal: abort.signal,
+          });
+          await executeRequiredGateSet({
+            manifest: state.manifest,
+            gateIds: ["worker-python"],
+            checkout,
+            pnpmPath,
+            pythonPath: state.python,
+            environment: {
+              ...common,
+              LO_ANALYTICS_PSEUDONYM_KEY: state.material.analyticsPseudonymKey,
+            },
+            recordReceipt: async (receipt) => { state.gates.push(receipt); },
+            signal: abort.signal,
+          });
+        });
       },
       "application-startup": async ({ identity, cleanup, evidence }) => {
         const checkout = state.worktree.worktreePath;

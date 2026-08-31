@@ -102,17 +102,18 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
                 room_events.append(event_id)
                 return event_id
 
-            store = JobStore(connection, worker_id)
-            deps = WorkerDeps(connection, store, projection_store=ProjectionStore(connection))
+            job_store = JobStore(connection, worker_id)
+            projection_store = ProjectionStore(connection)
+            deps = WorkerDeps(connection, job_store, projection_store=projection_store)
             append_event(1, actors[0], "太陽提供能量給生產者。")
             connection.commit()
-            first = store.claim(1)
+            first = job_store.claim(1)
             self.assertEqual(len(first), 1)
             self.assertEqual(run_with_lease(first[0], analytics_consume_handler, deps).value, "success")
 
             append_event(2, actors[1], "分解者讓物質回到土壤。")
             connection.commit()
-            second = store.claim(1)
+            second = job_store.claim(1)
             self.assertEqual(len(second), 1)
             self.assertEqual(run_with_lease(second[0], analytics_consume_handler, deps).value, "success")
 
@@ -169,8 +170,8 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
                     "warnings": row[9],
                     "payload": row[11],
                 }
-                self.assertEqual(row[10], store.content_hash(row[9]))
-                self.assertEqual(row[12], store.content_hash(row[11]))
+                self.assertEqual(row[10], projection_store.content_hash(row[9]))
+                self.assertEqual(row[12], projection_store.content_hash(row[11]))
                 if row[1].startswith("echo."):
                     echo_validator.validate(envelope)
                 else:
@@ -201,7 +202,7 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
                 dedupe_token=str(uuid.uuid4()), correlation_id=str(replay_correlation),
             )
             connection.commit()
-            replay = store.claim(1)
+            replay = job_store.claim(1)
             self.assertEqual(len(replay), 1)
             self.assertEqual(run_with_lease(replay[0], analytics_replay_handler, deps).value, "success")
 
@@ -233,7 +234,7 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
             ).fetchone()[0]
             append_event(3, actors[2], "能量沿食物鏈傳遞給消費者。")
             connection.commit()
-            third = store.claim(1)
+            third = job_store.claim(1)
             self.assertEqual(len(third), 1)
             self.assertEqual(run_with_lease(third[0], analytics_consume_handler, deps).value, "success")
             epochs = connection.execute(
