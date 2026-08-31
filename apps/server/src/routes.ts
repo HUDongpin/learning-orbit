@@ -369,7 +369,10 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       try {
         websocketAdmissions.set(
           request,
-          await dependencies.realtime!.authorizer.authenticateToken(request.cookies.lo_session, roomId),
+          await dependencies.realtime!.authorizer.authenticateWebSocketToken(
+            request.cookies.lo_session,
+            roomId,
+          ),
         );
       } catch {
         websocketAdmissions.set(request, { ok: false, closeCode: 1011 });

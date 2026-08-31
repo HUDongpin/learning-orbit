@@ -85,6 +85,15 @@ describe("controlled local-pilot load contract", () => {
     });
     const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
     expect(manifest.scripts["load:pilot"]).toBe("node tests/load/run-local-pilot.mjs");
+    const loadRunner = await readFile(resolve(root, "tests/load/run-local-pilot.mjs"), "utf8");
+    expect(loadRunner).toContain('createRequire(resolve(root, "apps/server/package.json"))');
+    expect(loadRunner).toContain('serverRequire.resolve("@learning-orbit/contracts")');
+    expect(loadRunner).not.toContain('packages/contracts/dist/index.js');
+    expect(loadRunner).toContain("const BACKPRESSURE_COMMANDS = 640;");
+    expect(loadRunner).toContain("const EVENT_PAGE_LIMIT = 64;");
+    expect(loadRunner).toContain("const roomWork = classrooms.map((room) => {");
+    expect(loadRunner).toContain("messagesComplete.then(() => {");
+    expect(loadRunner).not.toContain("await Promise.all(students.map(async");
     const verifier = await readFile(resolve(root, "scripts/verify-local-pilot.mjs"), "utf8");
     expect(verifier).toContain("LO_PILOT_TLS_CA_FILE: state.tls.certificatePath");
   });

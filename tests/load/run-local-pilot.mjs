@@ -32,7 +32,14 @@ const execFileAsync = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const TOPIC = "生態系統探究";
 const NORMAL_COMMANDS = PILOT_FIXTURE.studentClients * PILOT_FIXTURE.messageRounds;
-const BACKPRESSURE_COMMANDS = 256;
+// Each encoded synthetic event is about 10 KiB.  Six hundred and forty
+// events exceed macOS's 4 MiB auto receive-buffer ceiling plus the server's
+// 1 MiB close threshold, so a paused client deterministically exercises the
+// real WebSocket backpressure path instead of fitting entirely in the kernel.
+const BACKPRESSURE_COMMANDS = 640;
+// A 64-event page remains below LocalHttpsClient's 1 MiB response ceiling
+// even when it contains the largest synthetic backpressure messages.
+const EVENT_PAGE_LIMIT = 64;
 
 function fail(code) {
   throw new Error(code);
@@ -88,9 +95,11 @@ async function sourceSha() {
 
 async function loadRuntimeDependencies() {
   try {
-    const contracts = await import(pathToFileURL(resolve(root, "packages/contracts/dist/index.js")).href);
-    const require = createRequire(import.meta.url);
-    const imported = require(resolve(root, "apps/server/node_modules/ws"));
+    const serverRequire = createRequire(resolve(root, "apps/server/package.json"));
+    const contracts = await import(pathToFileURL(
+      serverRequire.resolve("@learning-orbit/contracts"),
+    ).href);
+    const imported = serverRequire("ws");
     const WebSocketImpl = imported.WebSocket ?? imported;
     if (!contracts.routes || !contracts.authContract || !contracts.roomHttpContract
       || !contracts.realtimeContract || !contracts.analyticsContract
@@ -243,7 +252,7 @@ async function getAllEvents({ http, contracts, roomId, cookie }) {
   for (let page = 0; page < 16; page += 1) {
     const response = assertStatus(await http.send({
       method: "GET",
-      path: contracts.routes.rooms.events(roomId, { afterSeq, limit: 500 }),
+      path: contracts.routes.rooms.events(roomId, { afterSeq, limit: EVENT_PAGE_LIMIT }),
       cookie,
     }), 200, "PILOT_LOAD_EVENT_PAGE_FAILED");
     const result = contracts.roomHttpContract.parseRoomEventPage(response.body);
@@ -375,29 +384,65 @@ async function run() {
     const textAckMs = [];
     const lastNormalSeq = new Map();
     const projectionStartedAt = new Map();
-    await Promise.all(students.map(async (student, studentIndex) => {
-      for (let round = 0; round < PILOT_FIXTURE.messageRounds; round += 1) {
-        await sleep(deterministicJitterSeconds(studentIndex, round) * 1_000);
-        const command = roomCommand({
-          runId: identity.runId,
-          roomId: student.roomId,
-          type: "message.add",
-          suffix: `${studentIndex}:${round}`,
-          payload: {
-            text: `合成觀察 ${student.roomIndex + 1}-${student.seatIndex + 1}-${round + 1}：植物需要陽光，消費者依靠植物取得能量。`,
-            mentions: [],
-          },
-        });
-        normalCommandIds.add(command.commandId);
-        projectionStartedAt.set(student.roomId, performance.now());
-        const acknowledged = await student.client.sendCommand(command);
-        textAckMs.push(acknowledged.latencyMs);
-        lastNormalSeq.set(student.roomId, Math.max(lastNormalSeq.get(student.roomId) ?? 0, acknowledged.roomSeq));
+    const indexedStudents = students.map((student, studentIndex) => ({ student, studentIndex }));
+    const roomWork = classrooms.map((room) => {
+      const roomStudents = indexedStudents.filter(({ student }) => student.roomIndex === room.roomIndex);
+      if (roomStudents.length !== PILOT_FIXTURE.studentsPerRoom) {
+        fail("PILOT_LOAD_CLIENT_COUNT_INVALID");
       }
-    }));
+      const messagesComplete = Promise.all(roomStudents.map(async ({ student, studentIndex }) => {
+        for (let round = 0; round < PILOT_FIXTURE.messageRounds; round += 1) {
+          await sleep(deterministicJitterSeconds(studentIndex, round) * 1_000);
+          const command = roomCommand({
+            runId: identity.runId,
+            roomId: student.roomId,
+            type: "message.add",
+            suffix: `${studentIndex}:${round}`,
+            payload: {
+              text: `合成觀察 ${student.roomIndex + 1}-${student.seatIndex + 1}-${round + 1}：植物需要陽光，消費者依靠植物取得能量。`,
+              mentions: [],
+            },
+          });
+          normalCommandIds.add(command.commandId);
+          projectionStartedAt.set(
+            student.roomId,
+            Math.max(projectionStartedAt.get(student.roomId) ?? 0, performance.now()),
+          );
+          const acknowledged = await student.client.sendCommand(command);
+          textAckMs.push(acknowledged.latencyMs);
+          lastNormalSeq.set(
+            student.roomId,
+            Math.max(lastNormalSeq.get(student.roomId) ?? 0, acknowledged.roomSeq),
+          );
+        }
+      }));
+      const projectionWork = messagesComplete.then(() => {
+        const targetSeq = lastNormalSeq.get(room.roomId);
+        const startedAt = projectionStartedAt.get(room.roomId);
+        if (!Number.isSafeInteger(targetSeq) || targetSeq < 1
+          || !Number.isFinite(startedAt) || startedAt < 0) {
+          fail("PILOT_LOAD_PROJECTION_FAILED");
+        }
+        return Promise.all([
+          pollProjection({
+            http, contracts, roomId: room.roomId, cookie: teacher.cookie,
+            projectionKey: "echo.teacher_shadow", targetSeq, startedAt,
+          }),
+          pollProjection({
+            http, contracts, roomId: room.roomId, cookie: teacher.cookie,
+            projectionKey: "trace.teacher_bundle", targetSeq, startedAt,
+          }),
+        ]);
+      });
+      return { messagesComplete, projectionWork };
+    });
+    await Promise.all(roomWork.map(({ messagesComplete }) => messagesComplete));
     if (textAckMs.length !== NORMAL_COMMANDS || normalCommandIds.size !== NORMAL_COMMANDS) {
       fail("PILOT_LOAD_COMMAND_COUNT_INVALID");
     }
+    const projections = (await Promise.all(
+      roomWork.map(({ projectionWork }) => projectionWork),
+    )).flat();
     await waitUntil(() => outboxLag.size === NORMAL_COMMANDS && normalEvents.size === NORMAL_COMMANDS, {
       code: "PILOT_LOAD_OUTBOX_TIMEOUT",
     });
@@ -406,19 +451,6 @@ async function run() {
     if (tracker.active !== 50 || tracker.maximum !== 50 || replayMs.length !== 50) {
       fail("PILOT_LOAD_RECONNECT_FAILED");
     }
-
-    const projections = await Promise.all(classrooms.flatMap((room) => [
-      pollProjection({
-        http, contracts, roomId: room.roomId, cookie: teacher.cookie,
-        projectionKey: "echo.teacher_shadow", targetSeq: lastNormalSeq.get(room.roomId),
-        startedAt: projectionStartedAt.get(room.roomId),
-      }),
-      pollProjection({
-        http, contracts, roomId: room.roomId, cookie: teacher.cookie,
-        projectionKey: "trace.teacher_bundle", targetSeq: lastNormalSeq.get(room.roomId),
-        startedAt: projectionStartedAt.get(room.roomId),
-      }),
-    ]));
 
     const firstStudent = students[0];
     const firstEvent = [...normalEvents.values()].find(({ roomId }) => roomId === firstStudent.roomId);

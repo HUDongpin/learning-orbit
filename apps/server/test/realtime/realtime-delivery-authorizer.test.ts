@@ -22,9 +22,10 @@ function teacherRow(deletionActive: boolean, roomStatus: "open" | "closed" = "op
 }
 
 describe("realtime delivery room tombstone", () => {
-  it("admits an active owned room but rejects a new socket after normal close", async () => {
+  it("keeps closed-room reads authorized but rejects a new socket after normal close", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [teacherRow(false)] })
+      .mockResolvedValueOnce({ rows: [teacherRow(false, "closed")] })
       .mockResolvedValueOnce({ rows: [teacherRow(false, "closed")] });
     const authorizer = new RealtimeDeliveryAuthorizer({ query } as never);
     await expect(authorizer.authenticateToken("opaque-session", ROOM_ID)).resolves.toMatchObject({
@@ -33,15 +34,23 @@ describe("realtime delivery room tombstone", () => {
       actorId: TEACHER_ID,
       principal: { role: "teacher", teacherId: TEACHER_ID },
     });
-    await expect(authorizer.authenticateToken("opaque-session", ROOM_ID))
+    await expect(authorizer.authenticateToken("opaque-session", ROOM_ID)).resolves.toMatchObject({
+      ok: true,
+      sessionId: SESSION_ID,
+      actorId: TEACHER_ID,
+    });
+    await expect(authorizer.authenticateWebSocketToken("opaque-session", ROOM_ID))
       .resolves.toEqual({ ok: false, closeCode: 4410 });
     expect(query.mock.calls[0]?.[0]).toContain("deletion_active");
   });
 
   it("returns 4410 only for an active deletion tombstone", async () => {
-    const query = vi.fn(async () => ({ rows: [teacherRow(true)] }));
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [teacherRow(true)] })
+      .mockResolvedValueOnce({ rows: [teacherRow(true)] });
     const authorizer = new RealtimeDeliveryAuthorizer({ query } as never);
     await expect(authorizer.authenticateToken("opaque-session", ROOM_ID)).resolves.toEqual({ ok: false, closeCode: 4410 });
+    await expect(authorizer.authenticateWebSocketToken("opaque-session", ROOM_ID)).resolves.toEqual({ ok: false, closeCode: 4410 });
   });
 
   it("applies the same closed-versus-deleting distinction during reauthorization", async () => {

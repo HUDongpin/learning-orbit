@@ -280,6 +280,17 @@ describe("forty-five-minute room lifecycle", () => {
       });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ status: "closed" });
+      const eventPage = await app.inject({
+        method: "GET",
+        url: `/v1/rooms/${room.roomId}/events?afterSeq=0&limit=500`,
+        headers: {
+          origin: "https://app.learning-orbit.test",
+          cookie: `lo_session=${room.teacherToken}`,
+        },
+      });
+      expect(eventPage.statusCode).toBe(200);
+      expect(eventPage.json().events.map(({ type }: { type: string }) => type))
+        .toEqual(["room.opened", "room.closed"]);
       expect((await rows<{ count: number }>(
         `SELECT count(*)::int AS count FROM room_event
          WHERE room_id = $1 AND type = 'room.closed'`,

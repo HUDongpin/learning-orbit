@@ -54,7 +54,7 @@ describe("WebSocket admission", () => {
         actorId: ACTOR_ID,
       };
       const authStarted = deferred<void>();
-      const authenticateToken = vi.fn(() => {
+      const authenticateWebSocketToken = vi.fn(() => {
         authStarted.resolve(undefined);
         return admission.promise;
       });
@@ -76,7 +76,7 @@ describe("WebSocket admission", () => {
         lifecycle: { events: {} } as never,
         realtime: {
           authorizer: {
-            authenticateToken,
+            authenticateWebSocketToken,
             reauthorize: vi.fn(async () => ({ ok: true, principal, actorId: ACTOR_ID })),
           } as never,
           hub: { connect } as never,
@@ -119,7 +119,7 @@ describe("WebSocket admission", () => {
         resumeFrom: 0,
       });
       expect(openedBeforeAdmission).toBe(false);
-      expect(authenticateToken).toHaveBeenCalledWith("opaque-session", ROOM_ID);
+      expect(authenticateWebSocketToken).toHaveBeenCalledWith("opaque-session", ROOM_ID);
       expect(connect).toHaveBeenCalledOnce();
     },
   );
@@ -140,7 +140,7 @@ describe("WebSocket admission", () => {
 
     for (const testCase of cases) {
       const connect = vi.fn();
-      const authenticateToken = vi.fn(testCase.authenticate);
+      const authenticateWebSocketToken = vi.fn(testCase.authenticate);
       const app = await buildApp({
         config: { allowedOrigins: [ORIGIN], publicBaseOrigin: ORIGIN },
         pool: { query: vi.fn() } as never,
@@ -152,7 +152,7 @@ describe("WebSocket admission", () => {
         lifecycle: { events: {} } as never,
         realtime: {
           authorizer: {
-            authenticateToken,
+            authenticateWebSocketToken,
             reauthorize: vi.fn(async () => ({ ok: false, closeCode: 4401 })),
           } as never,
           hub: { connect } as never,
@@ -174,7 +174,7 @@ describe("WebSocket admission", () => {
 
       expect(close).toEqual({ code: testCase.expectedCode, reason: "authorization required" });
       expect(close.reason).not.toContain("database");
-      expect(authenticateToken).toHaveBeenCalledWith("opaque-session", ROOM_ID);
+      expect(authenticateWebSocketToken).toHaveBeenCalledWith("opaque-session", ROOM_ID);
       expect(connect).not.toHaveBeenCalled();
     }
   });

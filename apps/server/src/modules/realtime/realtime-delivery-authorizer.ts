@@ -14,6 +14,21 @@ export class RealtimeDeliveryAuthorizer {
   constructor(private readonly pool: Pool) {}
 
   async authenticateToken(rawToken: string | undefined, roomId: string): Promise<TokenAuthorization> {
+    return this.#authenticateToken(rawToken, roomId, false);
+  }
+
+  async authenticateWebSocketToken(
+    rawToken: string | undefined,
+    roomId: string,
+  ): Promise<TokenAuthorization> {
+    return this.#authenticateToken(rawToken, roomId, true);
+  }
+
+  async #authenticateToken(
+    rawToken: string | undefined,
+    roomId: string,
+    rejectClosedRoom: boolean,
+  ): Promise<TokenAuthorization> {
     if (!rawToken || rawToken.length > 512) return { ok: false, closeCode: 4401 };
     const result = await this.pool.query<{
       session_id: string; principal_kind: "teacher" | "student"; teacher_id: string | null;
@@ -40,10 +55,12 @@ export class RealtimeDeliveryAuthorizer {
     const row = result.rows[0];
     if (!row) return { ok: false, closeCode: 4401 };
     if (row.deletion_active !== false) return { ok: false, closeCode: 4410 };
-    // A client that already received room.closed may stay connected only for
-    // later authority/deletion notifications.  A fresh Upgrade for a closed
-    // room has no realtime work to perform and is rejected at admission.
-    if (row.room_status === "closed") return { ok: false, closeCode: 4410 };
+    // Ordinary authenticated HTTP reads remain available after room.closed.
+    // Only a fresh WebSocket Upgrade is rejected; an existing connection is
+    // reauthorized below and may receive later deletion/authority changes.
+    if (rejectClosedRoom && row.room_status === "closed") {
+      return { ok: false, closeCode: 4410 };
+    }
     if (row.principal_kind === "teacher" && row.teacher_id) {
       return { ok: true, sessionId: row.session_id, principal: authContract.parseSession({ role: "teacher", teacherId: row.teacher_id, actorId: row.teacher_id }), actorId: row.teacher_id };
     }
