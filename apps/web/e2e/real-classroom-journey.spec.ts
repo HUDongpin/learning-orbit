@@ -68,8 +68,39 @@ async function assertStudentComposerState(
     const flag = (value: number) => Math.min(9, Math.max(0, value));
     fail(`PILOT_STUDENT_${studentIndex + 1}_COMPOSER_${enabled ? "DISABLED" : "ENABLED"}_${statusCode}`
       + `_W${flag(socket.welcome)}_R${flag(socket.resumeComplete)}_E${flag(socket.durableEvents)}`
+      + `_A${flag(socket.acks)}_D${flag(socket.rejects)}`
       + `_C${flag(socket.closed)}_X${flag(socket.socketErrors)}`);
   }
+}
+
+async function readTeacherBoundaryState(page: Page, roomId: string): Promise<{
+  surface: number;
+  sessionStatus: number;
+  roomStatus: number;
+}> {
+  return page.evaluate(async ({ sessionPath, roomPath }) => {
+    const headings = [...document.querySelectorAll("h1")]
+      .map((heading) => heading.textContent?.trim() ?? "");
+    const surface = headings.includes("生態系統探究") ? 1
+      : headings.includes("即時同步已停止") ? 2
+        : headings.includes("目前的 Session 無法再開啟這個課堂") ? 3
+          : headings.includes("課堂服務暫時不可用") ? 4
+            : headings.includes("無法開啟這個課堂") ? 5 : 0;
+    const [sessionResponse, roomResponse] = await Promise.all([
+      fetch(sessionPath, { credentials: "include", cache: "no-store" }),
+      fetch(roomPath, { credentials: "include", cache: "no-store" }),
+    ]);
+    return { surface, sessionStatus: sessionResponse.status, roomStatus: roomResponse.status };
+  }, { sessionPath: routes.auth.session(), roomPath: routes.rooms.get(roomId) })
+    .catch(() => ({ surface: 9, sessionStatus: 0, roomStatus: 0 }));
+}
+
+function socketDiagnosticCode(socket: RoomSocketObservation): string {
+  const bounded = (value: number) => Math.min(9, Math.max(0, value));
+  return `G${bounded(socket.generation)}N${bounded(socket.count)}`
+    + `W${bounded(socket.welcome)}R${bounded(socket.resumeComplete)}E${bounded(socket.durableEvents)}`
+    + `A${bounded(socket.acks)}D${bounded(socket.rejects)}`
+    + `C${bounded(socket.closed)}X${bounded(socket.socketErrors)}Y${socket.ready ? 1 : 0}`;
 }
 
 async function countUndersizedTargets(page: Page): Promise<number> {
@@ -127,7 +158,11 @@ async function assertProtectedSurfaceQuality(page: Page, code: string): Promise<
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   const axe = await new AxeBuilder({ page }).analyze();
-  if (axe.violations.length !== 0) fail(`PILOT_AXE_${code}`);
+  if (axe.violations.length !== 0) {
+    const ruleIds = [...new Set(axe.violations.map(({ id }) => id))]
+      .sort().join("_").toUpperCase().replaceAll(/[^A-Z0-9_]/gu, "_").slice(0, 240);
+    fail(`PILOT_AXE_${code}_${ruleIds || "UNKNOWN_RULE"}`);
+  }
 }
 
 async function readTeacherProjectionAuthority(
@@ -476,20 +511,37 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await expect(students[1]!.page.getByRole("heading", { name: TOPIC })).toBeVisible();
 
     await test.step("drive lifecycle and real WSS RoomEvent chat", async () => {
-      const firstMessage = "池塘中的陽光為生產者提供能量。";
-      const revisedMessage = "池塘中的陽光为生产者提供能量，也支持食物链。";
+      const firstMessage = "池塘中的太陽讓生產者獲得能量。";
+      const revisedMessage = "池塘中的太陽讓生產者獲得能量，也支持食物鏈。";
       const replyMessage = "我同意，并想追问能量如何传到消费者。";
       await test.step("open room and enable composers", async () => {
         await test.step("teacher WSS ready", async () => {
           await expect(teacherPage.getByText("WebSocket 已連線").first()).toBeVisible({ timeout: 30_000 });
         });
         await test.step("credential-free classroom sockets ready", async () => {
-          await expect.poll(() => socketObservations.every(({ count, invalid, ready }) => (
-            count >= 1 && ready && !invalid
-          )), {
-            message: "every classroom client must complete a credential-free same-origin WSS handshake",
-            timeout: 30_000,
-          }).toBe(true);
+          try {
+            await expect.poll(() => socketObservations.every(({ count, invalid, ready }) => (
+              count >= 1 && ready && !invalid
+            )), {
+              message: "every classroom client must complete a credential-free same-origin WSS handshake",
+              timeout: 30_000,
+            }).toBe(true);
+          } catch {
+            const pages = [teacherPage, ...students.map(({ page }) => page)];
+            const uiReady = await Promise.all(pages.map((page) => (
+              page.getByText("WebSocket 已連線").first().isVisible().catch(() => false)
+            )));
+            const bounded = (value: number) => Math.min(9, Math.max(0, value));
+            const observations = socketObservations.map((socket, index) => (
+              `${index === 0 ? "T" : `S${index}`}`
+              + `G${bounded(socket.generation)}N${bounded(socket.count)}`
+              + `W${bounded(socket.welcome)}R${bounded(socket.resumeComplete)}`
+              + `E${bounded(socket.durableEvents)}A${bounded(socket.acks)}D${bounded(socket.rejects)}`
+              + `C${bounded(socket.closed)}X${bounded(socket.socketErrors)}`
+              + `Y${socket.ready ? 1 : 0}I${socket.invalid ? 1 : 0}U${uiReady[index] ? 1 : 0}`
+            )).join("_");
+            fail(`PILOT_SOCKET_HANDSHAKE_NOT_READY_${observations}`);
+          }
         });
         await test.step("send room open command", async () => {
           const openButton = teacherPage.getByRole("button", { name: "開始課堂" });
@@ -507,22 +559,61 @@ test("real teacher and four-student classroom journey remains server-authoritati
       });
 
       await test.step("pause and resume room", async () => {
-        await teacherPage.getByRole("button", { name: "暫停課堂" }).click();
-        await Promise.all(students.map(({ page }, index) => (
-          assertStudentComposerState(page, index, false, socketObservations[index + 1]!)
-        )));
-        await teacherPage.getByRole("button", { name: "繼續課堂" }).click();
-        await Promise.all(students.map(({ page }, index) => (
-          assertStudentComposerState(page, index, true, socketObservations[index + 1]!)
-        )));
+        await test.step("send pause command", async () => {
+          const pauseButton = teacherPage.getByRole("button", { name: "暫停課堂" });
+          try {
+            await expect(pauseButton).toBeEnabled({ timeout: 30_000 });
+            await pauseButton.click({ timeout: 30_000 });
+          } catch {
+            const boundary = await readTeacherBoundaryState(teacherPage, roomId);
+            fail(`PILOT_PAUSE_COMMAND_UNAVAILABLE_H${boundary.surface}`
+              + `Q${boundary.sessionStatus}O${boundary.roomStatus}_${socketDiagnosticCode(socketObservations[0]!)}`);
+          }
+        });
+        await test.step("students receive pause event", async () => {
+          await Promise.all(students.map(({ page }, index) => (
+            assertStudentComposerState(page, index, false, socketObservations[index + 1]!)
+          )));
+        });
+        await test.step("send resume command", async () => {
+          const resumeButton = teacherPage.getByRole("button", { name: "繼續課堂" });
+          try {
+            await expect(resumeButton).toBeEnabled({ timeout: 30_000 });
+            await resumeButton.click({ timeout: 30_000 });
+          } catch {
+            const boundary = await readTeacherBoundaryState(teacherPage, roomId);
+            fail(`PILOT_RESUME_COMMAND_UNAVAILABLE_H${boundary.surface}`
+              + `Q${boundary.sessionStatus}O${boundary.roomStatus}_${socketDiagnosticCode(socketObservations[0]!)}`);
+          }
+        });
+        await test.step("students receive resume event", async () => {
+          await Promise.all(students.map(({ page }, index) => (
+            assertStudentComposerState(page, index, true, socketObservations[index + 1]!)
+          )));
+        });
       });
 
       await test.step("broadcast first message", async () => {
         await students[0]!.page.getByLabel("輸入訊息").fill(firstMessage);
         await students[0]!.page.getByRole("button", { name: "發送訊息" }).click();
-        await Promise.all([teacherPage, ...students.map(({ page }) => page)].map((page) => (
-          expect(page.getByRole("region", { name: "共學對話" }).getByText(firstMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
-        )));
+        const pages = [teacherPage, ...students.map(({ page }) => page)];
+        try {
+          await Promise.all(pages.map((page) => (
+            expect(page.getByRole("region", { name: "共學對話" }).getByText(firstMessage, { exact: true })).toBeVisible({ timeout: 30_000 })
+          )));
+        } catch {
+          const visible = await Promise.all(pages.map((page) => (
+            page.getByRole("region", { name: "共學對話" }).getByText(firstMessage, { exact: true })
+              .isVisible().catch(() => false)
+          )));
+          const teacherBoundary = await readTeacherBoundaryState(teacherPage, roomId);
+          const observations = socketObservations.map((socket, index) => (
+            `${index === 0 ? "T" : `S${index}`}`
+            + `V${visible[index] ? 1 : 0}${socketDiagnosticCode(socket)}`
+          )).join("_");
+          fail(`PILOT_FIRST_MESSAGE_NOT_VISIBLE_H${teacherBoundary.surface}`
+            + `Q${teacherBoundary.sessionStatus}O${teacherBoundary.roomStatus}_${observations}`);
+        }
       });
 
       await test.step("reply to message", async () => {
@@ -557,50 +648,86 @@ test("real teacher and four-student classroom journey remains server-authoritati
 
     await test.step("verify Provider and role-scoped analytics boundaries", async () => {
       const studentPage = students[0]!.page;
-      await expect(studentPage.getByRole("region", { name: "訊息媒體" })).toContainText("媒體 Provider 目前不可用");
-      await expect(studentPage.getByRole("region", { name: "Nova Agent 狀態" })).toContainText("目前沒有可用的真實 Agent Executor", { timeout: 30_000 });
-      await expect(studentPage.getByRole("region", { name: "共學對話" }).locator(".message.agent")).toHaveCount(0);
-      await expect(studentPage.getByRole("region", { name: "概念與論證" }).getByText("not_available_by_policy", { exact: true })).toBeVisible({ timeout: 30_000 });
-      await expect(studentPage.getByRole("region", { name: "互動網絡" }).getByText("not_available_by_policy", { exact: true })).toBeVisible({ timeout: 30_000 });
-      await expect(teacherPage.locator(".server-analysis-panel .analysis-version")).toHaveCount(2, { timeout: 60_000 });
-      await expect(teacherPage.getByText("not_available_by_policy", { exact: true })).toHaveCount(0);
       const teacherTrace = teacherPage.getByRole("region", { name: "互動網絡" });
-      for (const windowName of ["最近 10 分鐘", "全課 45 分鐘"]) {
-        const button = teacherTrace.getByRole("button", { name: windowName });
-        await button.click();
-        await expect(button).toHaveAttribute("aria-pressed", "true");
-      }
-      for (const viewName of ["觀察網絡", "僅人類", "承接關係"]) {
-        const button = teacherTrace.getByRole("button", { name: viewName });
-        await button.click();
-        await expect(button).toHaveAttribute("aria-pressed", "true");
-      }
-      const traceListItem = teacherTrace.getByRole("list", { name: "互動網絡等價列表" })
-        .getByRole("button").first();
-      await traceListItem.focus();
-      await teacherPage.keyboard.press("Enter");
-      await expect(traceListItem).toHaveAttribute("aria-pressed", "true");
-      await expect(teacherTrace.getByRole("region", { name: "TRACE Inspector" }))
-        .not.toContainText("從等價列表選擇節點或方向以查看說明。");
-      await expect(teacherTrace.locator("svg.analysis-svg")).toHaveAttribute("aria-hidden", "true");
-
       const teacherEcho = teacherPage.getByRole("region", { name: "概念與論證" });
-      const echoListItem = teacherEcho.getByRole("list", { name: "概念關係等價列表" })
-        .getByRole("button").first();
-      await echoListItem.focus();
-      await teacherPage.keyboard.press("Enter");
-      await expect(echoListItem).toHaveAttribute("aria-pressed", "true");
-      await expect(teacherEcho.getByRole("region", { name: "ECHO Inspector" }))
-        .not.toContainText("從等價列表選擇一個概念或關係以查看伺服器狀態。");
-      await expect(teacherEcho.locator("svg.analysis-svg")).toHaveAttribute("aria-hidden", "true");
-      await teacherEcho.getByRole("button", { name: "查看版本時間線" }).click();
-      await expect(teacherEcho.getByRole("region", { name: "ECHO Timeline" })).toBeVisible({ timeout: 30_000 });
-
-      await teacherPage.getByLabel("修正分支").selectOption("split_alias");
-      await assertProtectedSurfaceQuality(teacherPage, "TEACHER_CORRECTION_FORM");
-      await teacherPage.getByLabel("修正分支").selectOption("replace_text");
-      await assertNoUuidInVisibleText(teacherPage);
-      await assertNoUuidInVisibleText(studentPage);
+      await test.step("verify fail-closed Provider surfaces", async () => {
+        await expect(studentPage.getByRole("region", { name: "訊息媒體" }))
+          .toContainText("媒體 Provider 目前不可用", { timeout: 30_000 });
+        await expect(studentPage.getByRole("region", { name: "Nova Agent 狀態" }))
+          .toContainText("目前沒有可用的真實 Agent Executor", { timeout: 30_000 });
+        await expect(studentPage.getByRole("region", { name: "共學對話" }).locator(".message.agent")).toHaveCount(0);
+      });
+      await test.step("verify role-scoped Projection availability", async () => {
+        await expect(studentPage.getByRole("region", { name: "概念與論證" }).getByText("not_available_by_policy", { exact: true }))
+          .toBeVisible({ timeout: 30_000 });
+        await expect(studentPage.getByRole("region", { name: "互動網絡" }).getByText("not_available_by_policy", { exact: true }))
+          .toBeVisible({ timeout: 30_000 });
+        await expect(teacherPage.locator(".server-analysis-panel .analysis-version")).toHaveCount(2, { timeout: 60_000 });
+        await expect(teacherPage.getByText("not_available_by_policy", { exact: true })).toHaveCount(0);
+        const currentRoomSeq = await readRoomThroughSeq(teacherPage, roomId);
+        await expect.poll(async () => (
+          await readTeacherEchoAuthority(teacherPage, roomId)
+        ).completeThroughRoomSeq, { timeout: 60_000 }).toBe(currentRoomSeq);
+        await expect.poll(async () => (
+          await readTeacherTraceAuthority(teacherPage, roomId)
+        ).completeThroughRoomSeq, { timeout: 60_000 }).toBe(currentRoomSeq);
+      });
+      await test.step("switch TRACE windows and views", async () => {
+        for (const windowName of ["最近 10 分鐘", "全課 45 分鐘"]) {
+          const button = teacherTrace.getByRole("button", { name: windowName });
+          await expect(button).toBeVisible({ timeout: 30_000 });
+          await button.click({ timeout: 30_000 });
+          await expect(button).toHaveAttribute("aria-pressed", "true");
+        }
+        for (const viewName of ["觀察網絡", "僅人類", "承接關係"]) {
+          const button = teacherTrace.getByRole("button", { name: viewName });
+          await expect(button).toBeVisible({ timeout: 30_000 });
+          await button.click({ timeout: 30_000 });
+          await expect(button).toHaveAttribute("aria-pressed", "true");
+        }
+      });
+      await test.step("operate TRACE keyboard Inspector", async () => {
+        const traceListItem = teacherTrace.getByRole("list", { name: "互動網絡等價列表" })
+          .getByRole("button").first();
+        await expect(traceListItem).toBeVisible({ timeout: 30_000 });
+        await traceListItem.focus({ timeout: 30_000 });
+        await teacherPage.keyboard.press("Enter");
+        await expect(traceListItem).toHaveAttribute("aria-pressed", "true");
+        await expect(teacherTrace.getByRole("region", { name: "TRACE Inspector" }))
+          .not.toContainText("從等價列表選擇節點或方向以查看說明。");
+        await expect(teacherTrace.locator("svg.analysis-svg")).toHaveAttribute("aria-hidden", "true");
+      });
+      await test.step("operate ECHO keyboard Inspector and Timeline", async () => {
+        const echoListItem = teacherEcho.getByRole("list", { name: "概念關係等價列表" })
+          .getByRole("button").first();
+        await expect(echoListItem).toBeVisible({ timeout: 30_000 });
+        await echoListItem.focus({ timeout: 30_000 });
+        await teacherPage.keyboard.press("Enter");
+        await expect(echoListItem).toHaveAttribute("aria-pressed", "true");
+        await expect(teacherEcho.getByRole("region", { name: "ECHO Inspector" }))
+          .not.toContainText("從等價列表選擇一個概念或關係以查看伺服器狀態。");
+        await expect(teacherEcho.locator("svg.analysis-svg")).toHaveAttribute("aria-hidden", "true");
+        const timelineButton = teacherEcho.getByRole("button", { name: "查看版本時間線" });
+        await expect(timelineButton).toBeVisible({ timeout: 30_000 });
+        await timelineButton.click({ timeout: 30_000 });
+        try {
+          await expect(teacherEcho.getByRole("region", { name: "ECHO Timeline" })).toBeVisible({ timeout: 30_000 });
+        } catch {
+          const alerts = await teacherEcho.getByRole("alert").allTextContents();
+          const code = /錯誤代碼：([A-Z0-9_]{1,80})/u.exec(alerts.join(" "))?.[1]
+            ?? "UNKNOWN";
+          fail(`PILOT_ECHO_TIMELINE_${code}`);
+        }
+      });
+      await test.step("verify Correction branch quality and identifier privacy", async () => {
+        const correctionBranch = teacherPage.getByLabel("修正分支");
+        await expect(correctionBranch).toBeVisible({ timeout: 30_000 });
+        await correctionBranch.selectOption("split_alias", { timeout: 30_000 });
+        await assertProtectedSurfaceQuality(teacherPage, "TEACHER_CORRECTION_FORM");
+        await correctionBranch.selectOption("replace_text", { timeout: 30_000 });
+        await assertNoUuidInVisibleText(teacherPage);
+        await assertNoUuidInVisibleText(studentPage);
+      });
     });
 
     await test.step("submit real teacher Review and Correction through Worker replay", async () => {
@@ -707,6 +834,10 @@ test("real teacher and four-student classroom journey remains server-authoritati
     await Promise.all(students.map(({ page }, index) => (
       assertStudentComposerState(page, index, false, socketObservations[index + 1]!)
     )));
+    await expect(teacherPage.getByRole("group", { name: "記錄審閱" })).toHaveAttribute("disabled", "");
+    await expect(teacherPage.getByRole("group", { name: "記錄 Correction" })).toHaveAttribute("disabled", "");
+    await expect(teacherPage.locator(".agent-policy-control button")).toBeDisabled();
+    await expect(teacherPage.getByRole("button", { name: "下載 JSON" })).toBeEnabled();
 
     const loggedOutStudent = students.pop();
     if (!loggedOutStudent) fail("PILOT_STUDENT_CONTEXT_MISSING");

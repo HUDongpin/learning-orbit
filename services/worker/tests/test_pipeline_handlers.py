@@ -4,7 +4,12 @@ from learning_orbit_worker.jobs import WorkerJob
 from learning_orbit_worker.pipeline_handlers import (
     agent_execute_handler, media_process_handler, media_reconcile_upload_handler,
 )
-from learning_orbit_worker.projection_store import ProjectionStore
+from learning_orbit_worker.projection_store import (
+    ProjectionStore,
+    _compact_patch_payload,
+    _content_hash,
+    _existing_patch_matches,
+)
 from learning_orbit_worker.core_handlers import RetryableJobError
 
 ROOM = "00000000-0000-4000-8000-000000000001"
@@ -34,3 +39,35 @@ class PipelineHandlerTests(unittest.TestCase):
         with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch={**patch, "roomId": "00000000-0000-4000-8000-000000000099"}, patch_hash="b" * 64)
         with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch=patch, patch_hash=None)
         with self.assertRaises(ValueError): store.persist(snapshot=snapshot, payload_hash="a" * 64, patch={**patch, "changeScore": True}, patch_hash="b" * 64)
+
+        stored_patch = _compact_patch_payload(snapshot["projectionKey"], patch)
+        stored_hash = _content_hash(stored_patch)
+        row = {
+            "room_id": snapshot["roomId"],
+            "projection_key": snapshot["projectionKey"],
+            "analysis_epoch": patch["analysisEpoch"],
+            "version": patch["projectionVersion"],
+            "base_version": patch["baseVersion"],
+            "complete_through_seq": patch["completeThroughRoomSeq"],
+            "algorithm_version": patch["algorithmVersion"],
+            "parameter_hash": patch["parameterHash"],
+            "payload": stored_patch,
+            "content_sha256": stored_hash,
+        }
+        self.assertTrue(_existing_patch_matches(row, snapshot, patch, stored_patch, stored_hash))
+        for field, wrong_value in (
+            ("room_id", "00000000-0000-4000-8000-000000000099"),
+            ("projection_key", "echo.student_approved"),
+            ("analysis_epoch", "00000000-0000-4000-8000-000000000099"),
+            ("version", 2),
+            ("base_version", 1),
+            ("complete_through_seq", 1),
+            ("algorithm_version", "v2"),
+            ("parameter_hash", "b" * 64),
+            ("payload", {**stored_patch, "requiresReplay": True}),
+            ("content_sha256", "b" * 64),
+        ):
+            with self.subTest(field=field):
+                self.assertFalse(_existing_patch_matches(
+                    {**row, field: wrong_value}, snapshot, patch, stored_patch, stored_hash,
+                ))

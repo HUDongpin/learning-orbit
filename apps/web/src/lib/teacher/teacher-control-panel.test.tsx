@@ -454,7 +454,12 @@ describe("teacher control panel", () => {
     const accepted = { deletionJobId: REVIEW_ID, status: "queued" as const };
     const api = gateway({ requestRoomDeletion: vi.fn(async () => accepted) });
     const onDeletionAccepted = vi.fn();
-    render(<TeacherControlPanel roomId={ROOM_ID} roomStatus="closed" echo={echo} gateway={api} runtime={{ sendIntent: vi.fn(() => REVIEW_ID) }} onDeletionAccepted={onDeletionAccepted} />);
+    render(<TeacherControlPanel roomId={ROOM_ID} roomStatus="closed" echo={echo} agentEnabled={true} gateway={api} runtime={{ sendIntent: vi.fn(() => REVIEW_ID) }} onDeletionAccepted={onDeletionAccepted} />);
+    await screen.findByText(artifact.text);
+    expect(screen.getByRole("group", { name: "記錄審閱" })).toBeDisabled();
+    expect(screen.getByRole("group", { name: "記錄 Correction" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "停用 Nova" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下載 JSON" })).toBeEnabled();
     const button = screen.getByRole("button", { name: "要求刪除" });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText("確認文字"), "刪除課堂");

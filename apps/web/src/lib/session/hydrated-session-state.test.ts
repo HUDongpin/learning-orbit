@@ -653,6 +653,24 @@ describe("HydratedSessionState", () => {
     expect(hydrated.progress(new Date("2026-08-30T09:30:00.000Z").getTime()).elapsedSeconds).toBe(1800);
     expect(() => hydrated.sendIntent({ type: "message.add", text: "暫停時不可送出", replyTo: null, mentions: [], mediaIds: [] }))
       .toThrow("ROOM_NOT_OPEN");
+    const closeSocket = vi.fn();
+    hydrated.connect(() => ({ readyState: 1, send: vi.fn(), close: closeSocket }));
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 4 });
+    hydrated.receiveFrame({
+      type: "event",
+      event: {
+        ...event(5),
+        type: "room.closed",
+        actorId: "00000000-0000-4000-8000-000000000099",
+        actorKind: "system",
+        actorRole: "room_clock",
+        payload: { closedAt: "2026-08-30T09:31:00.000Z" },
+      },
+    });
+    expect(hydrated.sessionState).toMatchObject({ status: "closed", connected: true, lastRoomSeq: 5 });
+    expect(closeSocket).not.toHaveBeenCalled();
+    expect(() => hydrated.sendIntent({ type: "message.add", text: "結束後不可送出", replyTo: null, mentions: [], mediaIds: [] }))
+      .toThrow("ROOM_NOT_OPEN");
   });
 
   it("recovers a live gap through authenticated event pages without skipping the missing event", async () => {

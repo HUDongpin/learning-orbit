@@ -680,6 +680,12 @@ describe("typed SessionGateway", () => {
       createdRoom.room.roomId,
       reviewCommands[0],
     )).resolves.toEqual(accepted);
+
+    const closed = new FetchSessionGateway({
+      fetch: vi.fn().mockResolvedValue(json({ code: "ROOM_NOT_OPEN" }, 409)),
+    });
+    await expect(closed.submitAnalyticsReview(createdRoom.room.roomId, reviewCommands[0]))
+      .rejects.toEqual(new SessionGatewayError("ROOM_NOT_OPEN"));
   });
 
   it("loads only a generated review detail correlated to the requested room and event", async () => {

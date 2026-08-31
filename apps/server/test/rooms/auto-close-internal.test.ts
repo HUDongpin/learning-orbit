@@ -169,7 +169,7 @@ describe("signed internal room auto-close", () => {
     expect((await pool.query("SELECT count(*)::int AS count FROM room_event WHERE room_id = $1", [room.roomId])).rows[0]).toEqual({ count: 1 });
     await app.close();
   });
-  it("keeps not-due work unmarked, closes once, preserves its claim, and recovers after marker loss", async () => {
+  it("keeps not-due work unmarked, closes once with read-only student sessions, preserves its claim, and recovers after marker loss", async () => {
     const room = await seedLifecycleRoom(pool);
     const { claim, request } = await openedClaim(room);
     const app = await makeApp();
@@ -209,6 +209,7 @@ describe("signed internal room auto-close", () => {
     });
 
     const closeEvents = await pool.query<{
+      event_id: string;
       actor_id: string;
       actor_kind: string;
       actor_role: string;
@@ -216,12 +217,13 @@ describe("signed internal room auto-close", () => {
       event_time: Date;
       payload: Record<string, unknown>;
     }>(
-      `SELECT actor_id, actor_kind, actor_role, causation_id, event_time, payload
+      `SELECT event_id, actor_id, actor_kind, actor_role, causation_id, event_time, payload
        FROM room_event
        WHERE room_id = $1 AND type = 'room.closed'`,
       [room.roomId],
     );
     expect(closeEvents.rows).toEqual([{
+      event_id: expect.any(String),
       actor_id: claim.jobId,
       actor_kind: "system",
       actor_role: "room_clock",
@@ -234,14 +236,16 @@ describe("signed internal room auto-close", () => {
        WHERE room_member_id = ANY($1::uuid[])`,
       [room.memberIds],
     );
-    expect(sessions.rows.every(({ revoked }) => revoked)).toBe(true);
+    expect(sessions.rows.every(({ revoked }) => !revoked)).toBe(true);
     const jobs = await pool.query<{
       job_id: string;
+      job_type: string;
+      source_event_id: string | null;
       status: string;
       claim_token: string | null;
       locked_by: string | null;
     }>(
-      "SELECT job_id, status, claim_token, locked_by FROM worker_job WHERE room_id = $1",
+      "SELECT job_id, job_type, source_event_id, status, claim_token, locked_by FROM worker_job WHERE room_id = $1",
       [room.roomId],
     );
     expect(jobs.rows.find(({ job_id }) => job_id === claim.jobId)).toMatchObject({
@@ -249,7 +253,19 @@ describe("signed internal room auto-close", () => {
       claim_token: claim.claimToken,
       locked_by: claim.workerId,
     });
-    expect(jobs.rows.filter(({ job_id }) => job_id !== claim.jobId).every((job) => (
+    const closeEventId = closeEvents.rows[0]!.event_id;
+    const analytics = jobs.rows.filter(({ job_type }) => job_type === "analytics.consume.v1");
+    expect(analytics).toHaveLength(2);
+    expect(new Set(analytics.map(({ source_event_id }) => source_event_id)))
+      .toEqual(new Set([request.sourceEventId, closeEventId]));
+    expect(analytics.every(({ status, claim_token, locked_by }) => (
+      status === "queued" && claim_token === null && locked_by === null
+    ))).toBe(true);
+    expect(jobs.rows.filter(({ job_id, job_type }) => (
+      job_id !== claim.jobId
+      && job_type !== "analytics.consume.v1"
+      && job_type !== "analytics.replay-room.v1"
+    )).every((job) => (
       job.status === "cancelled" && job.claim_token === null && job.locked_by === null
     ))).toBe(true);
     expect((await pool.query(
@@ -263,7 +279,14 @@ describe("signed internal room auto-close", () => {
        WHERE job_id = $1`,
       [claim.jobId],
     );
-    expect(await new JobStore(pool, "worker-recovery").claim(10)).toEqual([]);
+    await expect(new JobStore(pool, "worker-recovery").claim(10)).resolves.toEqual([
+      expect.objectContaining({
+        jobType: "analytics.consume.v1",
+        roomId: room.roomId,
+        sourceEventId: request.sourceEventId,
+        analyticsOrderKind: 0,
+      }),
+    ]);
     expect((await pool.query(
       "SELECT status FROM worker_job WHERE job_id = $1",
       [claim.jobId],

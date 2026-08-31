@@ -145,6 +145,7 @@ The gateway covers session hydrate/revoke, student join, teacher Magic Link requ
 - Projection, media-status, Agent-status, acknowledgment, welcome, heartbeat, and resume-complete frames never enter the RoomEvent ledger and never advance `roomSeq`.
 - Lost acknowledgments resend the same immutable command and `commandId`; components cannot supply room, actor, role, clock, or identity fields.
 - Socket authentication is the Secure cookie plus server authorization. A query-selected role, a visible console, or an old connection never grants cross-room delivery.
+- Manual and automatic close commit a durable `room.closed` event and leave the existing student Session authorized only for the closed room's read surfaces until logout, natural expiry, or deletion. This is the Plan 05 read-only closed-room behavior and supersedes the earlier rule that revoked student Sessions and closed an already-connected Socket with `4410` at ordinary room close: composition and every room mutation fail because the server status is `closed`, while that existing Socket remains only long enough to receive later authority changes. Hydrating an already closed room does not open a new Socket, and a direct fresh Upgrade against a closed room is rejected with `4410`. Plan 06 deletion still revokes student Sessions and evicts any remaining connection with `4410`, causing the browser to clear all in-memory room and Projection state.
 
 ### 4.3 ECHO-CM, TRACE-AI, provider, and teacher-console boundaries
 

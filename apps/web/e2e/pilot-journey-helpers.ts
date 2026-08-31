@@ -26,6 +26,8 @@ export type RoomSocketObservation = {
   welcome: number;
   resumeComplete: number;
   durableEvents: number;
+  acks: number;
+  rejects: number;
   closed: number;
   socketErrors: number;
 };
@@ -56,6 +58,8 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
     welcome: 0,
     resumeComplete: 0,
     durableEvents: 0,
+    acks: 0,
+    rejects: 0,
     closed: 0,
     socketErrors: 0,
   };
@@ -88,6 +92,10 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
         if (result.generation === generation) currentResumeComplete = true;
       } else if (type === "event") {
         result.durableEvents += 1;
+      } else if (type === "ack") {
+        result.acks += 1;
+      } else if (type === "reject") {
+        result.rejects += 1;
       }
       if (result.generation === generation) {
         result.ready = currentWelcome && currentResumeComplete;

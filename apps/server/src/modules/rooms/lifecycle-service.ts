@@ -56,21 +56,6 @@ async function existingManualRetry(
     : null;
 }
 
-export async function revokeStudentSessions(
-  context: RoomEventTransactionContext,
-  roomId: string,
-  now: Date,
-): Promise<void> {
-  await context.client.query(
-    `UPDATE auth_session AS session SET revoked_at = $2
-     FROM room_member AS member
-     WHERE session.room_member_id = member.room_member_id
-       AND member.room_id = $1
-       AND session.revoked_at IS NULL`,
-    [roomId, now],
-  );
-}
-
 export async function cancelRoomJobs(
   context: RoomEventTransactionContext,
   roomId: string,
@@ -83,6 +68,7 @@ export async function cancelRoomJobs(
          locked_by = NULL, updated_at = $2
      WHERE room_id = $1
        AND status IN ('queued', 'retryable', 'running')
+       AND job_type NOT IN ('analytics.consume.v1', 'analytics.replay-room.v1')
        AND ($3::uuid IS NULL OR job_id <> $3::uuid)`,
     [roomId, now, preserveJobId ?? null],
   );
@@ -102,7 +88,6 @@ export async function appendAutomaticClose(
     `UPDATE classroom_room SET status = 'closed', closed_at = $2 WHERE room_id = $1`,
     [roomId, closesAt],
   );
-  await revokeStudentSessions(context, roomId, now);
   await cancelRoomJobs(context, roomId, now, preserveJobId);
   const closed = await context.append({
     type: "room.closed",
@@ -116,11 +101,9 @@ export async function appendAutomaticClose(
     correlationId,
     payload: { closedAt: closesAt.toISOString() },
   });
-  // Appending the close event also fan-outs an analytics job.  Re-run the
-  // cancellation fence after the append so a closed room cannot leave that
-  // newly-created job queued while preserving only the currently claimed
-  // auto-close job for its completion marker.
-  await cancelRoomJobs(context, roomId, now, preserveJobId);
+  // The append creates exactly one ordered analytics.consume job.  Preserve
+  // it so the semantic no-op close still advances every Projection and the
+  // analytics checkpoint through the terminal roomSeq.
   return closed;
 }
 
@@ -268,7 +251,6 @@ export class RoomLifecycleService {
          WHERE room_id = $1`,
         [roomId, now],
       );
-      await revokeStudentSessions(context, roomId, now);
       await cancelRoomJobs(context, roomId, now);
       const closed = await context.append({
         type: "room.closed",
@@ -282,7 +264,6 @@ export class RoomLifecycleService {
         correlationId: randomUUID(),
         payload: { closedAt: now.toISOString() },
       });
-      await cancelRoomJobs(context, roomId, now);
       return closed;
     });
   }

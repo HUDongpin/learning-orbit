@@ -197,7 +197,8 @@ export function TeacherControlPanel({
     && !lifecycleNonRetryableReject;
   const lifecycleTransportPending = lifecycleRequest !== undefined
     && (runtime.pendingCommandIds?.().includes(lifecycleRequest.commandId) ?? false);
-  const correctionCanSubmit = projectionAuthorityPrepared && !projectionAuthorityReserved
+  const correctionCanSubmit = roomStatus !== "closed"
+    && projectionAuthorityPrepared && !projectionAuthorityReserved
     && Boolean(projectionAuthority && reason.trim()) && (() => {
     switch (correctionKind) {
       case "replace_text":
@@ -402,7 +403,8 @@ export function TeacherControlPanel({
   }
 
   async function submitReview(): Promise<void> {
-    if (!projectionAuthorityPrepared || !selectedArtifact || !projectionAuthority || projectionAuthorityReserved) return;
+    if (roomStatus === "closed" || !projectionAuthorityPrepared
+      || !selectedArtifact || !projectionAuthority || projectionAuthorityReserved) return;
     const signal = startAction();
     try {
       const input: AnalyticsReviewCommand = {
@@ -427,7 +429,8 @@ export function TeacherControlPanel({
   }
 
   async function submitCorrection(): Promise<void> {
-    if (!projectionAuthorityPrepared || !projectionAuthority || projectionAuthorityReserved || !correctionCanSubmit) return;
+    if (roomStatus === "closed" || !projectionAuthorityPrepared
+      || !projectionAuthority || projectionAuthorityReserved || !correctionCanSubmit) return;
     const signal = startAction();
     try {
       const retractTarget = retractType === "derived_text" && selectedArtifact
@@ -521,6 +524,7 @@ export function TeacherControlPanel({
   }
 
   async function updateAgentPolicy(enabled: boolean): Promise<void> {
+    if (roomStatus === "closed") return;
     const signal = startAction();
     try {
       const confirmed = await gateway.setAgentSettings(roomId, { enabled }, { signal });
@@ -584,7 +588,7 @@ export function TeacherControlPanel({
           <div className="agent-policy-control">
             <h3>Nova 政策</h3>
             <p>{agentPolicy === undefined ? "正在等待伺服器確認 Nova 是否啟用。" : agentPolicy ? "伺服器政策：已啟用。" : "伺服器政策：已停用。"}</p>
-            <button className="teacher-secondary" disabled={commandPending || agentPolicy === undefined} onClick={() => void updateAgentPolicy(!(agentPolicy ?? false))} type="button">
+            <button className="teacher-secondary" disabled={roomStatus === "closed" || commandPending || agentPolicy === undefined} onClick={() => void updateAgentPolicy(!(agentPolicy ?? false))} type="button">
               {agentPolicy ? "停用 Nova" : "啟用 Nova"}
             </button>
           </div>
@@ -611,14 +615,14 @@ export function TeacherControlPanel({
           ) : !artifactLoading ? <p>目前沒有伺服器回傳的未審閱 Artifact。</p> : null}
           {nextArtifactId ? <button className="teacher-secondary" disabled={artifactLoading} onClick={() => void loadMoreArtifacts()} type="button">載入下一頁</button> : null}
 
-          <fieldset className="teacher-form-grid" disabled={commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !selectedArtifact || !projectionAuthority}>
+          <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !selectedArtifact || !projectionAuthority}>
             <legend>記錄審閱</legend>
             <label>審閱結果<select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as typeof reviewDecision)}>{REVIEW_DECISIONS.map((decision) => <option key={decision} value={decision}>{decision}</option>)}</select></label>
             <label>審閱理由<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} maxLength={2000} required /></label>
             <button className="teacher-create" disabled={!rationale.trim()} onClick={() => void submitReview()} type="button">提交審閱</button>
           </fieldset>
 
-          <fieldset className="teacher-form-grid" disabled={commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !projectionAuthority}>
+          <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !projectionAuthority}>
             <legend>記錄 Correction</legend>
             <label>修正分支<select value={correctionKind} onChange={(event) => setCorrectionKind(event.target.value as TeacherCorrectionKind)}>{Object.entries(CORRECTION_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
             {correctionKind === "replace_text" ? <><label>替換文字<textarea value={replacementText} onChange={(event) => setReplacementText(event.target.value)} maxLength={20000} /></label><label>語言標籤<input value={languageTag} onChange={(event) => setLanguageTag(event.target.value)} /></label></> : null}
@@ -639,6 +643,7 @@ export function TeacherControlPanel({
           {!projectionAuthority ? <p role="status">等待伺服器 teacher ECHO 的 Analysis Epoch 與 Projection Version；審閱提交保持停用。</p> : null}
           {projectionAuthority && !projectionAuthorityPrepared ? <p role="status">正在為目前 Projection Authority 重新載入 Artifact Queue 並重置目標；審閱提交保持停用。</p> : null}
           {projectionAuthorityReserved ? <p role="status">這個 Projection Authority 已提交一個事實；等待伺服器 Replay 推進版本後才可再次審閱或修正。</p> : null}
+          {roomStatus === "closed" ? <p role="status">課堂已結束；分析內容保持可讀，新的 Review 與 Correction 已停用。</p> : null}
         </div>
       </section>
 

@@ -40,6 +40,10 @@ export class RealtimeDeliveryAuthorizer {
     const row = result.rows[0];
     if (!row) return { ok: false, closeCode: 4401 };
     if (row.deletion_active !== false) return { ok: false, closeCode: 4410 };
+    // A client that already received room.closed may stay connected only for
+    // later authority/deletion notifications.  A fresh Upgrade for a closed
+    // room has no realtime work to perform and is rejected at admission.
+    if (row.room_status === "closed") return { ok: false, closeCode: 4410 };
     if (row.principal_kind === "teacher" && row.teacher_id) {
       return { ok: true, sessionId: row.session_id, principal: authContract.parseSession({ role: "teacher", teacherId: row.teacher_id, actorId: row.teacher_id }), actorId: row.teacher_id };
     }

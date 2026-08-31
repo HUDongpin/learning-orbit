@@ -391,11 +391,28 @@ describe("room route access guard", () => {
   it("hydrates a normally closed teacher room for export and deletion without opening WSS", async () => {
     const WebSocketConstructor = vi.fn();
     vi.stubGlobal("WebSocket", WebSocketConstructor);
-    const getRoomEvents = vi.fn(async () => ({ events: [], throughRoomSeq: 0 }));
+    const closedEvent = {
+      eventId: "00000000-0000-4000-8001-000000000001",
+      schemaVersion: 1 as const,
+      roomId,
+      roomSeq: 1,
+      type: "room.closed",
+      actorId: teacher.actorId,
+      actorKind: "human" as const,
+      actorRole: "teacher" as const,
+      revision: 1,
+      operation: "add" as const,
+      eventTime: "2026-08-31T01:30:00.000Z",
+      ingestTime: "2026-08-31T01:30:01.000Z",
+      causationId: "00000000-0000-4000-8000-000000000202",
+      correlationId: "00000000-0000-4000-8000-000000000402",
+      payload: { closedAt: "2026-08-31T01:30:00.000Z" },
+    };
+    const getRoomEvents = vi.fn(async () => ({ events: [closedEvent], throughRoomSeq: 1 }));
     const api = gateway(teacher, {
       getRoom: vi.fn(async () => ({
         ...room,
-        status: "closed" as const,
+        status: "open" as const,
         startsAt: "2026-08-31T01:00:00.000Z",
         closesAt: "2026-08-31T01:45:00.000Z",
       })),

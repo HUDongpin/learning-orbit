@@ -215,6 +215,7 @@ describe("server projection panels", () => {
 
     await user.click(screen.getByRole("button", { name: "查看版本時間線" }));
     expect(await screen.findByRole("region", { name: "ECHO Timeline" })).toHaveTextContent("伺服器 Head：v2");
+    expect(screen.getByRole("list", { name: "ECHO 版本時間線" })).toHaveAttribute("tabindex", "0");
     expect(loadTimeline).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "預覽 v1" }));
     expect(screen.getByLabelText("Projection 版本 1")).toHaveTextContent("歷史 v1");

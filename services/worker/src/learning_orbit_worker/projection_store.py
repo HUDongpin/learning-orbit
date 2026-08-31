@@ -17,6 +17,11 @@ from typing import Any, Mapping, Pattern
 from uuid import UUID
 
 _PROJECTION_KEYS = {"echo.teacher_shadow", "echo.student_approved", "trace.teacher_bundle", "trace.student_bundle"}
+_PATCH_PAYLOAD_FIELDS = (
+    "requiresReplay", "warnings", "nodesAdded", "nodesUpdated", "nodesHidden",
+    "edgesAdded", "edgesUpdated", "edgesHidden", "positionUpdates",
+    "changeScore", "reasonCodes",
+)
 _SHA256: Pattern[str] = re.compile(r"^[a-f0-9]{64}$")
 _ROOT = Path(__file__).resolve().parents[4]
 
@@ -228,6 +233,21 @@ def _validate_patch(snapshot: Mapping[str, Any], patch: Mapping[str, Any] | None
         raise ValueError("INVALID_PROJECTION_PATCH")
 
 
+def _compact_patch_payload(
+    projection_key: str,
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the closed JSON shape stored in ``analysis_projection_patches``.
+
+    Versions, epoch, algorithm metadata and the room cursor live in typed SQL
+    columns.  Persisting a second copy inside ``payload`` would violate the
+    server repository's closed payload contract and force every patch window
+    to fail closed as a snapshot resync.
+    """
+    fields = _PATCH_PAYLOAD_FIELDS + (() if projection_key == "echo.student_approved" else ("evidenceRefs",))
+    return {field: patch[field] for field in fields}
+
+
 def _row_field(row: Any, name: str, index: int) -> Any:
     return row.get(name) if isinstance(row, Mapping) else row[index]
 
@@ -273,6 +293,48 @@ def _existing_snapshot_matches(
     )
 
 
+def _existing_patch_matches(
+    row: Any,
+    snapshot: Mapping[str, Any],
+    patch: Mapping[str, Any],
+    stored_patch: Mapping[str, Any],
+    stored_patch_hash: str,
+) -> bool:
+    """Require an immutable Patch row to match every typed identity field."""
+    if row is None:
+        return False
+    names = (
+        "room_id", "projection_key", "analysis_epoch", "version", "base_version",
+        "complete_through_seq", "algorithm_version", "parameter_hash", "payload",
+        "content_sha256",
+    )
+    values = {name: _row_field(row, name, index) for index, name in enumerate(names)}
+    try:
+        if any(isinstance(values[name], bool) for name in (
+            "version", "base_version", "complete_through_seq",
+        )):
+            return False
+        version = int(values["version"])
+        base_version = int(values["base_version"])
+        complete_through = int(values["complete_through_seq"])
+        persisted_payload_hash = _content_hash(values["payload"])
+    except (TypeError, ValueError):
+        return False
+    return (
+        str(values["room_id"]) == str(snapshot["roomId"])
+        and str(values["projection_key"]) == str(snapshot["projectionKey"])
+        and str(values["analysis_epoch"]) == str(patch["analysisEpoch"])
+        and version == patch["projectionVersion"]
+        and base_version == patch["baseVersion"]
+        and complete_through == patch["completeThroughRoomSeq"]
+        and str(values["algorithm_version"]) == str(patch["algorithmVersion"])
+        and str(values["parameter_hash"]) == str(patch["parameterHash"])
+        and values["payload"] == stored_patch
+        and str(values["content_sha256"]) == stored_patch_hash
+        and persisted_payload_hash == stored_patch_hash
+    )
+
+
 class ProjectionStore:
     def __init__(self, connection: Any, *, snapshot_url_factory: Any | None = None) -> None:
         self.connection = connection
@@ -304,6 +366,8 @@ class ProjectionStore:
     ) -> None:
         _validate_snapshot(snapshot, payload_hash)
         _validate_patch(snapshot, patch, patch_hash)
+        stored_patch = _compact_patch_payload(str(snapshot["projectionKey"]), patch) if patch is not None else None
+        stored_patch_hash = _content_hash(stored_patch) if stored_patch is not None else None
         algorithm = "ECHO-CM" if str(snapshot["projectionKey"]).startswith("echo.") else "TRACE-AI"
         self.connection.execute(
             """INSERT INTO analysis_projection_snapshots
@@ -320,7 +384,7 @@ class ProjectionStore:
              _jsonb(snapshot["payload"]), payload_hash),
         )
         if patch is not None:
-            if patch_hash is None:
+            if patch_hash is None or stored_patch is None or stored_patch_hash is None:
                 raise ValueError("PATCH_HASH_REQUIRED")
             self.connection.execute(
                 """INSERT INTO analysis_projection_patches
@@ -330,7 +394,8 @@ class ProjectionStore:
                    ON CONFLICT (room_id,projection_key,analysis_epoch,version) DO NOTHING""",
                 (snapshot["roomId"], snapshot["projectionKey"], snapshot["analysisEpoch"],
                  patch["baseVersion"], patch["projectionVersion"], patch["completeThroughRoomSeq"],
-                 patch["algorithmVersion"], patch["parameterHash"], _jsonb(patch), patch_hash),
+                 patch["algorithmVersion"], patch["parameterHash"],
+                 _jsonb(stored_patch), stored_patch_hash),
             )
         key = str(snapshot["projectionKey"])
         self.connection.execute(
@@ -394,6 +459,8 @@ class ProjectionStore:
         _validate_patch(snapshot, patch, patch_hash)
         room_id = str(snapshot["roomId"])
         key = str(snapshot["projectionKey"])
+        stored_patch = _compact_patch_payload(key, patch) if patch is not None else None
+        stored_patch_hash = _content_hash(stored_patch) if stored_patch is not None else None
         version = int(snapshot["projectionVersion"])
         head = self.head(room_id, key)
         if head is None:
@@ -432,7 +499,10 @@ class ProjectionStore:
                         WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
                     (room_id, key, snapshot["analysisEpoch"], version),
                 ).fetchone()
-                if existing_patch is None or str(_row_field(existing_patch, "content_sha256", 9)) != str(patch_hash):
+                if stored_patch is None or stored_patch_hash is None \
+                        or not _existing_patch_matches(
+                            existing_patch, snapshot, patch, stored_patch, stored_patch_hash,
+                        ):
                     raise RuntimeError("ANALYTICS_PATCH_CONFLICT")
             return
         if existing_version + 1 != version:
@@ -468,6 +538,8 @@ class ProjectionStore:
         if snapshot_id is None:
             raise RuntimeError("ANALYTICS_SNAPSHOT_UNAVAILABLE")
         if patch is not None:
+            if stored_patch is None or stored_patch_hash is None:
+                raise ValueError("PATCH_HASH_REQUIRED")
             patch_cursor = self.connection.execute(
                 """INSERT INTO analysis_projection_patches
                    (patch_id,room_id,projection_key,analysis_epoch,base_version,version,
@@ -477,7 +549,7 @@ class ProjectionStore:
                    RETURNING patch_id""",
                 (room_id, key, snapshot["analysisEpoch"], patch["baseVersion"], version,
                  snapshot["completeThroughRoomSeq"], snapshot["algorithmVersion"],
-                 snapshot["parameterHash"], _jsonb(patch), patch_hash),
+                 snapshot["parameterHash"], _jsonb(stored_patch), stored_patch_hash),
             )
             patch_inserted = patch_cursor.fetchone() if callable(getattr(patch_cursor, "fetchone", None)) else None
             if patch_inserted is None:
@@ -488,7 +560,9 @@ class ProjectionStore:
                         WHERE room_id=%s AND projection_key=%s AND analysis_epoch=%s AND version=%s""",
                     (room_id, key, snapshot["analysisEpoch"], version),
                 ).fetchone()
-                if existing_patch_row is None or str(_row_field(existing_patch_row, "content_sha256", 9)) != str(patch_hash):
+                if not _existing_patch_matches(
+                    existing_patch_row, snapshot, patch, stored_patch, stored_patch_hash,
+                ):
                     raise RuntimeError("ANALYTICS_PATCH_CONFLICT")
         updated = self.connection.execute(
             """UPDATE analysis_room_heads

@@ -276,6 +276,9 @@ export class AnalyticsTeacherService {
       if (context.room.teacher_id !== teacher.teacherId) {
         throw new AnalyticsTeacherError(404, "ROOM_NOT_FOUND");
       }
+      if (context.room.status === "closed") {
+        throw new AnalyticsTeacherError(409, "ROOM_NOT_OPEN");
+      }
       await this.assertNotDeleting(client, roomId);
       await this.assertRetentionCurrent(client, roomId);
       // Idempotency is checked before the optimistic head CAS.  A retry may

@@ -177,16 +177,26 @@ class AnalyticsPostgresIntegrationTests(unittest.TestCase):
                 else:
                     trace_validator.validate(envelope)
             patch_rows = connection.execute(
-                "SELECT projection_key,version,base_version,payload->>'requiresReplay' FROM analysis_projection_patches "
+                "SELECT projection_key,version,base_version,payload->>'requiresReplay',payload,content_sha256 "
+                "FROM analysis_projection_patches "
                 "WHERE room_id=%s ORDER BY projection_key,version",
                 (room_id,),
             ).fetchall()
-            self.assertEqual(patch_rows, [
+            self.assertEqual([row[:4] for row in patch_rows], [
                 ("echo.student_approved", 1, 0, "false"),
                 ("echo.student_approved", 2, 1, "false"),
                 ("echo.teacher_shadow", 1, 0, "false"),
                 ("echo.teacher_shadow", 2, 1, "false"),
             ])
+            compact_patch_keys = {
+                "requiresReplay", "warnings", "nodesAdded", "nodesUpdated",
+                "nodesHidden", "edgesAdded", "edgesUpdated", "edgesHidden",
+                "positionUpdates", "changeScore", "reasonCodes",
+            }
+            for projection_key, _version, _base_version, _requires_replay, payload, content_sha256 in patch_rows:
+                expected_keys = compact_patch_keys | ({"evidenceRefs"} if projection_key == "echo.teacher_shadow" else set())
+                self.assertEqual(set(payload), expected_keys)
+                self.assertEqual(content_sha256, projection_store.content_hash(payload))
             self.assertEqual(
                 connection.execute(
                     "SELECT last_room_seq FROM analysis_consumer_checkpoints "

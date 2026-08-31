@@ -125,7 +125,6 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
             return;
           }
         }
-        const supportsRealtime = details.status !== "closed" && typeof globalThis.WebSocket === "function";
         hydrated = await HydratedSessionState.create({
           session,
           room: details,
@@ -162,6 +161,11 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
             );
           },
         });
+        // Event recovery can legitimately advance a stale open RoomDetails
+        // read to room.closed. Decide admission from the hydrated durable
+        // ledger, not the pre-recovery HTTP snapshot.
+        const supportsRealtime = hydrated.sessionState.status !== "closed"
+          && typeof globalThis.WebSocket === "function";
         if (!active) {
           hydrated.dispose();
           return;
@@ -367,7 +371,9 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
         </div>
         <div className="room-hydration-notice" role="status">
           <h2>房間權限已確認</h2>
-          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{details.status === "closed" ? "課堂已結束，不再建立即時連線" : liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
+          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.status === "closed"
+            ? liveState.connected ? "課堂已結束；WebSocket 僅保留權限變更通知" : "課堂已結束，不再建立即時連線"
+            : liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
         </div>
         {isTeacher ? (
           <TeacherControlPanel

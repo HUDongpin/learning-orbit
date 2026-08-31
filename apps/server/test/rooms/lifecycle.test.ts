@@ -6,7 +6,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createCoreEventPayloadRegistry } from "@learning-orbit/contracts";
 import { buildApp } from "../../src/app.js";
 import { runMigrations } from "../../src/db/migrate.js";
-import { JobStore } from "../../src/modules/jobs/job-store.js";
 import { RoomError } from "../../src/modules/rooms/errors.js";
 import { RoomEventRepository } from "../../src/modules/rooms/room-event-repository.js";
 import { RoomLifecycleService } from "../../src/modules/rooms/lifecycle-service.js";
@@ -131,15 +130,22 @@ describe("forty-five-minute room lifecycle", () => {
     );
   });
 
-  it("manual close revokes students, cancels every room job, and remains causation-idempotent", async () => {
+  it("manual close preserves read-only sessions and ordered analytics while cancelling other room jobs", async () => {
     const room = await seedLifecycleRoom(pool);
-    await lifecycle.open(room.roomId, room.teacherId, randomUUID());
+    const opened = await lifecycle.open(room.roomId, room.teacherId, randomUUID());
     await pool.query(
       `INSERT INTO worker_job(job_type, room_id, dedupe_key, payload, status)
        VALUES
          ('probe.queued.v1', $1, $2, '{}', 'queued'),
          ('probe.retryable.v1', $1, $3, '{}', 'retryable')`,
       [room.roomId, `queued:${randomUUID()}`, `retryable:${randomUUID()}`],
+    );
+    await pool.query(
+      `INSERT INTO worker_job(
+         job_type, room_id, dedupe_key, payload, status,
+         analytics_order_seq, analytics_order_kind
+       ) VALUES('analytics.replay-room.v1', $1, $2, '{}', 'queued', 1, 1)`,
+      [room.roomId, `analytics.replay-room.v1:${randomUUID()}`],
     );
     await pool.query(
       `INSERT INTO worker_job(
@@ -164,25 +170,39 @@ describe("forty-five-minute room lifecycle", () => {
       [room.memberIds],
     );
     expect(sessions).toHaveLength(4);
-    expect(sessions.every(({ revoked }) => revoked)).toBe(true);
+    expect(sessions.every(({ revoked }) => !revoked)).toBe(true);
     const jobs = await rows<{
+      job_id: string;
+      job_type: string;
+      source_event_id: string | null;
       status: string;
       claim_token: string | null;
       locked_at: Date | null;
       locked_by: string | null;
     }>(
-      `SELECT status, claim_token, locked_at, locked_by FROM worker_job
+      `SELECT job_id, job_type, source_event_id, status, claim_token, locked_at, locked_by FROM worker_job
        WHERE room_id = $1 ORDER BY job_id`,
       [room.roomId],
     );
     expect(jobs.length).toBeGreaterThanOrEqual(4);
-    expect(jobs.every((job) => (
+    const consumeJobs = jobs.filter(({ job_type }) => job_type === "analytics.consume.v1");
+    expect(consumeJobs).toHaveLength(2);
+    expect(new Set(consumeJobs.map(({ source_event_id }) => source_event_id)))
+      .toEqual(new Set([opened.eventId, closed.eventId]));
+    const replayJobs = jobs.filter(({ job_type }) => job_type === "analytics.replay-room.v1");
+    expect(replayJobs).toHaveLength(1);
+    expect([...consumeJobs, ...replayJobs].every((job) => (
+      job.status === "queued" && job.claim_token === null
+      && job.locked_at === null && job.locked_by === null
+    ))).toBe(true);
+    expect(jobs.filter(({ job_type }) => (
+      job_type !== "analytics.consume.v1" && job_type !== "analytics.replay-room.v1"
+    )).every((job) => (
       job.status === "cancelled"
       && job.claim_token === null
       && job.locked_at === null
       && job.locked_by === null
     ))).toBe(true);
-    expect(await new JobStore(pool, "worker-after-close").claim(20)).toEqual([]);
     const eventTypes = await rows<{ type: string }>(
       "SELECT type FROM room_event WHERE room_id = $1 ORDER BY room_seq",
       [room.roomId],

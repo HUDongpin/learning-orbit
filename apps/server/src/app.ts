@@ -28,6 +28,7 @@ import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/
 import { closedRateLimitError } from "./modules/security/rate-policies.js";
 import { registerRoutes } from "./routes.js";
 import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
+import { projectionDeliveryFailureDecision } from "./modules/realtime/projection-delivery-decision.js";
 import { RealtimeConnection } from "./modules/realtime/connection.js";
 import { RealtimeDeliveryAuthorizer } from "./modules/realtime/realtime-delivery-authorizer.js";
 import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
@@ -37,7 +38,6 @@ import type { MediaDeps } from "./modules/media/media-service.js";
 import type { MediaStore } from "./modules/media/media-store.js";
 import { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
 import { AnalyticsPolicy } from "./modules/analytics/analytics-policy.js";
-import { AnalyticsPolicyError } from "./modules/analytics/analytics-policy.js";
 import { AnalyticsRepository } from "./modules/analytics/analytics-repository.js";
 import { AnalyticsTeacherService } from "./modules/analytics/analytics-teacher-service.js";
 import { ProjectionOutboxRepository } from "./modules/analytics/projection-outbox-repository.js";
@@ -142,12 +142,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         analytics.policy.assertProjection(grant, frame.projectionKey);
         return { allow: true as const };
       } catch (error) {
-        if (error instanceof AnalyticsPolicyError) {
-          if (error.statusCode === 401) return { allow: false as const, closeCode: 4401 as const };
-          if (error.statusCode === 410) return { allow: false as const, closeCode: 4410 as const };
-          if (error.statusCode === 404) return { allow: false as const, closeCode: 4403 as const };
-        }
-        return { allow: false as const };
+        return projectionDeliveryFailureDecision(error);
       }
     };
     const projection = analytics ? {

@@ -197,6 +197,27 @@ describe("teacher analytics surfaces", () => {
 
   it("appends a content-free review notice and replay authority atomically", async () => {
     const { svc, events } = service();
+    const command = {
+      targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
+      expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
+    } as const;
+    const closedClient = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      return { rowCount: 0, rows: [] };
+    }) };
+    events.transact.mockImplementationOnce(async (_room: string, work: any) => work({
+      client: closedClient,
+      room: { next_room_seq: 2, teacher_id: teacherId, status: "closed" },
+    }));
+    await expect(svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      command,
+    )).rejects.toMatchObject({ statusCode: 409, code: "ROOM_NOT_OPEN" });
+    expect(closedClient.query).not.toHaveBeenCalled();
+
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
       if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
@@ -206,23 +227,27 @@ describe("teacher analytics surfaces", () => {
     }) };
     events.transact.mockImplementation(async (_room: string, work: any) => work({
       client,
-      room: { next_room_seq: 2, teacher_id: teacherId },
+      room: { next_room_seq: 2, teacher_id: teacherId, status: "open" },
       append: async () => ({ eventId: "00000000-0000-4000-8000-000000000017", roomSeq: 2, correlationId: "00000000-0000-4000-8000-000000000018" }),
     }));
-    const result = await svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
-      targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
-      expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
-    });
+    const result = await svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      command,
+    );
     expect(result.changeKind).toBe("review");
     expect(result.reviewEventId).toBe("00000000-0000-4000-8000-000000000017");
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analytics_review_detail"))).toBe(true);
     expect(client.query.mock.calls.some(([sql]) => String(sql).includes("analytics_replay_request"))).toBe(true);
-    const retry = await svc.review(teacher, "00000000-0000-4000-8000-000000000016", roomId, {
-      targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
-      expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
-    });
+    const retry = await svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      command,
+    );
     expect(retry).toEqual(result);
-    expect(events.transact).toHaveBeenCalledTimes(2);
+    expect(events.transact).toHaveBeenCalledTimes(3);
   });
 
   it("fails closed when an artifact row has a non-boolean active flag", async () => {

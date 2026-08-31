@@ -6,7 +6,7 @@ const ROOM_ID = "00000000-0000-4000-8000-000000000010";
 const SESSION_ID = "00000000-0000-4000-8000-000000000011";
 const TEACHER_ID = "00000000-0000-4000-8000-000000000012";
 
-function teacherRow(deletionActive: boolean) {
+function teacherRow(deletionActive: boolean, roomStatus: "open" | "closed" = "open") {
   return {
     session_id: SESSION_ID,
     principal_kind: "teacher" as const,
@@ -16,14 +16,16 @@ function teacherRow(deletionActive: boolean) {
     actor_id: null,
     pseudonym: null,
     nova_actor_id: "00000000-0000-4000-8000-000000000013",
-    room_status: "closed",
+    room_status: roomStatus,
     deletion_active: deletionActive,
   };
 }
 
 describe("realtime delivery room tombstone", () => {
-  it("allows a normally closed owned room to hydrate its durable event history", async () => {
-    const query = vi.fn(async () => ({ rows: [teacherRow(false)] }));
+  it("admits an active owned room but rejects a new socket after normal close", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [teacherRow(false)] })
+      .mockResolvedValueOnce({ rows: [teacherRow(false, "closed")] });
     const authorizer = new RealtimeDeliveryAuthorizer({ query } as never);
     await expect(authorizer.authenticateToken("opaque-session", ROOM_ID)).resolves.toMatchObject({
       ok: true,
@@ -31,6 +33,8 @@ describe("realtime delivery room tombstone", () => {
       actorId: TEACHER_ID,
       principal: { role: "teacher", teacherId: TEACHER_ID },
     });
+    await expect(authorizer.authenticateToken("opaque-session", ROOM_ID))
+      .resolves.toEqual({ ok: false, closeCode: 4410 });
     expect(query.mock.calls[0]?.[0]).toContain("deletion_active");
   });
 
@@ -43,7 +47,7 @@ describe("realtime delivery room tombstone", () => {
   it("applies the same closed-versus-deleting distinction during reauthorization", async () => {
     const closedQuery = vi.fn()
       .mockResolvedValueOnce({ rows: [{ token_hash: Buffer.alloc(32) }] })
-      .mockResolvedValueOnce({ rows: [teacherRow(false)] });
+      .mockResolvedValueOnce({ rows: [teacherRow(false, "closed")] });
     const closed = new RealtimeDeliveryAuthorizer({ query: closedQuery } as never);
     await expect(closed.reauthorize(SESSION_ID, ROOM_ID)).resolves.toMatchObject({ ok: true, actorId: TEACHER_ID });
 

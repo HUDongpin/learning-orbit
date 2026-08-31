@@ -125,7 +125,8 @@ export function EchoPanel({ slot, onLoadTimeline, onRetry }: Readonly<{
             {currentTimeline ? <section className="echo-timeline" aria-label="ECHO Timeline">
               <div><h3>版本時間線</h3><p>伺服器 Head：v{currentTimeline.headVersion}</p></div>
               {currentTimeline.truncatedBeforeVersion !== null ? <p>較早版本已按保留政策截斷；目前基線為 v{currentTimeline.truncatedBeforeVersion}。</p> : null}
-              {currentTimeline.entries.length === 0 ? <p role="status">此 Analysis Epoch 尚無可列出的版本。</p> : <ol>
+              {currentTimeline.entries.length === 0 ? <p role="status">此 Analysis Epoch 尚無可列出的版本。</p>
+                : <ol aria-label="ECHO 版本時間線" tabIndex={0}>
                 {currentTimeline.entries.map((entry) => <li key={entry.version}>
                   {entry.snapshot ? <button aria-pressed={previewVersion === entry.version} type="button" onClick={() => { setPreviewVersion(entry.version); setSelection(undefined); }}>預覽 v{entry.version}</button>
                     : <span>v{entry.version} Patch（伺服器未提供可重建的基線）</span>}
