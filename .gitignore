@@ -3,6 +3,7 @@
 node_modules/
 dist/
 .next/
+next-env.d.ts
 .venv/
 __pycache__/
 *.pyc

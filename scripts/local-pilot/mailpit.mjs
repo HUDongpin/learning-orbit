@@ -177,6 +177,8 @@ export async function readBoundedResponseText(response, maxBytes = MAX_JSON_BYTE
   if (!(response instanceof Response) || !Number.isSafeInteger(maxBytes) || maxBytes < 1) {
     fail("MAILPIT_CONTRACT_MISMATCH");
   }
+  const contentEncoding = response.headers.get("content-encoding");
+  if (contentEncoding !== null) fail("MAILPIT_CONTRACT_MISMATCH");
   const declaredLength = response.headers.get("content-length");
   let expectedLength;
   if (declaredLength !== null) {
@@ -237,8 +239,11 @@ export class MailpitClient {
   async #request(url, init = {}, expectedContentType) {
     let response;
     try {
+      const headers = new Headers(init.headers);
+      headers.set("accept-encoding", "identity");
       response = await this.#fetch(url, {
         ...init,
+        headers,
         cache: "no-store",
         credentials: "omit",
         redirect: "error",

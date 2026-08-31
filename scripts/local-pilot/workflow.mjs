@@ -21,27 +21,47 @@ export class CleanupStack {
   #entries = [];
   #ran = false;
 
-  register(id, cleanup) {
+  register(id, cleanup, options = {}) {
+    const requiresIfRegistered = options?.requiresIfRegistered ?? [];
     if (this.#ran || !ID.test(id) || typeof cleanup !== "function"
+      || !options || typeof options !== "object" || Array.isArray(options)
+      || Object.keys(options).some((key) => key !== "requiresIfRegistered")
+      || !Array.isArray(requiresIfRegistered) || requiresIfRegistered.some((requiredId) => (
+        !ID.test(requiredId) || requiredId === id
+      )) || new Set(requiresIfRegistered).size !== requiresIfRegistered.length
       || this.#entries.some((entry) => entry.id === id)) {
       throw new Error("LOCAL_PILOT_CLEANUP_REGISTRATION_INVALID");
     }
-    this.#entries.push(Object.freeze({ id, cleanup }));
+    this.#entries.push(Object.freeze({
+      id,
+      cleanup,
+      requiresIfRegistered: Object.freeze([...requiresIfRegistered]),
+    }));
   }
 
   async run() {
     if (this.#ran) throw new Error("LOCAL_PILOT_CLEANUP_ALREADY_RAN");
     this.#ran = true;
     const receipts = [];
+    const completed = new Map();
+    const registered = new Set(this.#entries.map(({ id }) => id));
     for (const entry of [...this.#entries].reverse()) {
       let status = "passed";
       let failureCode = null;
-      try {
-        await entry.cleanup();
-      } catch (error) {
+      if (entry.requiresIfRegistered.some((requiredId) => (
+        registered.has(requiredId) && completed.get(requiredId) !== "passed"
+      ))) {
         status = "failed";
-        failureCode = stableCode(error, "LOCAL_PILOT_CLEANUP_ACTION_FAILED");
+        failureCode = "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED";
+      } else {
+        try {
+          await entry.cleanup();
+        } catch (error) {
+          status = "failed";
+          failureCode = stableCode(error, "LOCAL_PILOT_CLEANUP_ACTION_FAILED");
+        }
       }
+      completed.set(entry.id, status);
       receipts.push(Object.freeze({ id: entry.id, status, failureCode }));
     }
     return Object.freeze(receipts);

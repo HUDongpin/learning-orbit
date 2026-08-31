@@ -18,8 +18,13 @@ describe("local pilot fail-fast workflow and receipt", () => {
         { id: "preflight", run: async () => { order.push("preflight"); } },
         { id: "resources", run: async () => {
           order.push("resources");
-          cleanup.register("first", async () => { order.push("cleanup-first"); });
+          cleanup.register("first", async () => { order.push("cleanup-first"); }, {
+            requiresIfRegistered: ["second"],
+          });
           cleanup.register("second", async () => { order.push("cleanup-second"); });
+          cleanup.register("partial-setup", async () => { order.push("cleanup-partial-setup"); }, {
+            requiresIfRegistered: ["resource-never-created"],
+          });
         } },
       ],
       now: (() => {
@@ -27,13 +32,20 @@ describe("local pilot fail-fast workflow and receipt", () => {
         return () => new Date(value += 1_000);
       })(),
     });
-    expect(order).toEqual(["preflight", "resources", "cleanup-second", "cleanup-first"]);
+    expect(order).toEqual([
+      "preflight",
+      "resources",
+      "cleanup-partial-setup",
+      "cleanup-second",
+      "cleanup-first",
+    ]);
     expect(receipt.status).toBe("passed");
     expect(receipt.stages.map(({ id, status }) => [id, status])).toEqual([
       ["preflight", "passed"],
       ["resources", "passed"],
     ]);
     expect(receipt.cleanup).toEqual([
+      { id: "partial-setup", status: "passed", failureCode: null },
       { id: "second", status: "passed", failureCode: null },
       { id: "first", status: "passed", failureCode: null },
     ]);
@@ -99,5 +111,79 @@ describe("local pilot fail-fast workflow and receipt", () => {
     } catch (error) {
       expect(error).toMatchObject({ code: "LOCAL_PILOT_WORKFLOW_INVALID" });
     }
+  });
+
+  it("does not run cleanup whose prerequisite failed", async () => {
+    const cleanup = new CleanupStack();
+    const mailpitCleanup = vi.fn();
+    const composeDown = vi.fn();
+    const worktreeCleanup = vi.fn();
+    const runtimeCleanup = vi.fn();
+    const tlsCleanup = vi.fn();
+    const failedRun = runLocalPilotWorkflow({
+      runId: "3333333333333333",
+      sourceSha: "e".repeat(40),
+      cleanup,
+      stages: [{ id: "gate", run: async () => {
+        cleanup.register("tls-material", tlsCleanup, { requiresIfRegistered: ["runtime-material"] });
+        cleanup.register("runtime-material", runtimeCleanup, {
+          requiresIfRegistered: ["disposable-worktree"],
+        });
+        cleanup.register("disposable-worktree", worktreeCleanup, {
+          requiresIfRegistered: ["compose-project"],
+        });
+        cleanup.register("compose-project", composeDown, {
+          requiresIfRegistered: ["mailpit-residual"],
+        });
+        cleanup.register("mailpit-residual", mailpitCleanup, {
+          requiresIfRegistered: ["application-processes"],
+        });
+        cleanup.register("application-processes", async () => {
+          throw new Error("LOCAL_PILOT_CHILD_STOP_FAILED");
+        });
+      } }],
+    });
+
+    await expect(failedRun).rejects.toMatchObject({
+      receipt: expect.objectContaining({
+        cleanup: [
+          {
+            id: "application-processes",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CHILD_STOP_FAILED",
+          },
+          {
+            id: "mailpit-residual",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED",
+          },
+          {
+            id: "compose-project",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED",
+          },
+          {
+            id: "disposable-worktree",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED",
+          },
+          {
+            id: "runtime-material",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED",
+          },
+          {
+            id: "tls-material",
+            status: "failed",
+            failureCode: "LOCAL_PILOT_CLEANUP_DEPENDENCY_FAILED",
+          },
+        ],
+      }),
+    });
+    expect(mailpitCleanup).not.toHaveBeenCalled();
+    expect(composeDown).not.toHaveBeenCalled();
+    expect(worktreeCleanup).not.toHaveBeenCalled();
+    expect(runtimeCleanup).not.toHaveBeenCalled();
+    expect(tlsCleanup).not.toHaveBeenCalled();
   });
 });

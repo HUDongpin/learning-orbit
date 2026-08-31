@@ -5,7 +5,7 @@
   "scripts": {
     "build": "next build",
     "start": "node scripts/start.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "next typegen && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

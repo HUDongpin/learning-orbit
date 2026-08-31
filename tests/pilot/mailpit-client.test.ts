@@ -116,6 +116,24 @@ describe("pinned Mailpit v1.31.0 contract", () => {
     expect(calls[3]?.url).toBe(`${MAILPIT_BASE_URL}/api/v1/search?query=to%3A${encodeURIComponent(recipient)}`);
     expect(calls[3]?.init).toMatchObject({ method: "DELETE", redirect: "error" });
     expect(calls.every(({ init }) => (init as RequestInit).credentials === "omit")).toBe(true);
+    expect(calls.every(({ init }) => (
+      new Headers((init as RequestInit).headers).get("accept-encoding") === "identity"
+    ))).toBe(true);
+  });
+
+  it("rejects encoded responses whose wire length cannot describe the decoded body", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response("ok", {
+      status: 200,
+      headers: {
+        "content-type": "text/plain",
+        "content-encoding": "gzip",
+        "content-length": "27",
+      },
+    }));
+
+    await expect(new MailpitClient({ fetch }).deleteRecipientMessages(recipient)).rejects.toThrow(
+      "MAILPIT_CONTRACT_MISMATCH",
+    );
   });
 
   it("fails on duplicate matches, endpoint drift, non-OK responses, and unsafe recipients", async () => {

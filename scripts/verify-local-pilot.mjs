@@ -266,10 +266,10 @@ async function main() {
     stageEvidence: Object.create(null),
     cleanupEvidence: Object.create(null),
   };
-  const registerCleanup = (cleanup, id, work) => {
+  const registerCleanup = (cleanup, id, work, options) => {
     const evidence = createLocalPilotEvidenceRecorder({ id });
     state.cleanupEvidence[id] = evidence;
-    cleanup.register(id, () => work(evidence));
+    cleanup.register(id, () => work(evidence), options);
   };
   let snapshot;
   let workflow;
@@ -330,7 +330,7 @@ async function main() {
           cleanupEvidence.runCheck("remove-tls-material", () => (
             removeLocalTlsMaterial(tls, snapshot.tempRoot)
           ))
-        ));
+        ), { requiresIfRegistered: ["runtime-material"] });
         const material = await evidence.runCheck("runtime-material", () => (
           createRuntimeMaterial({ parentDirectory: snapshot.tempRoot, identity })
         ));
@@ -341,7 +341,7 @@ async function main() {
             parentDirectory: snapshot.tempRoot,
             identity,
           }))
-        ));
+        ), { requiresIfRegistered: ["disposable-worktree"] });
         const worktree = await evidence.runCheck("detached-worktree", () => (
           createDetachedPilotWorktree({
             sourceRepository: repository,
@@ -359,7 +359,7 @@ async function main() {
             identity,
             commandEvidence: cleanupEvidence,
           }))
-        ));
+        ), { requiresIfRegistered: ["compose-project"] });
       },
       "frozen-dependencies": async ({ evidence }) => {
         const checkout = state.worktree.worktreePath;
@@ -469,7 +469,7 @@ async function main() {
           await cleanupEvidence.runCheck("compose-project-absent", () => (
             assertComposeProjectAbsent({ identity, runDocker: cleanupRunDocker })
           ));
-        });
+        }, { requiresIfRegistered: ["mailpit-residual"] });
         await evidence.runCheck("compose-up", () => execute(
           dockerPath,
           buildComposeArgv({ identity, composeFile, operation: "up" }),
@@ -639,7 +639,7 @@ async function main() {
           await cleanupEvidence.runCheck("recipient-empty", () => (
             state.mailpit.assertRecipientEmpty(recipient)
           ));
-        });
+        }, { requiresIfRegistered: ["application-processes"] });
         const childEnvironments = buildChildEnvironments({
           material: state.material,
           databaseUrl: state.databaseUrl,
