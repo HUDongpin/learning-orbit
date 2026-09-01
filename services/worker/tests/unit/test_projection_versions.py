@@ -26,7 +26,7 @@ class ProjectionVersionTests(unittest.TestCase):
         patch = make_semantic_noop_patch(
             event_type="room.paused",
             analysis_epoch="00000000-0000-4000-8000-000000000901",
-            algorithm_version="echo-cm-reference-v1+adapter-v1",
+            algorithm_version="echo-cm-reference-v1.1+adapter-v1",
             parameter_hash="b" * 64,
             base_version=4,
             room_seq=9,

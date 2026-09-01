@@ -3,7 +3,7 @@
   "projectionKey": "echo.teacher_shadow",
   "roomId": "00000000-0000-4000-8000-000000000010",
   "analysisEpoch": "00000000-0000-4000-8000-000000000901",
-  "algorithmVersion": "echo-cm-reference-v1+adapter-v1",
+  "algorithmVersion": "echo-cm-reference-v1.1+adapter-v1",
   "parameterHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "projectionVersion": 1,
   "baseVersion": 0,

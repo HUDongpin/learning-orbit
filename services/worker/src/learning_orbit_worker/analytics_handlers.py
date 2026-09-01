@@ -160,12 +160,37 @@ def _transaction(connection: Any):
 
 
 ANALYSIS_NAMESPACE = UUID("f2d0ce55-6c06-5b8f-a6b0-4a6b08cbf8af")
-ECHO_VERSION = "echo-cm-reference-v1+adapter-v1"
+ECHO_VERSION = "echo-cm-reference-v1.1+adapter-v1"
 TRACE_VERSION = "trace-ai-reference-v1+adapter-v1"
 PARAMETER_HASH = sha256(json.dumps({
     "echoHalfLifeSeconds": 1800, "traceCommunicationHalfLifeSeconds": 600,
     "allowedLatenessSeconds": 5, "adapterVersion": 1,
 }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _patch_baseline(
+    previous: Mapping[str, Any] | None,
+    head: Mapping[str, Any] | None,
+    epoch: str,
+) -> dict[str, Any]:
+    """Return the payload the next ECHO patch is a delta against.
+
+    A snapshot from a different epoch is not a base.  ``_materialize`` restarts
+    a rotated or replayed epoch at version 1 with ``baseVersion`` 0, so its
+    first patch has to diff against an empty map; diffing against the outgoing
+    epoch's payload would emit a delta whose content does not match its declared
+    base, and a timeline rebuilt from baseVersion 0 would disagree with /latest.
+    """
+    empty: dict[str, Any] = {"payload": {"nodes": [], "edges": []}}
+    if not previous or not head:
+        return empty
+    if str(head.get("analysis_epoch")) != epoch:
+        return empty
+    return {"payload": previous.get("payload", {})}
+
+
+def _algorithm_version(projection_key: str) -> str:
+    return ECHO_VERSION if projection_key.startswith("echo.") else TRACE_VERSION
 
 
 def _pseudonym_key() -> bytes:
@@ -212,7 +237,7 @@ def _metadata(
     ]))
     return {
         "roomId": room_id, "analysisEpoch": epoch,
-        "algorithmVersion": ECHO_VERSION if key.startswith("echo.") else TRACE_VERSION,
+        "algorithmVersion": _algorithm_version(key),
         "parameterHash": PARAMETER_HASH, "projectionVersion": version,
         "baseVersion": version - 1, "completeThroughRoomSeq": through,
         "watermarkEventTime": watermark, "requiresReplay": requires_replay,
@@ -938,8 +963,8 @@ def _current_or_initial_epoch(store: ProjectionStore, room_id: str) -> str:
         # checkpoint method.  They cannot represent an installed replay epoch,
         # so retain the deterministic initial value for that test seam.
         return str(uuid5(ANALYSIS_NAMESPACE, room_id))
-    heads = [head_reader(room_id, key) for key in PROJECTION_KEYS]
-    present = [head for head in heads if head is not None]
+    heads = {key: head_reader(room_id, key) for key in PROJECTION_KEYS}
+    present = [head for head in heads.values() if head is not None]
     if not present:
         return str(uuid5(ANALYSIS_NAMESPACE, room_id))
     if len(present) != len(PROJECTION_KEYS):
@@ -947,6 +972,21 @@ def _current_or_initial_epoch(store: ProjectionStore, room_id: str) -> str:
     epochs = {str(head.get("analysis_epoch")) for head in present}
     if len(epochs) != 1:
         raise ValueError("ANALYTICS_HEAD_EPOCH_MISMATCH")
+    # A new reference version is a different algorithm, and algorithm/parameter
+    # identity is immutable inside an epoch.  Appending to the visible chain
+    # would put two algorithms under one analysisEpoch and let a client apply a
+    # v1.1 patch onto a v1 snapshot, so install a deterministic new epoch
+    # instead.  Clients see this exactly as they see a replay epoch: the old
+    # snapshots stay for audit and the next read resyncs.
+    if any(
+        str(head.get("algorithm_version")) != _algorithm_version(key)
+        or str(head.get("parameter_hash")) != PARAMETER_HASH
+        for key, head in heads.items()
+    ):
+        return str(uuid5(
+            ANALYSIS_NAMESPACE,
+            f"{room_id}:{ECHO_VERSION}:{TRACE_VERSION}:{PARAMETER_HASH}",
+        ))
     return next(iter(epochs))
 
 
@@ -1080,9 +1120,7 @@ def _materialize(
             # endpoint) is represented without leaking teacher-only content;
             # omitting these patches would make the documented student
             # timeline endpoint resync on every version after the first.
-            prior = {"payload": {"nodes": [], "edges": []}}
-            if previous:
-                prior = {"payload": previous.get("payload", {})}
+            prior = _patch_baseline(previous, head, epoch)
             patch = diff_echo_snapshots(prior, current_projection, metadata)
             changed = any(
                 patch.get(name)

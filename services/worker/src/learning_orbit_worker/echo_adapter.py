@@ -8,7 +8,7 @@ from uuid import UUID, uuid5
 from typing import Any, Mapping
 
 ECHO_EDGE_NAMESPACE = UUID("e9dd1cf5-3f28-5fe7-9d73-8f98f8bca0e1")
-ADAPTER_VERSION = "echo-cm-reference-v1+adapter-v1"
+ADAPTER_VERSION = "echo-cm-reference-v1.1+adapter-v1"
 
 
 def normalize_position(value: float) -> float:

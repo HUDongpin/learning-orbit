@@ -7,7 +7,9 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[4]
 REFERENCE = PROJECT / "services" / "worker" / "src" / "learning_orbit_worker" / "reference" / "learning_orbit_algorithms_v1.py"
 MANIFEST = REFERENCE.parent / "manifest.json"
-REFERENCE_SHA256 = "3a2983b0f99cd016b45fb5fd7ee8e1ac4b93b3eee62f3a189a8e20df8c1cf220"
+REFERENCE_SHA256 = "c01d1a8ed7273594978e6ad35c5094e117cc156b692508bd1b231d13fc7859a1"
+UPSTREAM_SHA256 = "3a2983b0f99cd016b45fb5fd7ee8e1ac4b93b3eee62f3a189a8e20df8c1cf220"
+PATCH_IDS = {"cm-merge-rekey", "cm-retract-tombstone", "extractor-p3-verb-boundary"}
 SOURCE_TEST_SHA256 = "59ad56baa784fa187b6ea6a7cffcbba6138bfc945e43a2aa38fc6cce78560732"
 SOURCE_PATH = "work/learning_orbit_algorithms.py"
 SOURCE_TEST_PATH = "work/test_learning_orbit_algorithms.py"
@@ -28,6 +30,19 @@ class ReferencePinTests(unittest.TestCase):
         self.assertEqual(manifest["destinationPath"], DESTINATION_PATH)
         self.assertEqual(manifest["sha256"], REFERENCE_SHA256)
         self.assertEqual(manifest["sourceTestSha256"], SOURCE_TEST_SHA256)
+        self.assertEqual(manifest["referenceVersion"], "1.1")
+
+    def test_divergence_from_upstream_source_is_declared(self):
+        """A patched reference must name every defect it departs upstream for."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["upstreamSha256"], UPSTREAM_SHA256)
+        self.assertNotEqual(manifest["sha256"], manifest["upstreamSha256"])
+        self.assertTrue(manifest["divergesFromUpstreamSource"])
+        patches = manifest["patches"]
+        self.assertEqual({item["id"] for item in patches}, PATCH_IDS)
+        for item in patches:
+            for field in ("target", "defect", "fix"):
+                self.assertTrue(item[field].strip(), f"{item['id']} missing {field}")
 
     def test_manifest_and_claim_ceiling(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

@@ -17,7 +17,7 @@ import time
 from typing import Any, Protocol, Sequence, runtime_checkable
 
 
-REFERENCE_VERSION = "1.0"
+REFERENCE_VERSION = "1.1"
 
 TimeValue = float | int | datetime | str
 
@@ -264,7 +264,7 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:consumers?.*(?:eat|consume).*producers?"
+                r"(?:consumers?.*\b(?:eats?|consumes?)\b.*producers?"
                 r"|消費者.*(?:吃|取食|攝食).*生產者)",
                 re.IGNORECASE,
             ),
@@ -537,6 +537,10 @@ class StreamingConceptMap:
         self._seen: set[tuple[str, int, str]] = set()
         self._visible_edge_ids: set[str] = set()
         self.archived_edge_ids: set[str] = set()
+        # Event ids whose retraction was accepted.  A retraction can be
+        # delivered before the event it targets, so the tombstone has to
+        # outlive the miss in ``_deactivate``.
+        self._retracted_event_ids: set[str] = set()
         self._requires_replay: list[str] = []
         self.watermark: float | None = None
 
@@ -686,11 +690,29 @@ class StreamingConceptMap:
             if self.watermark is None or event_time > self.watermark:
                 self.watermark = event_time
             removed = self._deactivate(target)
+            self._retracted_event_ids.add(target)
             self._ledger(event, active=False)
             return self._patch(
                 event,
                 removed_edges=removed,
                 reason="retracted",
+            )
+
+        if event.event_id in self._retracted_event_ids:
+            # Out-of-order delivery: the retraction for this event was already
+            # accepted.  ``_deactivate`` could not reach these contributions
+            # because they did not exist yet, so the tombstone is what keeps
+            # the retraction meaningful.  The event still joins the ledger and
+            # advances the watermark; it just never contributes evidence.
+            commit_identity()
+            if self.watermark is None or event_time > self.watermark:
+                self.watermark = event_time
+            removed = self._deactivate(event.event_id)
+            self._ledger(event, active=False)
+            return self._patch(
+                event,
+                removed_edges=removed,
+                reason="retracted_before_arrival",
             )
 
         propositions = tuple(self.extractor.extract(event, context))
@@ -775,6 +797,52 @@ class StreamingConceptMap:
         contribution: _ConceptContribution,
     ) -> str:
         return _stable_id("edge", *self._edge_key(contribution))
+
+    def _edge_identity_map(self) -> dict[str, str]:
+        """Snapshot each active contribution's edge id before an alias change.
+
+        Inactive contributions are excluded deliberately: ``_aggregate`` skips
+        them, so they can never back a visible edge, and letting one define an
+        edge identity would redirect a live edge's hysteresis onto a key with
+        no active evidence behind it.
+        """
+        return {
+            item.contribution_id: self._edge_id_for_contribution(item)
+            for item in self._contributions.values()
+            if item.active
+        }
+
+    def _rekey_visibility(self, before: dict[str, str]) -> None:
+        """Carry hysteresis and archive state across an alias change.
+
+        Aliasing rewrites the canonical key of the affected edges only.
+        Clearing the visible set instead would drop the theta_off band for
+        every edge in the room, so an unrelated held edge would disappear at
+        the next snapshot without ever being archived.
+
+        Many contributions can share one edge id, and an alias change can send
+        them to different keys, so the inverse map is one-to-many: an old id
+        carries its state to *every* successor.  Collapsing it to a single
+        entry would strand the other successors in exactly the state this
+        method exists to prevent.
+        """
+        successors: dict[str, set[str]] = {}
+        for contribution_id, old_edge_id in before.items():
+            item = self._contributions.get(contribution_id)
+            if item is None or not item.active:
+                continue
+            successors.setdefault(old_edge_id, set()).add(
+                self._edge_id_for_contribution(item)
+            )
+
+        def carry(edge_ids: set[str]) -> set[str]:
+            carried: set[str] = set()
+            for edge_id in edge_ids:
+                carried.update(successors.get(edge_id, {edge_id}))
+            return carried
+
+        self._visible_edge_ids = carry(self._visible_edge_ids)
+        self.archived_edge_ids = carry(self.archived_edge_ids) - self._visible_edge_ids
 
     def _aggregate(
         self,
@@ -1031,6 +1099,7 @@ class StreamingConceptMap:
             canonical,
             previous,
         )
+        before = self._edge_identity_map()
         self.aliases[alias] = canonical
         if resolved_alias_type:
             self._push_merge_type(alias, merge_id, resolved_alias_type)
@@ -1061,7 +1130,7 @@ class StreamingConceptMap:
                 "appliedCanonicalType": resolved_canonical_type,
             }
         )
-        self._visible_edge_ids.clear()
+        self._rekey_visibility(before)
         return True
 
     def _push_merge_type(
@@ -1103,6 +1172,7 @@ class StreamingConceptMap:
                 continue
             if alias is not None and record["alias"] != alias:
                 continue
+            before = self._edge_identity_map()
             target_alias = record["alias"]
             previous = record.get("previous")
             if previous is None:
@@ -1122,7 +1192,7 @@ class StreamingConceptMap:
             if record.get("appliedCanonicalType"):
                 self._remove_merge_type(canonical, merge_id)
             record["undone"] = True
-            self._visible_edge_ids.clear()
+            self._rekey_visibility(before)
             return True
         return False
 
