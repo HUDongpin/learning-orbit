@@ -8,6 +8,7 @@ import type { MediaGateway } from "../media/media-upload";
 import type { LedgerMessage } from "../session/event-ledger";
 import type { RoomCommandIntent } from "../session/session-command-bus";
 import type { SessionStatus } from "../session/session-store";
+import { identityInitial, identityStyle } from "./identity";
 import type { RosterMember } from "./roster";
 
 export interface MessageCardProps {
@@ -27,6 +28,33 @@ export interface MessageCardProps {
 
 function eventLabel(message: LedgerMessage): string {
   return `訊息 ${message.firstRoomSeq}`;
+}
+
+/**
+ * Wall-clock time for the classroom's own timezone.
+ *
+ * The ledger carries an ISO instant; a student reads a clock. The formatter is
+ * built lazily so a runtime without the zone data degrades to an honest
+ * "time not confirmed" rather than throwing inside a render.
+ */
+let clockFormat: Intl.DateTimeFormat | undefined;
+function clockTime(eventTime: string): string {
+  const instant = new Date(eventTime);
+  if (Number.isNaN(instant.getTime())) return "時間未確認";
+  try {
+    clockFormat ??= new Intl.DateTimeFormat("zh-HK", { timeStyle: "short", timeZone: "Asia/Hong_Kong" });
+    return clockFormat.format(instant);
+  } catch {
+    return "時間未確認";
+  }
+}
+
+function CheckMark() {
+  return (
+    <svg aria-hidden="true" focusable="false" width="11" height="11" viewBox="0 0 12 12" fill="none">
+      <path d="M1.8 6.3 4.4 9l5.8-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 export function MessageCard({
@@ -51,6 +79,9 @@ export function MessageCard({
   const canRevise = ownStudentMessage && message.operation !== "retract";
   const canRetract = message.operation !== "retract" && (ownStudentMessage || viewer.role === "teacher");
   const label = eventLabel(message);
+  const displayName = author?.pseudonym ?? "課堂參與者";
+  // The seat hue is a comprehension aid only; the name beside it always carries the same fact.
+  const seatStyle = identityStyle(author?.pseudonym ?? "", message.actorKind === "agent" ? "agent" : "human") as React.CSSProperties;
 
   useEffect(() => {
     if (edit && (message.revision !== edit.baseRevision || roomStatus !== "open")) {
@@ -67,9 +98,12 @@ export function MessageCard({
 
   return (
     <article className={`message ${ownStudentMessage ? "self" : ""} ${message.actorKind === "agent" ? "agent" : ""} ${message.operation === "retract" ? "retracted" : ""}`} id={`message-seq-${message.firstRoomSeq}`} tabIndex={-1}>
-      <div className={`avatar ${message.actorKind === "agent" ? "agent" : ""}`} aria-hidden="true"><span>{author?.pseudonym.slice(0, 1) ?? "?"}</span></div>
+      <div className={`avatar ${message.actorKind === "agent" ? "agent" : ""}`} aria-hidden="true" style={seatStyle}><span>{identityInitial(author?.pseudonym ?? "")}</span></div>
       <div className="bubble-wrap">
-        <p className="message-name">{author?.pseudonym ?? "課堂參與者"} · {label}</p>
+        <p className="message-name">
+          <span className="message-who" style={seatStyle}>{displayName}</span>
+          <span className="message-state">{label}</span>
+        </p>
         {message.replyTo ? (
           <button className="reply-strip tiny-action" type="button" onClick={onNavigateReply} disabled={!onNavigateReply}>
             {replyLabel ? `查看回覆來源${replyLabel}` : "回覆來源目前不可用"}
@@ -92,7 +126,13 @@ export function MessageCard({
               ? <p className="media-caption">媒體狀態等待伺服器確認</p>
               : null}
         </div>
-        <time className="message-time" dateTime={message.eventTime}>roomSeq {message.roomSeq} · 修訂 {message.revision}</time>
+        {/* Every message in the ledger arrived as a confirmed server event, so this marker is a fact, never a guess. */}
+        <p className="message-time">
+          <time dateTime={message.eventTime}>{clockTime(message.eventTime)}</time>
+          {message.revision > 1 ? <span className="message-state"> · 已修改</span> : null}
+          {" · "}
+          <span className="message-confirmed"><CheckMark />課堂紀錄已收錄</span>
+        </p>
         {edit ? (
           <form onSubmit={(event) => {
             event.preventDefault();

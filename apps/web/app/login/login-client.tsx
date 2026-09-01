@@ -18,9 +18,22 @@ type SessionCheck = "checking" | "anonymous" | "unavailable";
 const CLASSROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{6}$`, "u");
 const SEAT_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{10}$`, "u");
+const OUTSIDE_ALPHABET_PATTERN = new RegExp(`[^${CLASSROOM_CODE_ALPHABET}]`, "gu");
 const TEACHER_ACCEPTED_COPY = "如果此電郵已獲授權，登入連結將會送出。請檢查收件匣。";
 const STUDENT_REJECTED_COPY = "無法加入課堂。請向老師確認代碼後再試。";
+const STUDENT_RATE_LIMITED_COPY = "嘗試次數過多，伺服器暫時拒絕加入課堂。請等待幾分鐘後再試；同一個網絡的所有嘗試會一起計算，不一定是代碼有誤。";
 const STUDENT_SERVICE_COPY = "課堂服務暫時不可用。請稍後再試。";
+const REJECTED_JOIN_CODES = ["INVALID_JOIN_REQUEST", "JOIN_FORBIDDEN", "ROOM_NOT_FOUND"];
+
+/**
+ * Codes are drawn from an unambiguous alphabet, so anything a shared keyboard
+ * adds — a pasted space, a lowercase letter, the I/O/0/1 look-alikes — can be
+ * dropped as the student types instead of being refused after submit. The
+ * server-side normaliser stays the single source of case and whitespace rules.
+ */
+function typedClassroomCode(value: string): string {
+  return normalizeClassroomCode(value).replace(OUTSIDE_ALPHABET_PATTERN, "");
+}
 
 export interface LoginClientProps {
   gateway?: SessionGateway;
@@ -136,9 +149,14 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
       assertStudentRoomIdentity(session, room);
       router.replace(`/session/${session.roomId}`);
     } catch (error) {
-      const rejected = error instanceof SessionGatewayError
-        && ["INVALID_JOIN_REQUEST", "JOIN_FORBIDDEN", "RATE_LIMITED", "ROOM_NOT_FOUND"].includes(error.code);
-      setStudentErrors({ form: rejected ? STUDENT_REJECTED_COPY : STUDENT_SERVICE_COPY });
+      // A shared school lab NATs the whole class behind one address, so a
+      // failed-join rate limit can lock out a student whose codes are correct.
+      // Telling that student to re-check the code would be actively wrong.
+      const limited = error instanceof SessionGatewayError && error.code === "RATE_LIMITED";
+      const rejected = error instanceof SessionGatewayError && REJECTED_JOIN_CODES.includes(error.code);
+      setStudentErrors({
+        form: limited ? STUDENT_RATE_LIMITED_COPY : rejected ? STUDENT_REJECTED_COPY : STUDENT_SERVICE_COPY,
+      });
       queueMicrotask(() => roomInput.current?.focus());
     } finally {
       setStudentSubmitting(false);
@@ -241,7 +259,7 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
             <h2>加入學習軌道</h2>
             <p className="login-help">向老師取得共同房間代碼及你的獨有座位代碼。</p>
             <form noValidate onSubmit={(event) => void submitStudent(event)}>
-              <div className="login-field">
+              <div className="login-field login-code">
                 <label htmlFor="room-code">房間代碼</label>
                 <input
                   aria-describedby={studentErrors.room ? "room-code-error" : "room-code-hint"}
@@ -251,16 +269,16 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
                   id="room-code"
                   inputMode="text"
                   maxLength={12}
-                  onChange={(event) => setRoomCode(event.target.value)}
+                  onChange={(event) => setRoomCode(typedClassroomCode(event.target.value))}
                   placeholder="例如 ABC234"
                   ref={roomInput}
                   spellCheck={false}
                   value={roomCode}
                 />
-                <span className="login-hint" id="room-code-hint">6 個英文字母或數字</span>
+                <span className="login-hint" id="room-code-hint">6 個英文字母或數字，全班相同。代碼不會用到 I、O、0、1。</span>
                 {studentErrors.room ? <span className="login-error" id="room-code-error">{studentErrors.room}</span> : null}
               </div>
-              <div className="login-field">
+              <div className="login-field login-code">
                 <label htmlFor="seat-code">座位代碼</label>
                 <input
                   aria-describedby={studentErrors.seat ? "seat-code-error" : "seat-code-hint"}
@@ -270,13 +288,13 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
                   id="seat-code"
                   inputMode="text"
                   maxLength={18}
-                  onChange={(event) => setSeatCode(event.target.value)}
+                  onChange={(event) => setSeatCode(typedClassroomCode(event.target.value))}
                   placeholder="例如 DEF2345678"
                   ref={seatInput}
                   spellCheck={false}
                   value={seatCode}
                 />
-                <span className="login-hint" id="seat-code-hint">10 個英文字母或數字，每人不同</span>
+                <span className="login-hint" id="seat-code-hint">10 個英文字母或數字，每人不同。小階字母與空格會自動轉換。</span>
                 {studentErrors.seat ? <span className="login-error" id="seat-code-error">{studentErrors.seat}</span> : null}
               </div>
               {studentErrors.form ? <p className="login-alert" role="alert">{studentErrors.form}</p> : null}

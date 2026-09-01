@@ -31,6 +31,15 @@ const CORRECTION_LABELS: Readonly<Record<TeacherCorrectionKind, string>> = {
   retract: "撤回分析目標",
 };
 const REVIEW_DECISIONS = ["approve", "reject", "revoke", "review_pass", "review_concerns", "review_fail"] as const;
+/** Option values stay the server enum; only the visible text is translated. */
+const REVIEW_DECISION_LABELS: Readonly<Record<typeof REVIEW_DECISIONS[number], string>> = {
+  approve: "批准",
+  reject: "不接納",
+  revoke: "撤回先前決定",
+  review_pass: "審閱通過",
+  review_concerns: "審閱有保留",
+  review_fail: "審閱不通過",
+};
 
 type Gateway = Pick<SessionGateway,
   | "getDerivedTextArtifacts"
@@ -559,38 +568,47 @@ export function TeacherControlPanel({
       <section className="orbit-panel teacher-control-card" aria-labelledby="lifecycle-title">
         <header className="panel-head"><div><span className="panel-kicker">Room lifecycle</span><h2 className="panel-title" id="lifecycle-title">課堂控制</h2></div></header>
         <div className="teacher-control-body">
-          {lifecycle.length ? lifecycle.map((action) => (
-            <button key={action.type} className="teacher-secondary" disabled={!connected || lifecycleAwaiting || commandPending} type="button" onClick={() => {
-              try {
-                if (!connected) throw new Error("REALTIME_NOT_CONNECTED");
-                const commandId = runtime.sendIntent({ type: action.type });
-                const targetStatus = action.type === "room.open" || action.type === "room.resume"
-                  ? "open" as const
-                  : action.type === "room.pause" ? "paused" as const : "closed" as const;
-                setLifecycleRequest({ commandId, targetStatus });
-                setActionError(undefined);
-              } catch {
-                setActionError("課堂指令未送出；目前狀態保持不變。");
-              }
-            }}>{action.label}</button>
-          )) : <p>課堂已結束；生命週期控制已停用。</p>}
-          {!connected ? <p role="status">WebSocket 尚未連線；課堂生命週期控制保持停用。</p> : null}
-          {lifecycleConfirmed ? <p role="status">伺服器 RoomEvent 已確認新的課堂狀態。</p>
-            : lifecycleNonRetryableReject ? <p className="composer-error" role="alert">伺服器拒絕課堂指令（{lifecycleReject?.code}）；狀態沒有被本地改寫。</p>
-              : lifecycleReject?.retryable === true ? <p role="status">伺服器暫時拒絕課堂指令（{lifecycleReject.code}）；原指令仍在可靠佇列等待重送。</p>
-                : lifecycleAwaiting ? <p role="status">{connected ? lifecycleAcknowledged ? "伺服器已 ACK，等待 RoomEvent 確認狀態。" : lifecycleTransportPending ? "指令已進入可靠佇列，等待伺服器 ACK。" : "正在等待伺服器 ACK；控制保持鎖定。" : "連線中斷；指令保留在可靠佇列等待恢復。"}</p>
-                : null}
-          <div className="invite-state-control">
-            <h3>一次性邀請碼</h3>
-            <p>Room Code 與四個 Seat Code 只會在建立課堂成功時顯示一次。本房間頁不能恢復或重新顯示任何代碼。</p>
-            <p>若尚未分發而代碼已遺失，請結束此課堂並建立新課堂。</p>
-          </div>
-          <div className="agent-policy-control">
-            <h3>Nova 政策</h3>
-            <p>{agentPolicy === undefined ? "正在等待伺服器確認 Nova 是否啟用。" : agentPolicy ? "伺服器政策：已啟用。" : "伺服器政策：已停用。"}</p>
-            <button className="teacher-secondary" disabled={roomStatus === "closed" || commandPending || agentPolicy === undefined} onClick={() => void updateAgentPolicy(!(agentPolicy ?? false))} type="button">
-              {agentPolicy ? "停用 Nova" : "啟用 Nova"}
-            </button>
+          <div className="teacher-lane">
+            <h3>現場操作</h3>
+            {lifecycle.length ? (
+              <div className="teacher-control-actions">
+                {lifecycle.map((action) => (
+                  <button key={action.type} className={action.type === "room.close" ? "teacher-secondary" : "teacher-create"} disabled={!connected || lifecycleAwaiting || commandPending} type="button" onClick={() => {
+                    try {
+                      if (!connected) throw new Error("REALTIME_NOT_CONNECTED");
+                      const commandId = runtime.sendIntent({ type: action.type });
+                      const targetStatus = action.type === "room.open" || action.type === "room.resume"
+                        ? "open" as const
+                        : action.type === "room.pause" ? "paused" as const : "closed" as const;
+                      setLifecycleRequest({ commandId, targetStatus });
+                      setActionError(undefined);
+                    } catch {
+                      setActionError("課堂指令未送出；目前狀態保持不變。");
+                    }
+                  }}>{action.label}</button>
+                ))}
+              </div>
+            ) : <p>課堂已結束；生命週期控制已停用。</p>}
+            {!connected ? <p role="status">WebSocket 尚未連線；課堂生命週期控制保持停用。</p> : null}
+            {lifecycleConfirmed ? <p role="status">伺服器 RoomEvent 已確認新的課堂狀態。</p>
+              : lifecycleNonRetryableReject ? <p className="composer-error" role="alert">伺服器拒絕課堂指令（{lifecycleReject?.code}）；狀態沒有被本地改寫。</p>
+                : lifecycleReject?.retryable === true ? <p role="status">伺服器暫時拒絕課堂指令（{lifecycleReject.code}）；原指令仍在可靠佇列等待重送。</p>
+                  : lifecycleAwaiting ? <p role="status">{connected ? lifecycleAcknowledged ? "伺服器已 ACK，等待 RoomEvent 確認狀態。" : lifecycleTransportPending ? "指令已進入可靠佇列，等待伺服器 ACK。" : "正在等待伺服器 ACK；控制保持鎖定。" : "連線中斷；指令保留在可靠佇列等待恢復。"}</p>
+                  : null}
+            <div className="agent-policy-control">
+              <h3>Nova 政策</h3>
+              <p>{agentPolicy === undefined ? "正在等待伺服器確認 Nova 是否啟用。" : agentPolicy ? "伺服器政策：已啟用。" : "伺服器政策：已停用。"}</p>
+              <div className="teacher-control-actions">
+                <button className="teacher-secondary" disabled={roomStatus === "closed" || commandPending || agentPolicy === undefined} onClick={() => void updateAgentPolicy(!(agentPolicy ?? false))} type="button">
+                  {agentPolicy ? "停用 Nova" : "啟用 Nova"}
+                </button>
+              </div>
+            </div>
+            <div className="invite-state-control">
+              <h3>一次性邀請碼</h3>
+              <p>Room Code 與四個 Seat Code 只會在建立課堂成功時顯示一次。本房間頁不能恢復或重新顯示任何代碼。</p>
+              <p>若尚未分發而代碼已遺失，請結束此課堂並建立新課堂。</p>
+            </div>
           </div>
         </div>
       </section>
@@ -598,52 +616,55 @@ export function TeacherControlPanel({
       <section className="orbit-panel teacher-control-card" aria-labelledby="artifact-title">
         <header className="panel-head"><div><span className="panel-kicker">Artifact Queue</span><h2 className="panel-title" id="artifact-title">分析審閱與修正</h2></div><span className="panel-meta">只讀取伺服器未審閱項目</span></header>
         <div className="teacher-control-body">
-          {artifactLoading && artifacts.length === 0 ? <p role="status">正在載入 Artifact Queue…</p> : null}
-          {artifactError ? <p role="alert" className="composer-error">{artifactError}</p> : null}
-          {artifacts.length ? (
-            <ol className="artifact-review-list" aria-label="未審閱 Artifact">
-              {artifacts.map((artifact, index) => (
-                <li key={artifact.artifactId}>
-                  <button type="button" aria-pressed={artifactIndex === index} onClick={() => setArtifactIndex(index)}>
-                    <strong>{artifact.sourceModality === "text" ? "文字證據" : artifact.sourceModality === "audio" ? "音訊衍生文字" : "圖片衍生文字"}</strong>
-                    <span>{artifact.text}</span>
-                    <small>{artifact.languageTag} · {artifact.warnings.length ? `${artifact.warnings.length} 個伺服器警告` : "沒有警告"}</small>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          ) : !artifactLoading ? <p>目前沒有伺服器回傳的未審閱 Artifact。</p> : null}
-          {nextArtifactId ? <button className="teacher-secondary" disabled={artifactLoading} onClick={() => void loadMoreArtifacts()} type="button">載入下一頁</button> : null}
+          <div className="teacher-lane">
+            <h3>審閱工作</h3>
+            {artifactLoading && artifacts.length === 0 ? <p role="status">正在載入 Artifact Queue…</p> : null}
+            {artifactError ? <p role="alert" className="composer-error">{artifactError}</p> : null}
+            {artifacts.length ? (
+              <ol className="artifact-review-list" aria-label="未審閱 Artifact">
+                {artifacts.map((artifact, index) => (
+                  <li key={artifact.artifactId}>
+                    <button type="button" aria-pressed={artifactIndex === index} onClick={() => setArtifactIndex(index)}>
+                      <strong>{artifact.sourceModality === "text" ? "文字證據" : artifact.sourceModality === "audio" ? "音訊衍生文字" : "圖片衍生文字"}</strong>
+                      <span>{artifact.text}</span>
+                      <small>{artifact.languageTag} · {artifact.warnings.length ? `${artifact.warnings.length} 個伺服器警告` : "沒有警告"}</small>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            ) : !artifactLoading ? <p>目前沒有伺服器回傳的未審閱 Artifact。</p> : null}
+            {nextArtifactId ? <button className="teacher-secondary" disabled={artifactLoading} onClick={() => void loadMoreArtifacts()} type="button">載入下一頁</button> : null}
 
-          <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !selectedArtifact || !projectionAuthority}>
-            <legend>記錄審閱</legend>
-            <label>審閱結果<select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as typeof reviewDecision)}>{REVIEW_DECISIONS.map((decision) => <option key={decision} value={decision}>{decision}</option>)}</select></label>
-            <label>審閱理由<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} maxLength={2000} required /></label>
-            <button className="teacher-create" disabled={!rationale.trim()} onClick={() => void submitReview()} type="button">提交審閱</button>
-          </fieldset>
+            <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !selectedArtifact || !projectionAuthority}>
+              <legend>記錄審閱</legend>
+              <label>審閱結果<select value={reviewDecision} onChange={(event) => setReviewDecision(event.target.value as typeof reviewDecision)}>{REVIEW_DECISIONS.map((decision) => <option key={decision} value={decision}>{REVIEW_DECISION_LABELS[decision]}</option>)}</select></label>
+              <label>審閱理由<textarea value={rationale} onChange={(event) => setRationale(event.target.value)} maxLength={2000} required /></label>
+              <button className="teacher-create" disabled={!rationale.trim()} onClick={() => void submitReview()} type="button">提交審閱</button>
+            </fieldset>
 
-          <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !projectionAuthority}>
-            <legend>記錄 Correction</legend>
-            <label>修正分支<select value={correctionKind} onChange={(event) => setCorrectionKind(event.target.value as TeacherCorrectionKind)}>{Object.entries(CORRECTION_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
-            {correctionKind === "replace_text" ? <><label>替換文字<textarea value={replacementText} onChange={(event) => setReplacementText(event.target.value)} maxLength={20000} /></label><label>語言標籤<input value={languageTag} onChange={(event) => setLanguageTag(event.target.value)} /></label></> : null}
-            {correctionKind === "replace_evidence_span" ? <>
-              <IndexedSelect label="原證據關係" values={edgeOptions} value={edgeIndex} onChange={(value) => { setEdgeIndex(value); setTargetEvidenceIndex(0); }} />
-              <IndexedSelect label="原證據片段" values={targetEvidenceOptions} value={targetEvidenceIndex} onChange={setTargetEvidenceIndex} />
-              <IndexedSelect label="替換證據關係" values={edgeOptions} value={replacementEdgeIndex} onChange={(value) => { setReplacementEdgeIndex(value); setReplacementEvidenceIndex(0); }} />
-              <IndexedSelect label="替換證據片段" values={replacementEvidenceOptions} value={replacementEvidenceIndex} onChange={setReplacementEvidenceIndex} />
-            </> : null}
-            {correctionKind === "replace_relation" ? <><IndexedSelect label="目標關係" values={edgeOptions} value={edgeIndex} onChange={setEdgeIndex} /><IndexedSelect label="新關係起點" values={nodes.map(({ label }) => label)} value={canonicalIndex} onChange={setCanonicalIndex} /><IndexedSelect label="新關係終點" values={nodes.map(({ label }) => label)} value={aliasIndex} onChange={setAliasIndex} /><label>關係描述<input value={predicate} onChange={(event) => setPredicate(event.target.value)} /></label><label>關係類別<input value={relationFamily} onChange={(event) => setRelationFamily(event.target.value)} /></label></> : null}
-            {correctionKind === "merge_alias" || correctionKind === "split_alias" ? <><IndexedSelect label="主要概念" values={nodes.map(({ label }) => label)} value={canonicalIndex} onChange={setCanonicalIndex} /><IndexedSelect label="同義概念" values={nodes.map(({ label }) => label)} value={aliasIndex} onChange={setAliasIndex} /></> : null}
-            {correctionKind === "split_alias" ? <><label>新概念鍵<input value={newCanonicalNodeId} onChange={(event) => setNewCanonicalNodeId(event.target.value)} maxLength={160} /></label><label>新概念名稱<input value={newLabel} onChange={(event) => setNewLabel(event.target.value)} maxLength={160} /></label></> : null}
-            {correctionKind === "undo_merge" ? <p>{mergeIsEffective ? "伺服器新 Projection 已確認合併生效；現在可撤銷。" : mergeUndoCandidate ? "合併已記錄，等待伺服器新 Projection 確認生效後才可撤銷。" : "本頁尚沒有可撤銷的伺服器合併記錄。"}</p> : null}
-            {correctionKind === "retract" ? <label>撤回類型<select value={retractType} onChange={(event) => setRetractType(event.target.value as typeof retractType)}><option value="derived_text">衍生文字</option><option value="evidence">證據</option><option value="projection">概念關係</option></select></label> : null}
-            <label>修正理由<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} required /></label>
-            <button className="teacher-create" disabled={!correctionCanSubmit} onClick={() => void submitCorrection()} type="button">提交修正</button>
-          </fieldset>
-          {!projectionAuthority ? <p role="status">等待伺服器 teacher ECHO 的 Analysis Epoch 與 Projection Version；審閱提交保持停用。</p> : null}
-          {projectionAuthority && !projectionAuthorityPrepared ? <p role="status">正在為目前 Projection Authority 重新載入 Artifact Queue 並重置目標；審閱提交保持停用。</p> : null}
-          {projectionAuthorityReserved ? <p role="status">這個 Projection Authority 已提交一個事實；等待伺服器 Replay 推進版本後才可再次審閱或修正。</p> : null}
-          {roomStatus === "closed" ? <p role="status">課堂已結束；分析內容保持可讀，新的 Review 與 Correction 已停用。</p> : null}
+            <fieldset className="teacher-form-grid" disabled={roomStatus === "closed" || commandPending || !projectionAuthorityPrepared || projectionAuthorityReserved || !projectionAuthority}>
+              <legend>記錄 Correction</legend>
+              <label>修正分支<select value={correctionKind} onChange={(event) => setCorrectionKind(event.target.value as TeacherCorrectionKind)}>{Object.entries(CORRECTION_LABELS).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></label>
+              {correctionKind === "replace_text" ? <><label>替換文字<textarea value={replacementText} onChange={(event) => setReplacementText(event.target.value)} maxLength={20000} /></label><label>語言標籤<input value={languageTag} onChange={(event) => setLanguageTag(event.target.value)} /></label></> : null}
+              {correctionKind === "replace_evidence_span" ? <>
+                <IndexedSelect label="原證據關係" values={edgeOptions} value={edgeIndex} onChange={(value) => { setEdgeIndex(value); setTargetEvidenceIndex(0); }} />
+                <IndexedSelect label="原證據片段" values={targetEvidenceOptions} value={targetEvidenceIndex} onChange={setTargetEvidenceIndex} />
+                <IndexedSelect label="替換證據關係" values={edgeOptions} value={replacementEdgeIndex} onChange={(value) => { setReplacementEdgeIndex(value); setReplacementEvidenceIndex(0); }} />
+                <IndexedSelect label="替換證據片段" values={replacementEvidenceOptions} value={replacementEvidenceIndex} onChange={setReplacementEvidenceIndex} />
+              </> : null}
+              {correctionKind === "replace_relation" ? <><IndexedSelect label="目標關係" values={edgeOptions} value={edgeIndex} onChange={setEdgeIndex} /><IndexedSelect label="新關係起點" values={nodes.map(({ label }) => label)} value={canonicalIndex} onChange={setCanonicalIndex} /><IndexedSelect label="新關係終點" values={nodes.map(({ label }) => label)} value={aliasIndex} onChange={setAliasIndex} /><label>關係描述<input value={predicate} onChange={(event) => setPredicate(event.target.value)} /></label><label>關係類別<input value={relationFamily} onChange={(event) => setRelationFamily(event.target.value)} /></label></> : null}
+              {correctionKind === "merge_alias" || correctionKind === "split_alias" ? <><IndexedSelect label="主要概念" values={nodes.map(({ label }) => label)} value={canonicalIndex} onChange={setCanonicalIndex} /><IndexedSelect label="同義概念" values={nodes.map(({ label }) => label)} value={aliasIndex} onChange={setAliasIndex} /></> : null}
+              {correctionKind === "split_alias" ? <><label>新概念鍵<input value={newCanonicalNodeId} onChange={(event) => setNewCanonicalNodeId(event.target.value)} maxLength={160} /></label><label>新概念名稱<input value={newLabel} onChange={(event) => setNewLabel(event.target.value)} maxLength={160} /></label></> : null}
+              {correctionKind === "undo_merge" ? <p>{mergeIsEffective ? "伺服器新 Projection 已確認合併生效；現在可撤銷。" : mergeUndoCandidate ? "合併已記錄，等待伺服器新 Projection 確認生效後才可撤銷。" : "本頁尚沒有可撤銷的伺服器合併記錄。"}</p> : null}
+              {correctionKind === "retract" ? <label>撤回類型<select value={retractType} onChange={(event) => setRetractType(event.target.value as typeof retractType)}><option value="derived_text">衍生文字</option><option value="evidence">證據</option><option value="projection">概念關係</option></select></label> : null}
+              <label>修正理由<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} required /></label>
+              <button className="teacher-create" disabled={!correctionCanSubmit} onClick={() => void submitCorrection()} type="button">提交修正</button>
+            </fieldset>
+            {!projectionAuthority ? <p role="status">等待伺服器 teacher ECHO 的 Analysis Epoch 與 Projection Version；審閱提交保持停用。</p> : null}
+            {projectionAuthority && !projectionAuthorityPrepared ? <p role="status">正在為目前 Projection Authority 重新載入 Artifact Queue 並重置目標；審閱提交保持停用。</p> : null}
+            {projectionAuthorityReserved ? <p role="status">這個 Projection Authority 已提交一個事實；等待伺服器 Replay 推進版本後才可再次審閱或修正。</p> : null}
+            {roomStatus === "closed" ? <p role="status">課堂已結束；分析內容保持可讀，新的 Review 與 Correction 已停用。</p> : null}
+          </div>
         </div>
       </section>
 

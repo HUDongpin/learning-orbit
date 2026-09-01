@@ -12,6 +12,7 @@ import {
 import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
 import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
 import { ChatPanel } from "../../../src/lib/chat/chat-panel";
+import { identityInitial, identityStyle } from "../../../src/lib/chat/identity";
 import { parseStorageBrowserOrigins } from "../../../src/lib/media/media-upload";
 import { EchoPanel } from "../../../src/lib/analytics/echo-panel";
 import { TracePanel } from "../../../src/lib/analytics/trace-panel";
@@ -39,6 +40,24 @@ const STATUS_COPY: Readonly<Record<RoomDetails["status"], string>> = {
 const MEDIA_UPLOAD_ORIGINS = parseStorageBrowserOrigins(process.env.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS);
 const DEFAULT_AGENT_STATUS_TIMEOUT_MS = 1_500;
 
+/** Narrow surfaces for the phone tab bar. globals.css hides the inactive ones below 767px. */
+type WorkSurface = "chat" | "echo" | "trace";
+const WORK_SURFACES: readonly Readonly<{ id: WorkSurface; label: string }>[] = [
+  { id: "chat", label: "對話" },
+  { id: "echo", label: "概念圖" },
+  { id: "trace", label: "網絡" },
+];
+
+/**
+ * The three display controls are React state and nothing else.
+ *
+ * A remembered preference would need localStorage, and this product's own e2e
+ * gate fails if any browser storage is written at all — so every control says,
+ * in its own accessible copy, that the choice is dropped on reload rather than
+ * implying a saved setting that does not exist.
+ */
+const RESET_NOTE = "這個選擇只在這一次瀏覽有效，重新載入頁面後會回到預設。";
+
 export interface RoomAccessClientProps {
   gateway?: SessionGateway;
   mode: AccessMode;
@@ -60,6 +79,11 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
   const [state, setState] = useState<AccessState>(() => validRoomId ? { kind: "checking" } : { kind: "forbidden" });
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string>();
+  const [retryToken, setRetryToken] = useState(0);
+  const [surface, setSurface] = useState<WorkSurface>("chat");
+  const [theme, setTheme] = useState<"dark" | "light">();
+  const [projector, setProjector] = useState(false);
+  const [band, setBand] = useState<"junior" | "senior">();
   const [, renderHydratedUpdate] = useReducer((version: number) => version + 1, 0);
   const activeHydrated = useRef<HydratedSessionState | undefined>(undefined);
   const unsubscribeActiveHydrated = useRef<(() => void) | undefined>(undefined);
@@ -218,7 +242,29 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
       if (activeHydrated.current === hydrated) activeHydrated.current = undefined;
       if (unsubscribeActiveHydrated.current === unsubscribeHydrated) unsubscribeActiveHydrated.current = undefined;
     };
-  }, [agentStatusTimeoutMs, api, authority, mode, roomId, router, validRoomId]);
+    // retryToken is a dependency on purpose: the recovery gates re-run this
+    // whole access check by bumping it, so a retry is a real second request to
+    // the server rather than a cosmetic reset of the error screen.
+  }, [agentStatusTimeoutMs, api, authority, mode, retryToken, roomId, router, validRoomId]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme) root.dataset.theme = theme; else delete root.dataset.theme;
+    if (projector) root.dataset.display = "projector"; else delete root.dataset.display;
+    if (band) root.dataset.band = band; else delete root.dataset.band;
+    return () => {
+      delete root.dataset.theme;
+      delete root.dataset.display;
+      delete root.dataset.band;
+    };
+  }, [band, projector, theme]);
+
+  function retryAccess() {
+    disposeActiveHydration();
+    setLogoutError(undefined);
+    setState(validRoomId ? { kind: "checking" } : { kind: "forbidden" });
+    setRetryToken((token) => token + 1);
+  }
 
   async function logout() {
     setLoggingOut(true);
@@ -276,7 +322,10 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
           <p className="login-eyebrow">房間不可用</p>
           <RecoveryHeading>無法開啟這個課堂</RecoveryHeading>
           <p>房間可能不存在、已刪除，或不屬於目前的 Session。系統沒有載入模擬房間。</p>
-          <a className="teacher-link-button" href="/login">返回安全入口</a>
+          <div className="recovery-actions">
+            <button className="teacher-create" onClick={() => retryAccess()} type="button">重新檢查課堂權限</button>
+            <a className="teacher-link-button" href="/login">返回安全入口</a>
+          </div>
         </section>
       </main>
     );
@@ -290,9 +339,12 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
           <RecoveryHeading>目前的 Session 無法再開啟這個課堂</RecoveryHeading>
           <p>房間可能已結束、刪除，或目前的房間權限已變更。系統已清除記憶體中的課堂狀態，也不會載入 Fixture。</p>
           {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
-          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
-            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
-          </button>
+          <div className="recovery-actions">
+            <button className="teacher-create" disabled={loggingOut} onClick={() => retryAccess()} type="button">重新檢查課堂權限</button>
+            <button className="teacher-secondary" disabled={loggingOut} onClick={() => void logout()} type="button">
+              {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -306,9 +358,12 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
           <RecoveryHeading>課堂服務暫時不可用</RecoveryHeading>
           <p>未能從伺服器確認房間狀態，因此聊天室、分析與媒體功能都沒有啟動。</p>
           {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
-          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
-            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
-          </button>
+          <div className="recovery-actions">
+            <button className="teacher-create" disabled={loggingOut} onClick={() => retryAccess()} type="button">重新檢查課堂權限</button>
+            <button className="teacher-secondary" disabled={loggingOut} onClick={() => void logout()} type="button">
+              {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -324,9 +379,12 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
           <RecoveryHeading>即時同步已停止</RecoveryHeading>
           <p role="alert">事件資料未能連續、完整地通過伺服器 Contract 驗證。為避免顯示過期或不完整的課堂內容，本頁已隱藏房間資料並停止自動重連。</p>
           {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
-          <button className="teacher-link-button" disabled={loggingOut} onClick={() => void logout()} type="button">
-            {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
-          </button>
+          <div className="recovery-actions">
+            <button className="teacher-create" disabled={loggingOut} onClick={() => retryAccess()} type="button">重新檢查課堂權限</button>
+            <button className="teacher-secondary" disabled={loggingOut} onClick={() => void logout()} type="button">
+              {loggingOut ? "正在清除 Session…" : "清除 Session 並返回登入"}
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -344,15 +402,92 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
       .filter(({ type }) => type === "analytics.correction.recorded.v1")
       .map(({ eventId }) => eventId)
     : [];
+  const echoSnapshot = hydrated.projections.slot(echoProjectionKey).snapshot;
+  // How far the server's own concept map has been built, so the composer can
+  // say what the map already covers instead of guessing.
+  const mapProgress = echoSnapshot
+    ? {
+      projectionVersion: echoSnapshot.projectionVersion,
+      completeThroughRoomSeq: echoSnapshot.completeThroughRoomSeq,
+    } as const
+    : undefined;
+  const eventCount = hydrated.ledger.events().length;
+  const connectionCopy = liveState.status === "closed"
+    ? liveState.connected ? "課堂已結束，連線只用來接收權限變更" : "課堂已結束，不再建立即時連線"
+    : liveState.connected ? "即時同步中：WebSocket 已連線" : "正在連線，接通之前不會有新內容出現";
+  const durationMinutes = Math.round(details.durationSeconds / 60);
+  const themeLabel = theme === undefined ? "自動" : theme === "dark" ? "深色" : "淺色";
+  const themeCopy = `深淺 ${themeLabel}：${theme === undefined
+    ? "現在跟隨你裝置的深色或淺色設定，按一下改用深色。"
+    : theme === "dark" ? "現在用深色畫面，按一下改用淺色。" : "現在用淺色畫面，按一下改回跟隨裝置。"}${RESET_NOTE}`;
+  const projectorCopy = `投影 ${projector ? "開" : "關"}：${projector
+    ? "現在用高對比的投影模式，按一下關閉。"
+    : "現在用一般螢幕的顏色。課室開燈用投影機時，柔和的綠色會被投影機的伽瑪壓掉，按一下開啟高對比。"}${RESET_NOTE}`;
+  const bandLabel = band === undefined ? "預設" : band === "junior" ? "寬鬆" : "緊湊";
+  const bandCopy = `間距 ${bandLabel}：${band === undefined
+    ? "現在用預設的行距與間距，按一下改為寬鬆一點。"
+    : band === "junior" ? "現在的行距與間距寬鬆一點，按一下改為緊湊。" : "現在的行距與間距緊湊一點，按一下改回預設。"}${RESET_NOTE}`;
   return (
-    <main className="room-gate-shell">
+    <main className="room-gate-shell" data-shell="app">
       <a className="skip-link" href="#classroom-workspace">跳到共學工作區</a>
-      <header className="room-gate-header">
-        <div className="orbit-brand">
+      <header className="room-bar">
+        <div className="room-bar-identity">
           <div className="orbit-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="4" /><ellipse cx="16" cy="16" rx="13" ry="6" /><ellipse cx="16" cy="16" rx="6" ry="13" /></svg></div>
-          <div><p className="teacher-brand-name">Learning Orbit</p><p className="orbit-subtitle">伺服器已確認房間</p></div>
+          <div>
+            <p className="teacher-brand-name">Learning Orbit</p>
+            {/* The .room-gate-heading wrapper stays: e2e reads the seat
+                pseudonym through ".room-gate-heading .login-eyebrow". */}
+            <div className="room-gate-heading">
+              <p className="login-eyebrow">{isTeacher ? "教師房間控制台" : hydrated.session.role === "student" ? hydrated.session.pseudonym : ""}</p>
+            </div>
+          </div>
+          <div>
+            <h1 className="room-bar-topic">{details.topic}</h1>
+            <p className="room-bar-meta">
+              <span className={`teacher-status status-${liveState.status}`}>{STATUS_COPY[liveState.status]}</span>
+              <span>{details.participants.length} 個匿名座位</span>
+              <span className="orbit-clock">{durationMinutes} 分鐘課堂</span>
+            </p>
+          </div>
         </div>
-        <div className="room-gate-actions">
+        {/* Seats are drawn dashed and labelled "未回報", not green and "在線":
+            this client receives no presence frame, so it must not invent one. */}
+        <ul className="crew-strip" aria-label="課堂座位">
+          {details.participants.map((participant) => (
+            <li
+              aria-label={`${participant.pseudonym}：伺服器未回報在線狀態`}
+              className="crew-chip"
+              data-state="unknown"
+              key={participant.actorId}
+              style={identityStyle(participant.pseudonym, participant.actorKind) as React.CSSProperties}
+            >{identityInitial(participant.pseudonym)}</li>
+          ))}
+        </ul>
+        <div className="room-bar-actions">
+          <button
+            aria-label={themeCopy}
+            aria-pressed={theme !== undefined}
+            className="icon-button"
+            onClick={() => setTheme((current) => current === undefined ? "dark" : current === "dark" ? "light" : undefined)}
+            title={themeCopy}
+            type="button"
+          >深淺 {themeLabel}</button>
+          <button
+            aria-label={projectorCopy}
+            aria-pressed={projector}
+            className="icon-button"
+            onClick={() => setProjector((current) => !current)}
+            title={projectorCopy}
+            type="button"
+          >投影 {projector ? "開" : "關"}</button>
+          <button
+            aria-label={bandCopy}
+            aria-pressed={band !== undefined}
+            className="icon-button"
+            onClick={() => setBand((current) => current === undefined ? "junior" : current === "junior" ? "senior" : undefined)}
+            title={bandCopy}
+            type="button"
+          >間距 {bandLabel}</button>
           {isTeacher ? <a className="teacher-link-button" href="/teacher">返回教師工作台</a> : null}
           <button className="teacher-secondary" disabled={loggingOut} onClick={() => void logout()} type="button">
             {loggingOut ? "正在登出…" : "登出"}
@@ -360,60 +495,75 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
         </div>
       </header>
       <section className="room-gate-main">
-        {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
-        <div className="room-gate-heading">
-          <div>
-            <p className="login-eyebrow">{isTeacher ? "教師房間控制台" : hydrated.session.role === "student" ? hydrated.session.pseudonym : ""}</p>
-            <h1>{details.topic}</h1>
-            <p>45 分鐘課堂 · {STATUS_COPY[liveState.status]} · {details.participants.length} 個匿名座位</p>
+        <div>
+          {logoutError ? <p className="teacher-alert" role="alert">{logoutError}</p> : null}
+          <div className="room-hydration-notice" role="status">
+            <h2>伺服器已確認這個課堂</h2>
+            <p>已按伺服器 roomSeq 同步 {eventCount} 個 RoomEvent，每一個都由伺服器確認過；{connectionCopy}。下面的分析區只會顯示伺服器批准你這個身分看的內容。</p>
           </div>
-          <span className={`teacher-status status-${liveState.status}`}>{STATUS_COPY[liveState.status]}</span>
         </div>
-        <div className="room-hydration-notice" role="status">
-          <h2>房間權限已確認</h2>
-          <p>已按伺服器 roomSeq 同步 {hydrated.ledger.events().length} 個 RoomEvent；{liveState.status === "closed"
-            ? liveState.connected ? "課堂已結束；WebSocket 僅保留權限變更通知" : "課堂已結束，不再建立即時連線"
-            : liveState.connected ? "WebSocket 已連線" : "WebSocket 正在連線或恢復"}。分析區只呈現目前角色獲准的伺服器 Projection。</p>
-        </div>
-        {isTeacher ? (
-          <TeacherControlPanel
-            roomId={roomId}
-            roomStatus={liveState.status}
-            {...(teacherEcho ? { echo: teacherEcho } : {})}
-            {...(hydrated.agentStatus ? { agentEnabled: hydrated.agentStatus.agentEnabled } : {})}
-            analyticsCorrectionEventIds={analyticsCorrectionEventIds}
-            gateway={api}
-            runtime={hydrated}
-            onDeletionAccepted={(initial) => {
-              disposeActiveHydration();
-              setState({ kind: "teacher-deletion", initial, authority });
-            }}
-            onDeletionUncertain={() => {
-              disposeActiveHydration();
-              setState({ kind: "teacher-deletion-unknown", authority });
-            }}
-            onSessionExpired={() => {
-              disposeActiveHydration();
-              setState({ kind: "checking" });
-              router.replace("/login?role=teacher");
-            }}
-          />
-        ) : null}
-        <div className="orbit-grid room-workspace" id="classroom-workspace" tabIndex={-1}>
-          <ChatPanel runtime={hydrated} mediaGateway={api} allowedUploadOrigins={MEDIA_UPLOAD_ORIGINS} />
-          <div className="analysis-column" aria-label="伺服器分析區">
-            <EchoPanel
-              slot={hydrated.projections.slot(echoProjectionKey)}
-              onLoadTimeline={() => hydrated.loadConceptTimeline(echoProjectionKey)}
-              onRetry={() => void hydrated.refreshProjection(echoProjectionKey)}
+        {/* Inline layout only, no new token: at >=1120px globals.css makes the
+            shell a 100dvh grid whose second row is this box, so the console and
+            the workspace scroll here instead of the page growing without end. */}
+        <div style={{ minHeight: 0, overflow: "auto" }}>
+          {isTeacher ? (
+            <TeacherControlPanel
+              roomId={roomId}
+              roomStatus={liveState.status}
+              {...(teacherEcho ? { echo: teacherEcho } : {})}
+              {...(hydrated.agentStatus ? { agentEnabled: hydrated.agentStatus.agentEnabled } : {})}
+              analyticsCorrectionEventIds={analyticsCorrectionEventIds}
+              gateway={api}
+              runtime={hydrated}
+              onDeletionAccepted={(initial) => {
+                disposeActiveHydration();
+                setState({ kind: "teacher-deletion", initial, authority });
+              }}
+              onDeletionUncertain={() => {
+                disposeActiveHydration();
+                setState({ kind: "teacher-deletion-unknown", authority });
+              }}
+              onSessionExpired={() => {
+                disposeActiveHydration();
+                setState({ kind: "checking" });
+                router.replace("/login?role=teacher");
+              }}
             />
-            <TracePanel
-              slot={hydrated.projections.slot(traceProjectionKey)}
-              onRetry={() => void hydrated.refreshProjection(traceProjectionKey)}
+          ) : null}
+          <div className="orbit-grid room-workspace" data-surface={surface} id="classroom-workspace" tabIndex={-1}>
+            <ChatPanel
+              runtime={hydrated}
+              mediaGateway={api}
+              allowedUploadOrigins={MEDIA_UPLOAD_ORIGINS}
+              {...(mapProgress ? { mapProgress } : {})}
             />
+            <div className="analysis-column" aria-label="伺服器分析區">
+              <EchoPanel
+                slot={hydrated.projections.slot(echoProjectionKey)}
+                onLoadTimeline={() => hydrated.loadConceptTimeline(echoProjectionKey)}
+                onRetry={() => void hydrated.refreshProjection(echoProjectionKey)}
+              />
+              <TracePanel
+                slot={hydrated.projections.slot(traceProjectionKey)}
+                onRetry={() => void hydrated.refreshProjection(traceProjectionKey)}
+              />
+            </div>
           </div>
         </div>
       </section>
+      {/* Always rendered; globals.css shows this bar only below 767px, where
+          one surface at a time replaces a phone-length stack of panels. */}
+      <div className="surface-tabs" role="tablist" aria-label="切換工作區">
+        {WORK_SURFACES.map(({ id, label }) => (
+          <button
+            aria-selected={surface === id}
+            key={id}
+            onClick={() => setSurface(id)}
+            role="tab"
+            type="button"
+          >{label}</button>
+        ))}
+      </div>
     </main>
   );
 }

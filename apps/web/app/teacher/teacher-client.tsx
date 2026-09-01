@@ -11,6 +11,25 @@ import {
 } from "../../src/lib/session/session-gateway";
 
 const CLASS_TOPIC = "生態系統探究";
+const ROOM_CODE_KEY = "room";
+
+/** Numerals only: 13px is reserved for uppercase Latin and digits. */
+const SEAT_NUMBER_STYLE: React.CSSProperties = {
+  display: "grid",
+  flex: "0 0 auto",
+  inlineSize: "38px",
+  blockSize: "38px",
+  placeItems: "center",
+  border: "1px solid var(--line-strong)",
+  borderRadius: "var(--r-sm)",
+  color: "var(--accent-green)",
+  fontFamily: "var(--font-num)",
+  fontSize: "var(--fs-micro)",
+  fontWeight: 800,
+};
+const CODE_BODY_STYLE: React.CSSProperties = { flex: "1 1 auto" };
+const COPIED_MARK_STYLE: React.CSSProperties = { color: "var(--accent-green)", whiteSpace: "nowrap" };
+const TABULAR_STYLE: React.CSSProperties = { fontFamily: "var(--font-num)" };
 
 type TeacherRoom = TeacherRoomListResponse["rooms"][number];
 type WorkspaceState =
@@ -28,8 +47,8 @@ const STATUS_LABEL: Readonly<Record<TeacherRoom["status"], string>> = {
   closed: "已結束",
 };
 
-function formatTime(value: string | null): string {
-  if (value === null) return "尚未開始";
+function formatTime(value: string | null, fallback = "尚未開始"): string {
+  if (value === null) return fallback;
   return new Intl.DateTimeFormat("zh-HK", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -60,6 +79,10 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
   const [creating, setCreating] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [copyStatus, setCopyStatus] = useState<string>();
+  // Which rows the clipboard actually accepted, this render session only.
+  // Keyed by member id, never by the code itself, so no code string can leak
+  // into React state that outlives the one-time display.
+  const [copiedKeys, setCopiedKeys] = useState<ReadonlySet<string>>(new Set());
   const authorityGeneration = useRef(0);
   const inviteHeading = useRef<HTMLHeadingElement>(null);
   const dismissedHeading = useRef<HTMLHeadingElement>(null);
@@ -127,6 +150,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
     setSavedRoomId(undefined);
     setActionError(undefined);
     setCopyStatus(undefined);
+    setCopiedKeys(new Set());
     try {
       const result = await api.createRoom({ topic: CLASS_TOPIC });
       if (generation !== authorityGeneration.current) return;
@@ -159,11 +183,14 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
     }
   }
 
-  async function copyText(value: string, success: string) {
+  async function copyText(value: string, success: string, keys: readonly string[]) {
     setCopyStatus(undefined);
     try {
       if (!navigator.clipboard?.writeText) throw new Error("CLIPBOARD_UNAVAILABLE");
       await navigator.clipboard.writeText(value);
+      // Only a resolved clipboard write may tick a row: a refused or missing
+      // clipboard leaves the row unmarked and says so.
+      setCopiedKeys((current) => new Set([...current, ...keys]));
       setCopyStatus(success);
     } catch {
       setCopyStatus("無法使用剪貼簿。請手動抄錄並安全保存代碼。");
@@ -175,6 +202,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
     setSavedRoomId(created.room.roomId);
     setCreated(undefined);
     setCopyStatus(undefined);
+    setCopiedKeys(new Set());
     setCodesDismissed(true);
   }
 
@@ -187,6 +215,7 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
     setCreating(false);
     setActionError(undefined);
     setCopyStatus(undefined);
+    setCopiedKeys(new Set());
     setWorkspace({ kind: "logging-out" });
     try {
       await api.logout();
@@ -195,6 +224,12 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
       setWorkspace({ kind: "logout-failed" });
     }
   }
+
+  const inviteKeys = created
+    ? [ROOM_CODE_KEY, ...created.seatInvites.map(({ roomMemberId }) => roomMemberId)]
+    : [];
+  const inviteTotal = inviteKeys.length;
+  const copiedCount = inviteKeys.filter((key) => copiedKeys.has(key)).length;
 
   if (workspace.kind === "checking") {
     return <main className="teacher-shell teacher-centered" aria-busy="true"><p role="status">正在驗證教師 Session…</p></main>;
@@ -219,7 +254,9 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           <p className="login-eyebrow">Fail closed</p>
           <h1 ref={recoveryHeading} tabIndex={-1}>未能確認登出</h1>
           <p className="teacher-alert" role="alert">未能完成登出。伺服器 Session 可能仍然有效；教師工作台與一次性代碼保持關閉。</p>
-          <button className="teacher-link-button" onClick={() => void logout()} type="button">再次清除 Session</button>
+          <div className="recovery-actions">
+            <button className="teacher-link-button" onClick={() => void logout()} type="button">再次清除 Session</button>
+          </div>
         </section>
       </main>
     );
@@ -232,7 +269,9 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           <p className="login-eyebrow">角色不相符</p>
           <h1 ref={recoveryHeading} tabIndex={-1}>這個頁面只供教師使用</h1>
           <p>目前 Session 是學生身份，因此沒有載入教師房間、代碼或監督資料。</p>
-          <a className="teacher-link-button" href={`/session/${workspace.roomId}`}>返回我的課堂</a>
+          <div className="recovery-actions">
+            <a className="teacher-link-button" href={`/session/${workspace.roomId}`}>返回我的課堂</a>
+          </div>
         </section>
       </main>
     );
@@ -246,9 +285,11 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
           <h1 ref={recoveryHeading} tabIndex={-1}>暫時無法載入教師工作台</h1>
           <p>未能確認教師 Session 或房間清單；系統沒有載入任何模擬資料。</p>
           {actionError ? <p className="teacher-alert" ref={actionErrorAlert} role="alert" tabIndex={-1}>{actionError}</p> : null}
-          <button className="teacher-link-button" onClick={() => void logout()} type="button">
-            清除 Session 並返回登入
-          </button>
+          <div className="recovery-actions">
+            <button className="teacher-link-button" onClick={() => void logout()} type="button">
+              清除 Session 並返回登入
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -289,27 +330,38 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
               <div>
                 <p className="login-eyebrow">只顯示一次</p>
                 <h2 id="invite-title" ref={inviteHeading} tabIndex={-1}>分發課堂代碼</h2>
+                <p className="room-list-note">逐項交給對應座位的學生：全班共用房間代碼，座位代碼每人一個。</p>
               </div>
               <span className="teacher-status status-scheduled">尚未開始</span>
             </div>
             <p className="invite-warning">離開或確認保存後，系統不會再次顯示這些代碼。請先安全分發或保存。</p>
+            <p className="copy-status">
+              已複製 {copiedCount} / {inviteTotal} 項；核對記號只屬本次畫面，重新載入後會清除。
+            </p>
             <div className="room-code-row">
-              <div><span>共同房間代碼</span><strong>{created.room.roomCode}</strong></div>
-              <button className="teacher-secondary" onClick={() => void copyText(created.room.roomCode, "已複製房間代碼。")}>複製房間代碼</button>
+              <div style={CODE_BODY_STYLE}><span>共同房間代碼</span><strong>{created.room.roomCode}</strong></div>
+              {copiedKeys.has(ROOM_CODE_KEY)
+                ? <span className="copy-status" style={COPIED_MARK_STYLE}>已複製</span>
+                : null}
+              <button className="teacher-secondary" onClick={() => void copyText(created.room.roomCode, "已複製房間代碼。", [ROOM_CODE_KEY])}>複製房間代碼</button>
             </div>
-            <ul className="seat-code-list" aria-label="四個獨有座位代碼">
-              {created.seatInvites.map((invite) => (
+            <ol className="seat-code-list" aria-label="四個獨有座位代碼">
+              {created.seatInvites.map((invite, index) => (
                 <li key={invite.roomMemberId}>
-                  <div><span>{invite.pseudonym}</span><strong>{invite.code}</strong></div>
-                  <button className="teacher-secondary" onClick={() => void copyText(invite.code, `已複製${invite.pseudonym}座位代碼。`)}>
+                  <b aria-hidden="true" style={SEAT_NUMBER_STYLE}>{index + 1}</b>
+                  <div style={CODE_BODY_STYLE}><span>{invite.pseudonym}</span><strong>{invite.code}</strong></div>
+                  {copiedKeys.has(invite.roomMemberId)
+                    ? <span className="copy-status" style={COPIED_MARK_STYLE}>已複製</span>
+                    : null}
+                  <button className="teacher-secondary" onClick={() => void copyText(invite.code, `已複製${invite.pseudonym}座位代碼。`, [invite.roomMemberId])}>
                     複製{invite.pseudonym}座位代碼
                   </button>
                 </li>
               ))}
-            </ul>
+            </ol>
             {copyStatus ? <p className="copy-status" role="status">{copyStatus}</p> : null}
             <div className="invite-actions">
-              <button className="teacher-secondary" onClick={() => void copyText(copyBundle(created), "已複製全部代碼。")}>複製全部代碼</button>
+              <button className="teacher-secondary" onClick={() => void copyText(copyBundle(created), "已複製全部代碼。", inviteKeys)}>複製全部代碼</button>
               <button className="teacher-secondary" onClick={() => window.print()} type="button">列印座位卡</button>
               <button className="teacher-create" onClick={confirmSaved}>我已安全保存代碼</button>
             </div>
@@ -333,7 +385,10 @@ export function TeacherClient({ gateway }: TeacherClientProps) {
                 <li key={room.roomId}>
                   <div className="room-summary">
                     <div><span className={`teacher-status status-${room.status}`}>{STATUS_LABEL[room.status]}</span><h3>{room.topic}</h3></div>
-                    <dl><div><dt>建立時間</dt><dd>{formatTime(room.createdAt)}</dd></div><div><dt>結束時間</dt><dd>{formatTime(room.closesAt)}</dd></div></dl>
+                    <dl>
+                      <div><dt>建立時間</dt><dd style={TABULAR_STYLE}>{formatTime(room.createdAt)}</dd></div>
+                      <div><dt>結束時間</dt><dd style={TABULAR_STYLE}>{formatTime(room.closesAt, "尚未安排")}</dd></div>
+                    </dl>
                   </div>
                   <a
                     aria-label={`開啟課堂 ${room.topic} ${STATUS_LABEL[room.status]}`}

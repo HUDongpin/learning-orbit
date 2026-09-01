@@ -6,7 +6,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { LedgerMessage } from "../session/event-ledger";
 import type { RoomCommandIntent } from "../session/session-command-bus";
 import type { SessionStatus } from "../session/session-store";
-import { Composer } from "./composer";
+import { Composer, type MediaTrayName, type MediaTrayState } from "./composer";
 import { MessageCard } from "./message-card";
 import { roomRoster } from "./roster";
 import { MediaComposer, type MediaUploadFunction, type ObjectUrlPort } from "../media/media-composer";
@@ -18,6 +18,12 @@ import { AgentStatusPanel } from "../agent/agent-status-panel";
 type RejectView = Pick<Extract<ServerFrame, { type: "reject" }>, "code" | "commandId" | "retryable">;
 type PendingSubmission = Readonly<{ commandId: string; replyTo: string | null; mediaIds: readonly string[] }>;
 type SettledSubmission = Readonly<{ submission: PendingSubmission; outcome: "confirmed" | "rejected" }>;
+
+/**
+ * How far the server's concept-map projection has read into the room ledger.
+ * Both fields are server-owned; nothing here is inferred locally.
+ */
+export type MapProgress = Readonly<{ projectionVersion: number; completeThroughRoomSeq: number }>;
 
 export interface ClassroomChatRuntime {
   readonly session: AuthSession;
@@ -34,18 +40,21 @@ export interface ClassroomChatRuntime {
   sendIntent(intent: RoomCommandIntent): string;
 }
 
-export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], mediaUpload, mediaObjectUrls }: Readonly<{
+export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], mediaUpload, mediaObjectUrls, mapProgress }: Readonly<{
   runtime: ClassroomChatRuntime;
   mediaGateway?: MediaGateway;
   allowedUploadOrigins?: readonly string[];
   mediaUpload?: MediaUploadFunction;
   mediaObjectUrls?: ObjectUrlPort;
+  mapProgress?: MapProgress;
 }>) {
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [draftMediaIds, setDraftMediaIds] = useState<string[]>([]);
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
   const [mediaReset, setMediaReset] = useState<Readonly<{ generation: number; mediaIds: readonly string[] }>>({ generation: 0, mediaIds: [] });
   const [latestCommandId, setLatestCommandId] = useState<string>();
+  // View-only disclosure state. It is never persisted: a reload returns both trays to this default.
+  const [mediaTrays, setMediaTrays] = useState<MediaTrayState>({ attachments: true, recording: false });
   const mediaSlots = useRef(new MediaSlotReservations(4));
   const roster = roomRoster(runtime.room);
   const messages = runtime.messages();
@@ -104,6 +113,22 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
     setLatestCommandId(commandId);
     return commandId;
   };
+
+  const toggleMediaTray = (tray: MediaTrayName, open: boolean) => {
+    setMediaTrays((current) => ({ ...current, [tray]: open }));
+  };
+
+  // The first message the current concept-map version has not read yet. Server fields only.
+  const firstUnmappedSeq = mapProgress
+    ? messages.find(({ firstRoomSeq }) => firstRoomSeq > mapProgress.completeThroughRoomSeq)?.firstRoomSeq
+    : undefined;
+
+  const isStudent = runtime.session.role === "student";
+  const receipt = latestReject
+    ? latestReject.retryable === true ? "retrying" as const : "refused" as const
+    : latestCommandId !== undefined && !latestConfirmed ? "waiting" as const
+      : pending.length ? "waiting" as const : undefined;
+
   return (
     <section className="orbit-panel chat-panel" aria-labelledby="chat-title" role="region">
       <header className="panel-head">
@@ -122,83 +147,110 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
         {messages.length ? messages.map((message) => {
           const replySequence = message.replyTo ? sequenceByMessageId.get(message.replyTo) : undefined;
           return (
-            <MessageCard
-              key={message.messageId}
-              message={message}
-              roster={roster}
-              roomStatus={runtime.sessionState.status}
-              viewer={runtime.session}
-              onReply={setReplyTo}
-              onCommand={(intent) => sendIntent(intent)}
-              roomId={runtime.room.roomId}
-              allowedDownloadOrigins={allowedUploadOrigins}
-              {...(mediaGateway ? { mediaGateway } : {})}
-              {...(runtime.mediaStatuses ? { mediaStatuses: runtime.mediaStatuses } : {})}
-              {...(replySequence === undefined ? {} : {
-                replyLabel: `訊息 ${replySequence}`,
-                onNavigateReply: () => document.getElementById(`message-seq-${replySequence}`)?.focus(),
-              })}
-            />
+            <React.Fragment key={message.messageId}>
+              {mapProgress && firstUnmappedSeq === message.firstRoomSeq ? (
+                <p className="stream-divider">以下訊息還未納入這一版想法地圖（第 {mapProgress.projectionVersion} 版）</p>
+              ) : null}
+              <MessageCard
+                message={message}
+                roster={roster}
+                roomStatus={runtime.sessionState.status}
+                viewer={runtime.session}
+                onReply={setReplyTo}
+                onCommand={(intent) => sendIntent(intent)}
+                roomId={runtime.room.roomId}
+                allowedDownloadOrigins={allowedUploadOrigins}
+                {...(mediaGateway ? { mediaGateway } : {})}
+                {...(runtime.mediaStatuses ? { mediaStatuses: runtime.mediaStatuses } : {})}
+                {...(replySequence === undefined ? {} : {
+                  replyLabel: `訊息 ${replySequence}`,
+                  onNavigateReply: () => document.getElementById(`message-seq-${replySequence}`)?.focus(),
+                })}
+              />
+            </React.Fragment>
           );
         }) : <p className="panel-meta">尚未收到伺服器確認的課堂訊息。</p>}
       </div>
-      {pending.length ? <p className="composer-note" role="status">{pending.length} 個指令正在等待伺服器 ACK；訊息不會樂觀加入紀錄。</p> : null}
-      {latestReject?.retryable ? <p className="composer-note" role="status">伺服器暫時未接受上一個指令；原指令與媒體仍鎖定在可靠佇列，等待重試。</p>
-        : latestReject ? <p className="composer-error" role="alert">伺服器未接受上一個指令；課堂紀錄沒有被本地改寫。</p> : null}
-      {runtime.session.role === "student" ? (
-        <>
-          {mediaGateway ? (
-            <MediaComposer
-              roomId={runtime.room.roomId}
-              gateway={mediaGateway}
-              roomStatus={runtime.sessionState.status}
-              allowedUploadOrigins={allowedUploadOrigins}
-              mediaIds={draftMediaIds}
-              onReady={() => undefined}
-              onRemoveReady={(mediaId) => {
-                mediaSlots.current.remove(mediaId);
-                setDraftMediaIds((current) => current.filter((candidate) => candidate !== mediaId));
-              }}
-              resetGeneration={mediaReset.generation}
-              submittedMediaIds={mediaReset.mediaIds}
-              upload={reservedMediaUpload}
-              {...(mediaObjectUrls ? { objectUrls: mediaObjectUrls } : {})}
-            />
+      {receipt || isStudent ? (
+        <div className="composer-dock">
+          {/* The send receipt closes the loop without one optimistic pixel: an unconfirmed
+              message is reported here, never drawn into the transcript above. */}
+          {receipt === "refused" ? (
+            <p className="send-receipt" data-state="refused" role="alert">
+              <span className="send-receipt-dot" aria-hidden="true" />
+              <span>伺服器未接受上一個指令；你剛才寫的內容沒有送出，輸入框也已清空，需要重新輸入一次。課堂紀錄沒有被本地改寫。</span>
+            </p>
+          ) : receipt === "retrying" ? (
+            <p className="send-receipt" role="status">
+              <span className="send-receipt-dot" aria-hidden="true" />
+              <span>伺服器暫時未接受上一個指令；原指令與媒體仍鎖定在可靠佇列，等待重試。</span>
+            </p>
+          ) : receipt === "waiting" ? (
+            <p className="send-receipt" role="status">
+              <span className="send-receipt-dot" aria-hidden="true" />
+              <span>
+                正在送出，等待課堂確認。
+                {pending.length ? `${pending.length} 個指令正在等待伺服器 ACK；訊息不會樂觀加入紀錄。` : "訊息不會樂觀加入紀錄；要等伺服器確認，才會出現在上面的對話。"}
+              </span>
+            </p>
           ) : null}
-          {mediaGateway ? (
-            <MediaRecorderControl
-              roomId={runtime.room.roomId}
-              gateway={mediaGateway}
-              roomStatus={runtime.sessionState.status}
-              allowedUploadOrigins={allowedUploadOrigins}
-              onReady={() => undefined}
-              upload={reservedMediaUpload}
-              {...(mediaObjectUrls ? { objectUrls: mediaObjectUrls } : {})}
-            />
+          {isStudent ? (
+            <>
+              {mediaGateway && mediaTrays.attachments ? (
+                <MediaComposer
+                  roomId={runtime.room.roomId}
+                  gateway={mediaGateway}
+                  roomStatus={runtime.sessionState.status}
+                  allowedUploadOrigins={allowedUploadOrigins}
+                  mediaIds={draftMediaIds}
+                  onReady={() => undefined}
+                  onRemoveReady={(mediaId) => {
+                    mediaSlots.current.remove(mediaId);
+                    setDraftMediaIds((current) => current.filter((candidate) => candidate !== mediaId));
+                  }}
+                  resetGeneration={mediaReset.generation}
+                  submittedMediaIds={mediaReset.mediaIds}
+                  upload={reservedMediaUpload}
+                  {...(mediaObjectUrls ? { objectUrls: mediaObjectUrls } : {})}
+                />
+              ) : null}
+              {mediaGateway && mediaTrays.recording ? (
+                <MediaRecorderControl
+                  roomId={runtime.room.roomId}
+                  gateway={mediaGateway}
+                  roomStatus={runtime.sessionState.status}
+                  allowedUploadOrigins={allowedUploadOrigins}
+                  onReady={() => undefined}
+                  upload={reservedMediaUpload}
+                  {...(mediaObjectUrls ? { objectUrls: mediaObjectUrls } : {})}
+                />
+              ) : null}
+              <Composer
+                roster={roster}
+                roomStatus={runtime.sessionState.status}
+                replyTo={replyTo}
+                {...(replyTo && sequenceByMessageId.has(replyTo) ? { replyLabel: `訊息 ${sequenceByMessageId.get(replyTo)}` } : {})}
+                replyLocked={replyTo !== null && pendingSubmissions.some((submission) => submission.replyTo === replyTo)}
+                mediaIds={draftMediaIds}
+                {...(mediaGateway ? { mediaTrays, onToggleMediaTray: toggleMediaTray } : {})}
+                onCancelReply={() => {
+                  if (!pendingSubmissions.some((submission) => submission.replyTo === replyTo)) setReplyTo(null);
+                }}
+                onCommandSent={(commandId) => {
+                  if (replyTo || draftMediaIds.length) {
+                    const submittedMediaIds = [...draftMediaIds];
+                    setPendingSubmissions((current) => [...current, { commandId, replyTo, mediaIds: submittedMediaIds }]);
+                    if (submittedMediaIds.length) {
+                      setDraftMediaIds((current) => current.filter((mediaId) => !submittedMediaIds.includes(mediaId)));
+                      setMediaReset((current) => ({ generation: current.generation + 1, mediaIds: submittedMediaIds }));
+                    }
+                  }
+                }}
+                onSend={(intent) => sendIntent(intent)}
+              />
+            </>
           ) : null}
-          <Composer
-            roster={roster}
-            roomStatus={runtime.sessionState.status}
-            replyTo={replyTo}
-            {...(replyTo && sequenceByMessageId.has(replyTo) ? { replyLabel: `訊息 ${sequenceByMessageId.get(replyTo)}` } : {})}
-            replyLocked={replyTo !== null && pendingSubmissions.some((submission) => submission.replyTo === replyTo)}
-            mediaIds={draftMediaIds}
-            onCancelReply={() => {
-              if (!pendingSubmissions.some((submission) => submission.replyTo === replyTo)) setReplyTo(null);
-            }}
-            onCommandSent={(commandId) => {
-              if (replyTo || draftMediaIds.length) {
-                const submittedMediaIds = [...draftMediaIds];
-                setPendingSubmissions((current) => [...current, { commandId, replyTo, mediaIds: submittedMediaIds }]);
-                if (submittedMediaIds.length) {
-                  setDraftMediaIds((current) => current.filter((mediaId) => !submittedMediaIds.includes(mediaId)));
-                  setMediaReset((current) => ({ generation: current.generation + 1, mediaIds: submittedMediaIds }));
-                }
-              }
-            }}
-            onSend={(intent) => sendIntent(intent)}
-          />
-        </>
+        </div>
       ) : null}
     </section>
   );
