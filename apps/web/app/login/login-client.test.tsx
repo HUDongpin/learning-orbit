@@ -123,6 +123,54 @@ describe("unified login page", () => {
     expect(replace).toHaveBeenCalledWith(`/session/${student.roomId}`);
   });
 
+  it("takes the code out of a pasted teacher message instead of a look-alike", async () => {
+    const api = gateway();
+    render(<LoginClient gateway={api} initialRole="student" />);
+    await screen.findByRole("heading", { name: "加入學習軌道" });
+    const roomInput = screen.getByLabelText("房間代碼");
+    await userEvent.click(roomInput);
+    // Dropping the strays here would leave "RMCDEA": six alphabet characters
+    // that pass the field check and join a different room.
+    await userEvent.paste("Room code: ABC234");
+    expect(roomInput).toHaveValue("ABC234");
+
+    const seatInput = screen.getByLabelText("座位代碼");
+    await userEvent.click(seatInput);
+    await userEvent.paste("Seat code: DEF2345678");
+    expect(seatInput).toHaveValue("DEF2345678");
+
+    await userEvent.click(screen.getByRole("button", { name: "加入課堂" }));
+    await waitFor(() => expect(api.joinStudent).toHaveBeenCalledWith({
+      roomCode: "ABC234",
+      seatCode: "DEF2345678",
+    }));
+  });
+
+  it("picks the field's own code when the whole invitation is pasted into both", async () => {
+    const api = gateway();
+    render(<LoginClient gateway={api} initialRole="student" />);
+    await screen.findByRole("heading", { name: "加入學習軌道" });
+    const invitation = "房間代碼：ABC234，座位代碼：DEF2345678";
+    await userEvent.click(screen.getByLabelText("房間代碼"));
+    await userEvent.paste(invitation);
+    await userEvent.click(screen.getByLabelText("座位代碼"));
+    await userEvent.paste(invitation);
+    expect(screen.getByLabelText("房間代碼")).toHaveValue("ABC234");
+    expect(screen.getByLabelText("座位代碼")).toHaveValue("DEF2345678");
+  });
+
+  it("refuses an ambiguous paste rather than submitting one of the candidates", async () => {
+    const api = gateway();
+    render(<LoginClient gateway={api} initialRole="student" />);
+    await screen.findByRole("heading", { name: "加入學習軌道" });
+    await userEvent.click(screen.getByLabelText("房間代碼"));
+    await userEvent.paste("ABC234 XYZ789");
+    await userEvent.type(screen.getByLabelText("座位代碼"), "DEF2345678");
+    await userEvent.click(screen.getByRole("button", { name: "加入課堂" }));
+    expect(await screen.findByText("房間代碼須為 6 個英文字母或數字。")).toBeInTheDocument();
+    expect(api.joinStudent).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["缺少本人座位", { ...roomDetails, participants: roomDetails.participants.slice(1) }],
     ["匿名身份不一致", {

@@ -16,8 +16,12 @@ type LoginRole = "student" | "teacher";
 type SessionCheck = "checking" | "anonymous" | "unavailable";
 
 const CLASSROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const ROOM_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{6}$`, "u");
-const SEAT_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{10}$`, "u");
+const ROOM_CODE_LENGTH = 6;
+const SEAT_CODE_LENGTH = 10;
+const ROOM_CODE_TYPED_LIMIT = 12;
+const SEAT_CODE_TYPED_LIMIT = 18;
+const ROOM_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`, "u");
+const SEAT_CODE_PATTERN = new RegExp(`^[${CLASSROOM_CODE_ALPHABET}]{${SEAT_CODE_LENGTH}}$`, "u");
 const OUTSIDE_ALPHABET_PATTERN = new RegExp(`[^${CLASSROOM_CODE_ALPHABET}]`, "gu");
 const TEACHER_ACCEPTED_COPY = "如果此電郵已獲授權，登入連結將會送出。請檢查收件匣。";
 const STUDENT_REJECTED_COPY = "無法加入課堂。請向老師確認代碼後再試。";
@@ -30,9 +34,22 @@ const REJECTED_JOIN_CODES = ["INVALID_JOIN_REQUEST", "JOIN_FORBIDDEN", "ROOM_NOT
  * adds — a pasted space, a lowercase letter, the I/O/0/1 look-alikes — can be
  * dropped as the student types instead of being refused after submit. The
  * server-side normaliser stays the single source of case and whitespace rules.
+ *
+ * Dropping is only safe for stray characters. A student who pastes the whole
+ * line the teacher sent would otherwise have its words collapsed into the code:
+ * "Room code: ABC234" loses the spaces, the colon and the three O's and becomes
+ * "RMCDEA" — six alphabet characters that pass this field's own check and get
+ * submitted as somebody else's code, leaving the student with a "check the code
+ * with your teacher" error and a plausible-looking code in the field. So the
+ * separators are read before anything is dropped: the one run of alphabet
+ * characters that is exactly this field's length is the code, and only a value
+ * with no such run falls back to dropping strays.
  */
-function typedClassroomCode(value: string): string {
-  return normalizeClassroomCode(value).replace(OUTSIDE_ALPHABET_PATTERN, "");
+function typedClassroomCode(value: string, length: number, typedLimit: number): string {
+  const exact = value.toUpperCase().split(OUTSIDE_ALPHABET_PATTERN)
+    .filter((run) => run.length === length);
+  if (exact.length === 1) return exact[0]!;
+  return normalizeClassroomCode(value).replace(OUTSIDE_ALPHABET_PATTERN, "").slice(0, typedLimit);
 }
 
 export interface LoginClientProps {
@@ -268,8 +285,9 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
                   autoComplete="off"
                   id="room-code"
                   inputMode="text"
-                  maxLength={12}
-                  onChange={(event) => setRoomCode(typedClassroomCode(event.target.value))}
+                  onChange={(event) => setRoomCode(
+                    typedClassroomCode(event.target.value, ROOM_CODE_LENGTH, ROOM_CODE_TYPED_LIMIT),
+                  )}
                   placeholder="例如 ABC234"
                   ref={roomInput}
                   spellCheck={false}
@@ -287,8 +305,9 @@ export function LoginClient({ gateway, initialRole }: LoginClientProps) {
                   autoComplete="off"
                   id="seat-code"
                   inputMode="text"
-                  maxLength={18}
-                  onChange={(event) => setSeatCode(typedClassroomCode(event.target.value))}
+                  onChange={(event) => setSeatCode(
+                    typedClassroomCode(event.target.value, SEAT_CODE_LENGTH, SEAT_CODE_TYPED_LIMIT),
+                  )}
                   placeholder="例如 DEF2345678"
                   ref={seatInput}
                   spellCheck={false}
