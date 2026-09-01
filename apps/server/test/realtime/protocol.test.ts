@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { realtimeContract } from "@learning-orbit/contracts";
 import { RealtimeConnection } from "../../src/modules/realtime/connection.js";
 
 const ROOM = "00000000-0000-4000-8000-000000000010";
@@ -43,6 +44,32 @@ describe("realtime protocol", () => {
     await c.receive({ type: "heartbeat" });
     expect(d.hub.broadcastEphemeral).toHaveBeenCalledWith(ROOM, expect.objectContaining({ type: "typing", actorId: ACTOR, active: false }));
   });
+
+  it.each([
+    ["ROOM_DELETION_IN_PROGRESS", "ROOM_DELETION_IN_PROGRESS"],
+    ["ROOM_NOT_OPEN", "ROOM_NOT_OPEN"],
+    ["FORBIDDEN", "FORBIDDEN"],
+    ["MESSAGE_NOT_FOUND", "MESSAGE_NOT_FOUND"],
+    ["REVISION_CONFLICT", "REVISION_CONFLICT"],
+    ["INVALID_COMMAND", "INVALID_COMMAND"],
+    ["SOME_UNMAPPED_INTERNAL_FAULT", "INTERNAL"],
+  ] as const)(
+    // A code outside the frozen ServerReject enum serialises to a frame the
+    // client's own parser refuses, which it escalates to a protocol failure and
+    // closes the socket over. Every reject must survive that parser.
+    "rejects %s as an on-contract frame the client can parse",
+    async (thrown, expected) => {
+      const socket = new Socket(); const d = deps();
+      d.commands.dispatch = vi.fn(async () => { throw new Error(thrown); });
+      const c = new RealtimeConnection(socket as any, { sessionId: SESSION, roomId: ROOM, principal, actorId: ACTOR }, d.authorizer, d.commands, d.hub, () => new Date(0));
+      await c.receive({ type: "hello", clientId: "00000000-0000-4000-8000-000000000015", resumeFrom: 0 });
+      await c.receive({ type: "command", command: { commandId: "00000000-0000-4000-8000-000000000201", roomId: ROOM, type: "message.add", clientTime: "2026-08-30T09:00:00.000Z", payload: { text: "x", mentions: [], mediaIds: [], replyTo: null } } });
+      const frame = JSON.parse(socket.sent.at(-1)!);
+      expect(frame).toMatchObject({ type: "reject", code: expected });
+      expect(() => realtimeContract.parseServerFrame(frame)).not.toThrow();
+      expect(socket.closed).toBeUndefined();
+    },
+  );
 
   it("requires hello first and accepts Buffer frames", async () => { const socket = new Socket(); const d = deps(); const c = new RealtimeConnection(socket as any, { sessionId: SESSION, roomId: ROOM, principal, actorId: ACTOR }, d.authorizer, d.commands, d.hub, () => new Date(0)); await c.receive(Buffer.from(JSON.stringify({ type: "hello", clientId: "00000000-0000-4000-8000-000000000015", resumeFrom: 0 }))); expect(socket.sent.length).toBeGreaterThanOrEqual(2); expect(JSON.parse(socket.sent[0]!).type).toBe("welcome"); expect(JSON.parse(socket.sent[1]!).type).toBe("resume_complete"); c.close(); });
   it("closes malformed or pre-hello input with 4400", async () => { const socket = new Socket(); const d = deps(); const c = new RealtimeConnection(socket as any, { sessionId: SESSION, roomId: ROOM, principal, actorId: ACTOR }, d.authorizer, d.commands, d.hub); await c.receive({ type: "heartbeat" }); expect(socket.closed).toBe(4400); });

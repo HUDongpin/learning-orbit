@@ -182,6 +182,45 @@ describe("event-backed chat components", () => {
     expect(screen.getByRole("button", { name: "撤回訊息 1" })).toBeDisabled();
   });
 
+  it("names who is composing, and reports typing to the server as the student writes", async () => {
+    const signalTyping = vi.fn();
+    const runtime = {
+      session: student,
+      room,
+      sessionState: { status: "open" as const, connected: true },
+      messages: () => [],
+      pendingCommandIds: () => [],
+      rejects: [],
+      sendIntent: vi.fn(() => "00000000-0000-4000-8000-000000000201"),
+      acks: new Map<string, unknown>(),
+      signalTyping,
+      typingActorIds: () => [OTHER_ACTOR],
+    };
+    render(<ChatPanel runtime={runtime} />);
+
+    // The hint resolves the actor to its seat pseudonym; a raw actorId would
+    // leak an identifier the roster deliberately hides behind a pseudonym.
+    expect(screen.getByText("探索者 B 正在輸入…")).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("輸入訊息"), "水");
+    expect(signalTyping).toHaveBeenCalledWith(true);
+  });
+
+  it("shows no composing hint when the runtime carries no live socket", () => {
+    const runtime = {
+      session: student,
+      room,
+      sessionState: { status: "open" as const, connected: true },
+      messages: () => [],
+      pendingCommandIds: () => [],
+      rejects: [],
+      sendIntent: vi.fn(() => "00000000-0000-4000-8000-000000000201"),
+      acks: new Map<string, unknown>(),
+    };
+    render(<ChatPanel runtime={runtime} />);
+    expect(screen.queryByText(/正在輸入/u)).toBeNull();
+  });
+
   it("keeps reply context until the exact server ACK is observed", async () => {
     const commandId = "00000000-0000-4000-8000-000000000201";
     const acks = new Map<string, unknown>();

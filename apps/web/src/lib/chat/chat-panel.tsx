@@ -1,7 +1,7 @@
 "use client";
 
 import type { AuthSession, MediaStatusFrame, RoomDetails, ServerFrame } from "@learning-orbit/contracts";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useReducer, useRef, useState } from "react";
 
 import type { LedgerMessage } from "../session/event-ledger";
 import type { RoomCommandIntent } from "../session/session-command-bus";
@@ -38,6 +38,13 @@ export interface ClassroomChatRuntime {
   messages(): LedgerMessage[];
   pendingCommandIds(): string[];
   sendIntent(intent: RoomCommandIntent): string;
+  /**
+   * Ephemeral seat signals. Optional so a runtime that does not carry a live
+   * socket still renders the transcript; absent simply means "no signal", which
+   * the view already draws as unreported rather than as present.
+   */
+  signalTyping?(active: boolean): void;
+  typingActorIds?(now?: number): string[];
 }
 
 export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], mediaUpload, mediaObjectUrls, mapProgress }: Readonly<{
@@ -124,6 +131,19 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
     : undefined;
 
   const isStudent = runtime.session.role === "student";
+  // Signals lapse on wall-clock time rather than on an inbound frame, so the
+  // view needs its own beat to notice the deadline pass. It runs only while
+  // somebody is actually composing and stops as soon as the list empties.
+  const composingActorIds = runtime.typingActorIds?.() ?? [];
+  const [, tickTypingClock] = useReducer((count: number) => count + 1, 0);
+  useEffect(() => {
+    if (!composingActorIds.length) return undefined;
+    const timer = setInterval(tickTypingClock, 1_000);
+    return () => clearInterval(timer);
+  }, [composingActorIds.length]);
+  const composingNames = composingActorIds
+    .map((actorId) => roster.find((member) => member.actorId === actorId)?.pseudonym)
+    .filter((pseudonym): pseudonym is string => pseudonym !== undefined);
   const receipt = latestReject
     ? latestReject.retryable === true ? "retrying" as const : "refused" as const
     : latestCommandId !== undefined && !latestConfirmed ? "waiting" as const
@@ -171,6 +191,15 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
           );
         }) : <p className="panel-meta">尚未收到伺服器確認的課堂訊息。</p>}
       </div>
+      {/* Composing is a hint, never a record: it is not in the ledger and it
+          disappears on its own. Teachers see it too, so this sits outside the
+          student-only composer dock. */}
+      {composingNames.length ? (
+        <p className="typing-note" role="status">
+          <span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>
+          <span>{composingNames.join("、")} 正在輸入…</span>
+        </p>
+      ) : null}
       {receipt || isStudent ? (
         <div className="composer-dock">
           {/* The send receipt closes the loop without one optimistic pixel: an unconfirmed
@@ -247,6 +276,7 @@ export function ChatPanel({ runtime, mediaGateway, allowedUploadOrigins = [], me
                   }
                 }}
                 onSend={(intent) => sendIntent(intent)}
+                {...(runtime.signalTyping ? { onTypingChange: (active: boolean) => runtime.signalTyping?.(active) } : {})}
               />
             </>
           ) : null}

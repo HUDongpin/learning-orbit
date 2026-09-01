@@ -134,7 +134,7 @@
     {
       "file": "realtime-frame.v1.json",
       "id": "https://learning-orbit.local/schemas/realtime-frame.v1.json",
-      "sha256": "d37e36d14b36c15e23ad8307a19e1ffc5e49f8bc2d9a0941f39c23e0ce9719fc"
+      "sha256": "b13a3e00002cc15338af23f4211c970bacc54c7f28ce00c85b8d72f32aa74de3"
     },
     {
       "file": "room-command.v1.json",

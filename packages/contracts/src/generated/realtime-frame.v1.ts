@@ -121,6 +121,7 @@ export interface ServerReject {
     | "FORBIDDEN"
     | "INVALID_COMMAND"
     | "ROOM_NOT_OPEN"
+    | "ROOM_DELETION_IN_PROGRESS"
     | "MESSAGE_NOT_FOUND"
     | "REVISION_CONFLICT"
     | "RESYNC_REQUIRED"

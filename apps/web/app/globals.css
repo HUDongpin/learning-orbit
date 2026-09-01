@@ -326,6 +326,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .send-receipt-dot { flex: 0 0 auto; inline-size: 9px; block-size: 9px; border-radius: 50%; background: var(--accent-amber); animation: lo-pulse 1.4s ease-in-out infinite; }
 .send-receipt[data-state="refused"] { border-color: #efc5c9; background: var(--tint-coral-bg); color: var(--tint-coral-ink); }
 .send-receipt[data-state="refused"] .send-receipt-dot { background: var(--accent-coral); animation: none; }
+.typing-note { display: flex; align-items: center; gap: var(--s-2); margin: 0 var(--s-4) var(--s-2); color: var(--ink-500); font-size: var(--fs-meta); }
+.typing-dots { display: inline-flex; flex: 0 0 auto; gap: 3px; }
+.typing-dots i { inline-size: 5px; block-size: 5px; border-radius: 50%; background: var(--ink-500); animation: lo-pulse 1.2s ease-in-out infinite; }
+.typing-dots i:nth-child(2) { animation-delay: .2s; }
+.typing-dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes lo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* The dock is bounded so it can never crush the message log the way the old

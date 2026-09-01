@@ -14,6 +14,34 @@ export interface SocketLike {
 }
 export interface ConnectionIdentity { readonly sessionId: string; readonly roomId: string; readonly principal: AuthSession; readonly actorId: string; }
 
+type RejectCode = Extract<RealtimeFrame, { type: "reject" }>["code"];
+
+/**
+ * Command failures the client is allowed to see verbatim.  Every entry must be
+ * a member of the frozen `ServerReject` enum: a code outside it serialises to a
+ * frame the client's own parser rejects, which it treats as a protocol failure
+ * and closes the socket over.  The `satisfies` keeps that guarantee at compile
+ * time, so a new RoomError cannot reach the wire without being added to the
+ * contract first.
+ */
+const COMMAND_REJECT_CODES = [
+  "FORBIDDEN",
+  "ROOM_DELETION_IN_PROGRESS",
+  "ROOM_NOT_OPEN",
+  "MESSAGE_NOT_FOUND",
+  "REVISION_CONFLICT",
+  "INVALID_COMMAND",
+] as const satisfies readonly RejectCode[];
+
+function isCommandRejectCode(value: string): value is RejectCode {
+  return (COMMAND_REJECT_CODES as readonly string[]).includes(value);
+}
+
+function commandRejectCode(error: unknown): RejectCode {
+  const message = error instanceof Error ? error.message : "";
+  return isCommandRejectCode(message) ? message : "INTERNAL";
+}
+
 export class RealtimeConnection {
   static readonly MAX_INBOUND_FRAME_BYTES = 16 * 1024;
   /**
@@ -115,7 +143,7 @@ export class RealtimeConnection {
     }
     if (frame.type === "command") {
       try { const result = await this.commands.dispatch(auth.principal, frame.command, this.identity.sessionId); this.send({ type: "ack", commandId: frame.command.commandId, roomSeq: result.roomSeq, revision: result.revision }); }
-      catch (error) { const code = error instanceof Error && ["FORBIDDEN","ROOM_DELETION_IN_PROGRESS","ROOM_NOT_OPEN","MESSAGE_NOT_FOUND","REVISION_CONFLICT","INVALID_COMMAND"].includes(error.message) ? error.message : "INTERNAL"; this.send({ type: "reject", commandId: frame.command.commandId, code: code as any }); }
+      catch (error) { this.send({ type: "reject", commandId: frame.command.commandId, code: commandRejectCode(error) }); }
       return;
     }
     const now = this.now().getTime();

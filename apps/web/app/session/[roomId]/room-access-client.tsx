@@ -38,6 +38,29 @@ const STATUS_COPY: Readonly<Record<RoomDetails["status"], string>> = {
   closed: "已結束",
 };
 const MEDIA_UPLOAD_ORIGINS = parseStorageBrowserOrigins(process.env.NEXT_PUBLIC_LO_STORAGE_BROWSER_ORIGINS);
+/**
+ * The server holds an accepted presence signal for 30s and rate-limits a seat
+ * to one every 5s, so re-asserting every 12s keeps an idle-but-open tab on the
+ * roster with room to spare on both sides.
+ */
+const PRESENCE_KEEPALIVE_MS = 12_000;
+/**
+ * The server drops a second presence signal from the same seat inside this
+ * window, without acknowledging either way. A tab switched away and back
+ * lands inside it, so the "active" is swallowed and the seat reads away until
+ * the next keepalive. One catch-up just past the window closes that gap.
+ */
+const PRESENCE_RATE_LIMIT_MS = 5_200;
+/**
+ * A peer that closes its tab emits no departure frame, so nothing arrives to
+ * re-render its seat. This beat lets the local expiry check retire it.
+ */
+const PRESENCE_SWEEP_MS = 5_000;
+const PRESENCE_COPY: Readonly<Record<"active" | "away" | "unknown", string>> = {
+  active: "在線",
+  away: "暫時離開",
+  unknown: "伺服器未回報在線狀態",
+};
 const DEFAULT_AGENT_STATUS_TIMEOUT_MS = 1_500;
 
 /** Narrow surfaces for the phone tab bar. globals.css hides the inactive ones below 767px. */
@@ -247,6 +270,38 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
     // the server rather than a cosmetic reset of the error screen.
   }, [agentStatusTimeoutMs, api, authority, mode, retryToken, roomId, router, validRoomId]);
 
+  const seatedHydrated = "hydrated" in state ? state.hydrated : undefined;
+  const [, sweepPresenceClock] = useReducer((count: number) => count + 1, 0);
+  useEffect(() => {
+    if (!seatedHydrated) return undefined;
+    let catchUp: ReturnType<typeof setTimeout> | undefined;
+    const announce = () => seatedHydrated.signalPresence(
+      document.visibilityState === "hidden" ? "away" : "active",
+    );
+    const announceVisibility = () => {
+      announce();
+      if (catchUp !== undefined) clearTimeout(catchUp);
+      catchUp = setTimeout(announce, PRESENCE_RATE_LIMIT_MS);
+    };
+    // Claim the seat, and keep claiming it. Sending is a no-op until resume
+    // completes, so this first call is harmless when it lands early:
+    // HydratedSessionState also announces on every resume_complete, which is
+    // what re-claims the seat after a reconnect.
+    announce();
+    const keepalive = setInterval(announce, PRESENCE_KEEPALIVE_MS);
+    const sweep = setInterval(sweepPresenceClock, PRESENCE_SWEEP_MS);
+    document.addEventListener("visibilitychange", announceVisibility);
+    return () => {
+      if (catchUp !== undefined) clearTimeout(catchUp);
+      clearInterval(keepalive);
+      clearInterval(sweep);
+      document.removeEventListener("visibilitychange", announceVisibility);
+      // One last frame on the way out so peers grey the seat immediately
+      // instead of waiting out the 30s expiry.
+      seatedHydrated.signalPresence("away");
+    };
+  }, [seatedHydrated]);
+
   useEffect(() => {
     const root = document.documentElement;
     if (theme) root.dataset.theme = theme; else delete root.dataset.theme;
@@ -450,18 +505,22 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
             </p>
           </div>
         </div>
-        {/* Seats are drawn dashed and labelled "未回報", not green and "在線":
-            this client receives no presence frame, so it must not invent one. */}
+        {/* Every seat state here is a server-sent presence signal that has not
+            yet expired. A seat the server has not vouched for stays dashed and
+            labelled "未回報": absence of a signal is never drawn as presence. */}
         <ul className="crew-strip" aria-label="課堂座位">
-          {details.participants.map((participant) => (
-            <li
-              aria-label={`${participant.pseudonym}：伺服器未回報在線狀態`}
-              className="crew-chip"
-              data-state="unknown"
-              key={participant.actorId}
-              style={identityStyle(participant.pseudonym, participant.actorKind) as React.CSSProperties}
-            >{identityInitial(participant.pseudonym)}</li>
-          ))}
+          {details.participants.map((participant) => {
+            const presence = hydrated.presenceStateOf(participant.actorId);
+            return (
+              <li
+                aria-label={`${participant.pseudonym}：${PRESENCE_COPY[presence]}`}
+                className="crew-chip"
+                data-state={presence}
+                key={participant.actorId}
+                style={identityStyle(participant.pseudonym, participant.actorKind) as React.CSSProperties}
+              >{identityInitial(participant.pseudonym)}</li>
+            );
+          })}
         </ul>
         <div className="room-bar-actions">
           <button

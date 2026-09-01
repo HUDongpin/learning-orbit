@@ -252,6 +252,44 @@ export class HydratedSessionState {
   messages(): LedgerMessage[] { return this.ledger.messages(); }
   pendingCommandIds(): string[] { return this.socket.pendingCommandIds(); }
 
+  /**
+   * Ephemeral signals carry their own `expiresAt` and the server only sweeps
+   * them when the *sending* connection next heartbeats, so a lapsed signal can
+   * sit in these maps for several seconds after it stopped being true. Both
+   * readers below re-check the deadline against the caller's clock; nothing
+   * renders a seat state the server did not still vouch for.
+   *
+   * "unknown" is a real, distinct answer — an unreported seat must never be
+   * drawn as present.
+   */
+  presenceStateOf(actorId: string, now: number = Date.now()): "active" | "away" | "unknown" {
+    const frame = this.presence.get(actorId);
+    if (!frame || !(Date.parse(frame.expiresAt) > now)) return "unknown";
+    return frame.state;
+  }
+
+  /** Actors currently composing, excluding this seat: nobody needs to be told they are typing. */
+  typingActorIds(now: number = Date.now()): string[] {
+    const ownActorId = this.#session?.actorId;
+    const composing: string[] = [];
+    for (const [actorId, frame] of this.typing) {
+      if (!frame.active || actorId === ownActorId) continue;
+      if (Date.parse(frame.expiresAt) > now) composing.push(actorId);
+    }
+    return composing;
+  }
+
+  /** Best-effort seat signals. They are dropped while disconnected rather than queued. */
+  signalPresence(state: "active" | "away"): void {
+    if (this.#expired || this.#roomUnavailable) return;
+    this.socket.sendPresence(state);
+  }
+
+  signalTyping(active: boolean): void {
+    if (this.#expired || this.#roomUnavailable) return;
+    this.socket.sendTyping(active);
+  }
+
   sendIntent(intent: RoomCommandIntent): string {
     if (this.#expired) throw new Error("SESSION_EXPIRED");
     if (this.#roomUnavailable) throw new Error("ROOM_UNAVAILABLE");
@@ -508,6 +546,10 @@ export class HydratedSessionState {
         return;
       }
       if (frame.type === "resume_complete") {
+        // Only now will the server accept a non-hello frame, so this is the
+        // first and only safe moment to claim the seat -- and it re-runs on
+        // every reconnect, which is what re-announces us after a drop.
+        this.socket.sendPresence("active");
         void this.#refreshAgentCurrent();
         void this.refreshProjections();
         return;

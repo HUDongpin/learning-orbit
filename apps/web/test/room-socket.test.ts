@@ -142,6 +142,54 @@ describe("RoomSocket", () => {
     expect(socket.lastRoomSeq).toBe(0);
   });
 
+  it("withholds ephemeral signals until resume completes, then shares one monotonic sequence", () => {
+    const sent: string[] = [];
+    const wire: SocketLike = { send: (value: string) => sent.push(value) };
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {}, vi.fn());
+
+    // Before resume the server has not accepted `hello`, and answers any other
+    // frame by closing the socket with 4400. Nothing may go out yet.
+    socket.sendTyping(true, wire);
+    socket.sendPresence("active", wire);
+    expect(sent).toEqual([]);
+
+    socket.onFrame({ type: "resume_complete", throughRoomSeq: 0 }, wire);
+    socket.sendTyping(true, wire);
+    socket.sendPresence("away", wire);
+    socket.sendTyping(false, wire);
+
+    // One counter across both signal kinds: the server compares each against a
+    // single high-water mark, so a per-kind counter would drop the later frame.
+    expect(sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: "typing", active: true, clientSeq: 1 },
+      { type: "presence", state: "away", clientSeq: 2 },
+      { type: "typing", active: false, clientSeq: 3 },
+    ]);
+  });
+
+  it("treats a failed ephemeral write as best-effort: no teardown, no burnt sequence", () => {
+    const sent: string[] = [];
+    let failing = true;
+    const close = vi.fn();
+    const flaky: SocketLike = {
+      send: (value: string) => { if (failing) throw new Error("write failed"); sent.push(value); },
+      close,
+    };
+    const socket = new RoomSocket(ROOM_ID, new MemoryStorage(), vi.fn(), {}, vi.fn());
+    socket.onFrame({ type: "resume_complete", throughRoomSeq: 0 }, flaky);
+
+    socket.sendTyping(true, flaky);
+    // A dropped hint is not worth a reconnect; the durable path owns health.
+    expect(close).not.toHaveBeenCalled();
+
+    failing = false;
+    socket.sendPresence("active", flaky);
+    // The refused frame never reached the server, so it must not consume seq 1.
+    expect(sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: "presence", state: "active", clientSeq: 1 },
+    ]);
+  });
+
   it("binds a native-style socket, sends generated hello on open, and parses text frames", () => {
     const listeners = new Map<string, (event: { data?: unknown }) => void>();
     const sent: string[] = [];

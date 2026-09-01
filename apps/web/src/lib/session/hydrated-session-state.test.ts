@@ -741,6 +741,52 @@ describe("HydratedSessionState", () => {
     }
   });
 
+  it("retires seat signals on their own deadline and never reports itself as typing", async () => {
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+    });
+    const peer = room.participants[1]!.actorId;
+    const expiresAt = "2026-08-30T09:00:30.000Z";
+    const beforeDeadline = Date.parse("2026-08-30T09:00:29.000Z");
+    const afterDeadline = Date.parse("2026-08-30T09:00:31.000Z");
+
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    hydrated.receiveFrame({ type: "presence", actorId: peer, state: "active", expiresAt });
+    hydrated.receiveFrame({ type: "typing", actorId: peer, active: true, expiresAt });
+    // The server broadcasts ephemeral signals back to the sender too.
+    hydrated.receiveFrame({ type: "typing", actorId: student.actorId, active: true, expiresAt });
+
+    expect(hydrated.presenceStateOf(peer, beforeDeadline)).toBe("active");
+    expect(hydrated.typingActorIds(beforeDeadline)).toEqual([peer]);
+
+    // The sending connection only sweeps on its next heartbeat, so a lapsed
+    // signal can still sit in the map. It must not render as present.
+    expect(hydrated.presenceStateOf(peer, afterDeadline)).toBe("unknown");
+    expect(hydrated.typingActorIds(afterDeadline)).toEqual([]);
+
+    // A seat the server never vouched for is unknown, not away and not active.
+    expect(hydrated.presenceStateOf(room.participants[2]!.actorId, beforeDeadline)).toBe("unknown");
+
+    hydrated.receiveFrame({ type: "presence", actorId: peer, state: "away", expiresAt });
+    expect(hydrated.presenceStateOf(peer, beforeDeadline)).toBe("away");
+    hydrated.dispose();
+  });
+
+  it("claims the seat on every resume so a reconnect re-announces presence", async () => {
+    const hydrated = await HydratedSessionState.create({
+      session: student,
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+    });
+    const sendPresence = vi.spyOn(hydrated.socket, "sendPresence");
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    hydrated.receiveFrame({ type: "resume_complete", throughRoomSeq: 0 });
+    expect(sendPresence.mock.calls).toEqual([["active"], ["active"]]);
+    hydrated.dispose();
+  });
+
   it("partitions control, media, agent, projection, presence, typing, and degraded frames", async () => {
     const hydrated = await HydratedSessionState.create({
       session: student,

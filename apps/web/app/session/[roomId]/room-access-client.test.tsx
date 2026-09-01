@@ -287,6 +287,49 @@ describe("room route access guard", () => {
     expect(screen.getByText(/1 個指令正在等待伺服器 ACK/)).toBeInTheDocument();
   });
 
+  it("marks a seat present only from a live server signal, and only until it expires", async () => {
+    const peer = "00000000-0000-4000-8000-000000000014";
+    // Far enough out that the signal is still valid for the whole assertion.
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    class PresenceWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+        if (type !== "message") return;
+        listener({ data: JSON.stringify({ type: "presence", actorId: peer, state: "active", expiresAt }) });
+      }
+    }
+    vi.stubGlobal("WebSocket", PresenceWebSocket);
+    render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+
+    expect(await screen.findByLabelText("探索者 B：在線")).toBeInTheDocument();
+    // Seats the server has said nothing about must stay unreported rather than
+    // being drawn as present by omission.
+    expect(screen.getByLabelText("探索者 C：伺服器未回報在線狀態")).toBeInTheDocument();
+    expect(screen.getByLabelText("探索者 D：伺服器未回報在線狀態")).toBeInTheDocument();
+  });
+
+  it("does not draw a lapsed presence signal as a present seat", async () => {
+    const peer = "00000000-0000-4000-8000-000000000014";
+    const expiredAt = new Date(Date.now() - 1_000).toISOString();
+    class StalePresenceWebSocket {
+      readonly readyState = 0;
+      send() {}
+      close() {}
+      addEventListener(type: string, listener: (event: { data?: unknown }) => void) {
+        if (type !== "message") return;
+        listener({ data: JSON.stringify({ type: "presence", actorId: peer, state: "active", expiresAt: expiredAt }) });
+      }
+    }
+    vi.stubGlobal("WebSocket", StalePresenceWebSocket);
+    render(<RoomAccessClient gateway={gateway()} mode="student" roomId={roomId} />);
+
+    await screen.findByRole("heading", { name: "生態系統探究" });
+    expect(screen.getByLabelText("探索者 B：伺服器未回報在線狀態")).toBeInTheDocument();
+    expect(screen.queryByLabelText("探索者 B：在線")).toBeNull();
+  });
+
   it("subscribes before native connect so an immediate confirmed frame is rendered", async () => {
     class ImmediateWebSocket {
       readonly readyState = 0;

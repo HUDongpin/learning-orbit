@@ -29,6 +29,14 @@ type EventSink = (event: RoomEventEnvelope) => void;
 type ControlSink = (frame: ServerFrame) => void;
 type ConnectFactory = () => SocketLike;
 
+/**
+ * The two ephemeral signals this client may emit.  Neither is durable: the
+ * server keeps them in memory with a TTL and never writes them to the ledger.
+ */
+type EphemeralClientFrame =
+  | { readonly type: "presence"; readonly state: "active" | "away"; readonly clientSeq: number }
+  | { readonly type: "typing"; readonly active: boolean; readonly clientSeq: number };
+
 const OPEN = 1;
 const MAX_PENDING_COMMANDS = 100;
 
@@ -69,6 +77,7 @@ export class RoomSocket {
   #sink: EventSink;
   #controlSink: ControlSink;
   #pending = new Map<string, RoomCommand>();
+  #clientSeq = 0;
   #retryDelays: readonly number[];
   #retryIndex = 0;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -143,6 +152,37 @@ export class RoomSocket {
         if (this.#socket === socket) this.onClose();
       }
     }
+  }
+
+  /** Announce that this seat is watching the room, or has stepped away. */
+  sendPresence(state: "active" | "away", socket: SocketLike | undefined = this.#socket): void {
+    this.#sendEphemeral({ type: "presence", state, clientSeq: this.#clientSeq + 1 }, socket);
+  }
+
+  /** Announce that this seat is composing, or has stopped. */
+  sendTyping(active: boolean, socket: SocketLike | undefined = this.#socket): void {
+    this.#sendEphemeral({ type: "typing", active, clientSeq: this.#clientSeq + 1 }, socket);
+  }
+
+  /**
+   * Presence and typing share ONE counter because the server compares both
+   * against a single per-connection `clientSeq` high-water mark: two
+   * independent counters would let a typing frame silently swallow the next
+   * presence frame. The counter only advances on a frame the socket accepted,
+   * so a failed write cannot burn a sequence number the server never saw.
+   *
+   * Ephemeral signals are best-effort by design. Unlike a command, a failure
+   * here must never tear down the socket or surface an error: the durable path
+   * owns connection health, and a dropped "typing" is not worth a reconnect.
+   */
+  #sendEphemeral(frame: EphemeralClientFrame, socket: SocketLike | undefined): void {
+    // Before resume completes the server has not seen `hello` and answers any
+    // other frame by closing the socket with 4400, so this gate is required.
+    if (!socket || !this.#resumeReady || !isOpen(socket)) return;
+    try {
+      socket.send(realtimeContract.encodeClientFrame(frame));
+      this.#clientSeq = frame.clientSeq;
+    } catch { /* Best-effort: keep the durable path untouched. */ }
   }
 
   onFrame(value: unknown, socket: SocketLike = this.#socket ?? { send: () => undefined }): void {
@@ -280,6 +320,7 @@ export class RoomSocket {
   destroy(): void {
     this.close();
     this.#pending.clear();
+    this.#clientSeq = 0;
     this.#storage.removeItem(this.#storageKey);
     this.#readonlyRoomId = "";
     this.#storageKey = "";
