@@ -13,7 +13,7 @@ from .reference.learning_orbit_algorithms_v1 import (
     SourceRef,
 )
 
-EXTRACTOR_VERSION = "deterministic-ecosystem-v1"
+EXTRACTOR_VERSION = "deterministic-ecosystem-v1.1"
 
 
 @dataclass(frozen=True)

@@ -24,7 +24,7 @@ outside the Git checkout.
 | --- | --- |
 | `cm-merge-rekey` | `merge_concepts`/`undo_merge` cleared the entire visible-edge set, so an unrelated edge held by the theta_off band vanished at the next snapshot with no archive record. |
 | `cm-retract-tombstone` | A retraction delivered before the event it targets removed nothing, and the target stayed visible permanently once it arrived. |
-| `extractor-p3-verb-boundary` | Pattern 3's verb slot had no word boundaries, so any word containing the verb — `consume` inside `consumers`, or `eat` inside `heat`/`meat`/`great` — matched and emitted a spurious reversed edge. |
+| `extractor-verb-boundaries` | No pattern bounded its verb slot, so any word merely containing a verb satisfied it — `consume` in `consumers`, `gives` in `forgives`, `feed` in `feedback`, `eat` in `heat` — and emitted a confident edge the sentence never asserted. Recall is unchanged; only the word-internal matches are gone. |
 
 These fix defects in the reference's own stated behaviour. They do not widen
 the extractor's declared fixture scope: it remains six patterns over a closed

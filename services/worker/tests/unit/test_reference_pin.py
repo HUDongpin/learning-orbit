@@ -7,9 +7,9 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[4]
 REFERENCE = PROJECT / "services" / "worker" / "src" / "learning_orbit_worker" / "reference" / "learning_orbit_algorithms_v1.py"
 MANIFEST = REFERENCE.parent / "manifest.json"
-REFERENCE_SHA256 = "c01d1a8ed7273594978e6ad35c5094e117cc156b692508bd1b231d13fc7859a1"
+REFERENCE_SHA256 = "e88e910bb40db1c304cd3d4a0154bcd0e6c0cb85dd97c5c41adfdab0f23715e1"
 UPSTREAM_SHA256 = "3a2983b0f99cd016b45fb5fd7ee8e1ac4b93b3eee62f3a189a8e20df8c1cf220"
-PATCH_IDS = {"cm-merge-rekey", "cm-retract-tombstone", "extractor-p3-verb-boundary"}
+PATCH_IDS = {"cm-merge-rekey", "cm-retract-tombstone", "extractor-verb-boundaries"}
 SOURCE_TEST_SHA256 = "59ad56baa784fa187b6ea6a7cffcbba6138bfc945e43a2aa38fc6cce78560732"
 SOURCE_PATH = "work/learning_orbit_algorithms.py"
 SOURCE_TEST_PATH = "work/test_learning_orbit_algorithms.py"

@@ -242,7 +242,8 @@ class DeterministicEcosystemExtractor:
     _patterns = (
         _EcosystemPattern(
             re.compile(
-                r"(?:sun.*(?:provides?|gives?).*energy.*producers?"
+                r"(?:sun.*\b(?:provides?|provided|gives?|given)\b"
+                r".*energy.*producers?"
                 r"|太陽.*生產者.*(?:能量|能源))",
                 re.IGNORECASE,
             ),
@@ -253,7 +254,8 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:producers?.*(?:feed|support).*consumers?"
+                r"(?:producers?.*\b(?:feeds?|feeding|supports?|supported|supporting)\b"
+                r".*consumers?"
                 r"|生產者.*(?:供養|供給|提供).*消費者)",
                 re.IGNORECASE,
             ),
@@ -264,7 +266,8 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:consumers?.*\b(?:eats?|consumes?)\b.*producers?"
+                r"(?:consumers?.*\b(?:eats?|eaten|eating|consumes?|consumed)\b"
+                r".*producers?"
                 r"|消費者.*(?:吃|取食|攝食).*生產者)",
                 re.IGNORECASE,
             ),
@@ -275,7 +278,8 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:decomposers?.*(?:return|recycle).*"
+                r"(?:decomposers?.*\b(?:returns?|returned|returning"
+                r"|recycles?|recycled)\b.*"
                 r"(?:nutrients?.*)?soil|分解者.*(?:養分|營養).*(?:土壤))",
                 re.IGNORECASE,
             ),
@@ -286,7 +290,8 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:soil.*(?:provides?|supplies?).*nutrients?.*producers?"
+                r"(?:soil.*\b(?:provides?|provided|supplies|supplied)\b"
+                r".*nutrients?.*producers?"
                 r"|土壤.*(?:養分|營養).*生產者)",
                 re.IGNORECASE,
             ),
@@ -297,7 +302,7 @@ class DeterministicEcosystemExtractor:
         ),
         _EcosystemPattern(
             re.compile(
-                r"(?:energy.*(?:lost|released).*heat"
+                r"(?:energy.*\b(?:lost|released)\b.*heat"
                 r"|能量.*(?:熱|熱能).*(?:散失|釋放|流失))",
                 re.IGNORECASE,
             ),

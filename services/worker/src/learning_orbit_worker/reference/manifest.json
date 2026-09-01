@@ -3,7 +3,7 @@
   "sourcePath": "work/learning_orbit_algorithms.py",
   "sourceTestPath": "work/test_learning_orbit_algorithms.py",
   "destinationPath": "services/worker/src/learning_orbit_worker/reference/learning_orbit_algorithms_v1.py",
-  "sha256": "c01d1a8ed7273594978e6ad35c5094e117cc156b692508bd1b231d13fc7859a1",
+  "sha256": "e88e910bb40db1c304cd3d4a0154bcd0e6c0cb85dd97c5c41adfdab0f23715e1",
   "sourceTestSha256": "59ad56baa784fa187b6ea6a7cffcbba6138bfc945e43a2aa38fc6cce78560732",
   "upstreamSha256": "3a2983b0f99cd016b45fb5fd7ee8e1ac4b93b3eee62f3a189a8e20df8c1cf220",
   "divergesFromUpstreamSource": true,
@@ -21,10 +21,10 @@
       "fix": "Record the retracted event id in _retracted_event_ids and honour that tombstone when the target arrives, returning reason=retracted_before_arrival. The event still joins the ledger and advances the watermark; it contributes no evidence."
     },
     {
-      "id": "extractor-p3-verb-boundary",
-      "target": "DeterministicEcosystemExtractor pattern 3",
-      "defect": "consumers?.*(?:eat|consume).*producers? had no word boundary after the verb, so the substring 'consume' inside 'consumers' satisfied the verb slot and any message containing consumer-token then producer-token emitted a spurious reversed consumers->producers edge alongside the correct one.",
-      "fix": "Require a word boundary on both sides of the verb: \\b(?:eats?|consumes?)\\b. A trailing boundary alone still admitted any word ending in the verb ('heat', 'wheat', 'meat', 'great', 'defeat', 'overeat'). 'Consumers eat producers.', 'Consumers consume producers.' and the zh-Hant branch still match."
+      "id": "extractor-verb-boundaries",
+      "target": "DeterministicEcosystemExtractor, all six patterns",
+      "defect": "No pattern put word boundaries around its verb slot, so any word merely CONTAINING a verb satisfied it: 'consume' in 'consumers' (pattern 3), 'gives' in 'forgives' (1), 'feed' in 'feedback' and 'support' in 'insupportable' (2), 'return' in 'nonreturnable' (4), 'supply' in 'oversupply' (5), 'released' in 'unreleased' (6), and 'eat' in 'heat'/'meat'/'great'/'defeat' (3). Each emitted a confident edge the sentence never asserted, with an evidence span containing no such verb.",
+      "fix": "Bound every verb alternation on both sides with \\\\b, spelling out exactly the inflections the unbounded form already accepted (feeds/feeding, supported/supporting, eaten/eating, consumed, returned/returning, recycled, provided, supplied) so recall is unchanged. Verified over an exhaustive 222-sentence verb x frame corpus against the v1.0 extractor: 0 matches lost, 0 gained, 9 word-internal false positives removed. The Traditional Chinese branches are untouched."
     }
   ],
   "claimCeiling": "Original engineering synthesis and executable reference; not peer reviewed, not SOTA, not a learning-outcome or production-performance claim.",
