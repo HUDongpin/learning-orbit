@@ -1,38 +1,1017 @@
 {
   "teacher": {
     "schemaVersion": 1,
-    "projectionKey": "trace.teacher_bundle",
     "roomId": "00000000-0000-4000-8000-000000000010",
     "analysisEpoch": "00000000-0000-4000-8000-000000000901",
     "algorithmVersion": "trace-ai-reference-v1+adapter-v1",
     "parameterHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 5,
-    "watermarkEventTime": "2026-08-28T09:05:00Z", "requiresReplay": false,
-    "evidenceStatus": "active", "reviewStatus": "unreviewed", "displayStatus": "teacher_shadow",
+    "projectionVersion": 1,
+    "baseVersion": 0,
+    "completeThroughRoomSeq": 5,
+    "watermarkEventTime": "2026-08-28T09:05:00Z",
+    "requiresReplay": false,
+    "evidenceStatus": "active",
+    "projectionKey": "trace.teacher_bundle",
+    "reviewStatus": "unreviewed",
+    "displayStatus": "teacher_shadow",
     "warnings": [],
     "payload": {
       "windows": {
-        "recent_10m": {"windowStartEventTime":"2026-08-28T08:55:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]}}},
-        "session_45m": {"windowStartEventTime":"2026-08-28T08:20:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":[]}}}
+        "recent_10m": {
+          "windowStartEventTime": "2026-08-28T08:55:00Z",
+          "windowEndEventTime": "2026-08-28T09:05:00Z",
+          "views": {
+            "observed": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000599",
+                  "label": "Nova Agent",
+                  "kind": "agent"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "c0e49bef-81fe-5904-b14b-cea66caaa75e",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "e0111c41-b85e-513e-bf48-55ada606926d",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000599",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "7cd741a1-4304-5e92-9350-73bb6cb8c8a1",
+                  "sourceId": "00000000-0000-4000-8000-000000000599",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "facilitation",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            },
+            "human_only": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "c0e49bef-81fe-5904-b14b-cea66caaa75e",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            },
+            "lineage_adjusted": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            }
+          }
+        },
+        "session_45m": {
+          "windowStartEventTime": "2026-08-28T08:20:00Z",
+          "windowEndEventTime": "2026-08-28T09:05:00Z",
+          "views": {
+            "observed": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000501",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000502",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000599",
+                  "label": "Nova Agent",
+                  "kind": "agent"
+                },
+                {
+                  "nodeId": "ROOM",
+                  "label": "共學聊天室",
+                  "kind": "room"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "bcc30cd4-e3b4-5527-95bd-7863eff30406",
+                  "sourceId": "00000000-0000-4000-8000-000000000501",
+                  "targetId": "00000000-0000-4000-8000-000000000502",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 0.821690314586,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.821690314586,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000301",
+                      "start": 0,
+                      "end": 11,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "9e8d779b-75ea-5a41-9fef-ce23cdf26e3b",
+                  "sourceId": "00000000-0000-4000-8000-000000000501",
+                  "targetId": "ROOM",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.267943365634,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.267943365634,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000301",
+                      "start": 0,
+                      "end": 11,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "6cd59735-6cf8-582b-bc67-ab24329c9140",
+                  "sourceId": "00000000-0000-4000-8000-000000000502",
+                  "targetId": "00000000-0000-4000-8000-000000000501",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.307786103336,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.307786103336,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000302",
+                      "start": 0,
+                      "end": 15,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "c0e49bef-81fe-5904-b14b-cea66caaa75e",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "e0111c41-b85e-513e-bf48-55ada606926d",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000599",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "035816e8-20e2-5c4b-bf1e-51f5c66fe4d2",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "ROOM",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.406126198178,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.406126198178,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000304",
+                      "start": 0,
+                      "end": 11,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "7cd741a1-4304-5e92-9350-73bb6cb8c8a1",
+                  "sourceId": "00000000-0000-4000-8000-000000000599",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "facilitation",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "6e1304d3-8897-59e6-850d-8810663d9fa6",
+                  "sourceId": "00000000-0000-4000-8000-000000000599",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.466516495768,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.466516495768,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "de53bd86-bf4c-58c3-9561-317261bd7804",
+                  "sourceId": "00000000-0000-4000-8000-000000000599",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "facilitation",
+                  "channels": {
+                    "positive": 0.880665873596,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.880665873596,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.477585387051,
+                "agentShare": 0.2,
+                "semanticCoverage": 0.6
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            },
+            "human_only": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000501",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000502",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "bcc30cd4-e3b4-5527-95bd-7863eff30406",
+                  "sourceId": "00000000-0000-4000-8000-000000000501",
+                  "targetId": "00000000-0000-4000-8000-000000000502",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 0.821690314586,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.821690314586,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000301",
+                      "start": 0,
+                      "end": 11,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "6cd59735-6cf8-582b-bc67-ab24329c9140",
+                  "sourceId": "00000000-0000-4000-8000-000000000502",
+                  "targetId": "00000000-0000-4000-8000-000000000501",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.307786103336,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.307786103336,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000302",
+                      "start": 0,
+                      "end": 15,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "c0e49bef-81fe-5904-b14b-cea66caaa75e",
+                  "sourceId": "00000000-0000-4000-8000-000000000503",
+                  "targetId": "00000000-0000-4000-8000-000000000504",
+                  "layer": "communication",
+                  "channels": {
+                    "positive": 0.5,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.5,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000306",
+                      "start": 0,
+                      "end": 22,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.614408326943,
+                "agentShare": 0.0,
+                "semanticCoverage": 0.5
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            },
+            "lineage_adjusted": {
+              "nodes": [
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000501",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000502",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000503",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "00000000-0000-4000-8000-000000000504",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "edgeId": "bcc30cd4-e3b4-5527-95bd-7863eff30406",
+                  "sourceId": "00000000-0000-4000-8000-000000000501",
+                  "targetId": "00000000-0000-4000-8000-000000000502",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 0.821690314586,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 0.821690314586,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000301",
+                      "start": 0,
+                      "end": 11,
+                      "basis": "text_span"
+                    }
+                  ]
+                },
+                {
+                  "edgeId": "3ec04824-8621-51dc-ab80-c513df9bed03",
+                  "sourceId": "00000000-0000-4000-8000-000000000504",
+                  "targetId": "00000000-0000-4000-8000-000000000503",
+                  "layer": "uptake",
+                  "channels": {
+                    "positive": 1.0,
+                    "challenge": 0.0,
+                    "uncertain": 0.0
+                  },
+                  "weight": 1.0,
+                  "evidenceRefs": [
+                    {
+                      "eventId": "00000000-0000-4000-8000-000000000305",
+                      "start": 0,
+                      "end": 13,
+                      "basis": "text_span"
+                    }
+                  ]
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.477585387051,
+                "agentShare": 0.2,
+                "semanticCoverage": 0.6
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            }
+          }
+        }
       },
-      "actorMapping": {}
+      "actorMapping": {
+        "00000000-0000-4000-8000-000000000501": {
+          "actorId": "00000000-0000-4000-8000-000000000501",
+          "pseudonym": "探索者 A",
+          "kind": "learner"
+        },
+        "00000000-0000-4000-8000-000000000502": {
+          "actorId": "00000000-0000-4000-8000-000000000502",
+          "pseudonym": "探索者 B",
+          "kind": "learner"
+        },
+        "00000000-0000-4000-8000-000000000503": {
+          "actorId": "00000000-0000-4000-8000-000000000503",
+          "pseudonym": "探索者 C",
+          "kind": "learner"
+        },
+        "00000000-0000-4000-8000-000000000504": {
+          "actorId": "00000000-0000-4000-8000-000000000504",
+          "pseudonym": "探索者 D",
+          "kind": "learner"
+        },
+        "00000000-0000-4000-8000-000000000599": {
+          "actorId": "00000000-0000-4000-8000-000000000599",
+          "pseudonym": "Nova Agent",
+          "kind": "agent"
+        },
+        "ROOM": {
+          "roomId": "00000000-0000-4000-8000-000000000010",
+          "pseudonym": "共學聊天室",
+          "kind": "room"
+        }
+      }
     }
   },
   "student": {
     "schemaVersion": 1,
-    "projectionKey": "trace.student_bundle",
     "roomId": "00000000-0000-4000-8000-000000000010",
     "analysisEpoch": "00000000-0000-4000-8000-000000000901",
     "algorithmVersion": "trace-ai-reference-v1+adapter-v1",
     "parameterHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "projectionVersion": 1, "baseVersion": 0, "completeThroughRoomSeq": 5,
-    "watermarkEventTime": "2026-08-28T09:05:00Z", "requiresReplay": false,
-    "evidenceStatus": "active", "reviewStatus": "approved", "displayStatus": "student_aggregate",
-    "warnings": ["small_group_interpretation_warning"],
+    "projectionVersion": 1,
+    "baseVersion": 0,
+    "completeThroughRoomSeq": 5,
+    "watermarkEventTime": "2026-08-28T09:05:00Z",
+    "requiresReplay": false,
+    "evidenceStatus": "active",
+    "projectionKey": "trace.student_bundle",
+    "reviewStatus": "approved",
+    "displayStatus": "student_aggregate",
+    "warnings": [
+      "small_group_interpretation_warning"
+    ],
     "payload": {
       "windows": {
-        "recent_10m": {"windowStartEventTime":"2026-08-28T08:55:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]}}},
-        "session_45m": {"windowStartEventTime":"2026-08-28T08:20:00Z","windowEndEventTime":"2026-08-28T09:05:00Z","views":{"observed":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"human_only":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]},"lineage_adjusted":{"nodes":[],"edges":[],"metrics":{"participationBalance":0,"reciprocity":0,"agentShare":0,"semanticCoverage":0},"warnings":["small_group_interpretation_warning"]}}}
+        "recent_10m": {
+          "windowStartEventTime": "2026-08-28T08:55:00Z",
+          "windowEndEventTime": "2026-08-28T09:05:00Z",
+          "views": {
+            "observed": {
+              "nodes": [
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-ae18af2e4cd640f8",
+                  "targetNodeId": "p-5bf9fd69c7153507",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            },
+            "human_only": {
+              "nodes": [
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-ae18af2e4cd640f8",
+                  "targetNodeId": "p-5bf9fd69c7153507",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            },
+            "lineage_adjusted": {
+              "nodes": [
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.666666666667,
+                "agentShare": 0.0,
+                "semanticCoverage": 1.0
+              },
+              "warnings": [
+                "recent_group_interaction_only",
+                "small_group_interpretation_warning"
+              ]
+            }
+          }
+        },
+        "session_45m": {
+          "windowStartEventTime": "2026-08-28T08:20:00Z",
+          "windowEndEventTime": "2026-08-28T09:05:00Z",
+          "views": {
+            "observed": {
+              "nodes": [
+                {
+                  "nodeId": "p-61ba86ecf06eb158",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-8533e909f2a76410",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-61ba86ecf06eb158",
+                  "targetNodeId": "p-8533e909f2a76410",
+                  "layer": "uptake"
+                },
+                {
+                  "sourceNodeId": "p-8533e909f2a76410",
+                  "targetNodeId": "p-61ba86ecf06eb158",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-ae18af2e4cd640f8",
+                  "targetNodeId": "p-5bf9fd69c7153507",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.477585387051,
+                "agentShare": 0.2,
+                "semanticCoverage": 0.6
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            },
+            "human_only": {
+              "nodes": [
+                {
+                  "nodeId": "p-61ba86ecf06eb158",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-8533e909f2a76410",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-61ba86ecf06eb158",
+                  "targetNodeId": "p-8533e909f2a76410",
+                  "layer": "uptake"
+                },
+                {
+                  "sourceNodeId": "p-8533e909f2a76410",
+                  "targetNodeId": "p-61ba86ecf06eb158",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-ae18af2e4cd640f8",
+                  "targetNodeId": "p-5bf9fd69c7153507",
+                  "layer": "communication"
+                },
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.614408326943,
+                "agentShare": 0.0,
+                "semanticCoverage": 0.5
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            },
+            "lineage_adjusted": {
+              "nodes": [
+                {
+                  "nodeId": "p-61ba86ecf06eb158",
+                  "label": "探索者 A",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-8533e909f2a76410",
+                  "label": "探索者 B",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-ae18af2e4cd640f8",
+                  "label": "探索者 C",
+                  "kind": "learner"
+                },
+                {
+                  "nodeId": "p-5bf9fd69c7153507",
+                  "label": "探索者 D",
+                  "kind": "learner"
+                }
+              ],
+              "edges": [
+                {
+                  "sourceNodeId": "p-61ba86ecf06eb158",
+                  "targetNodeId": "p-8533e909f2a76410",
+                  "layer": "uptake"
+                },
+                {
+                  "sourceNodeId": "p-5bf9fd69c7153507",
+                  "targetNodeId": "p-ae18af2e4cd640f8",
+                  "layer": "uptake"
+                }
+              ],
+              "metrics": {
+                "participationBalance": 1.0,
+                "reciprocity": 0.477585387051,
+                "agentShare": 0.2,
+                "semanticCoverage": 0.6
+              },
+              "warnings": [
+                "small_group_interpretation_warning"
+              ]
+            }
+          }
+        }
       },
       "interpretation": "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。"
     }

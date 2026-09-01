@@ -303,7 +303,21 @@ def _window_trace_reference(
             allowed_lateness=network.allowed_lateness,
             half_lives=dict(network.half_lives),
         )
-        views[view] = clone.replay(selected, now=window_end, view=view).to_dict()
+        clone.replay(selected, now=window_end, view=view)
+        # Actor kind and Agent role are room facts, not window facts.  The
+        # clone only replays in-window history, so an actor whose own events
+        # all fall outside the window arrives as a bare edge endpoint with no
+        # recorded kind and the reference defaults it to ``human``.  A Nova
+        # message older than the ten-minute window that a learner still
+        # replies to therefore typed the Agent as a learner, admitted it into
+        # ``human_only`` (which ``validate_internal_views`` cannot catch,
+        # because it reads that same wrong kind), and finally contradicted the
+        # teacher actor mapping, aborting every projection for the room.
+        # Restore the room-level index before snapshotting; the window still
+        # owns which events contribute.
+        clone._actor_kinds.update(network._actor_kinds)
+        clone._agent_roles.update(network._agent_roles)
+        views[view] = clone.snapshot(now=window_end, view=view).to_dict()
     return {"views": views}
 
 
