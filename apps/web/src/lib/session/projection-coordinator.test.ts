@@ -31,7 +31,7 @@ describe("projection coordinator", () => {
       completeThroughRoomSeq: 128,
       projectionVersions: { chatLedger: 41, concept: 12, sna: 9 },
     }));
-    expect(formatProjectionReadyStatus(publish.mock.calls[0][0] as CoherentBatch))
+    expect(formatProjectionReadyStatus(publish.mock.calls[0]![0] as CoherentBatch))
       .toBe("已同步至房間序號 128（聊天投影 41、概念投影 12、SNA 投影 9）");
   });
 
