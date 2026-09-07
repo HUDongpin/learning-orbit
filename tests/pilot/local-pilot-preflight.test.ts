@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,7 +14,10 @@ import {
   assertInfrastructurePins,
   assertPostgres18,
   assertPythonLockMinor,
+  assertRuntimeExecutableFingerprints,
   captureLocalPilotPreflight,
+  loadApprovedRuntimeToolchains,
+  parseApprovedRuntimeManifest,
   probeRuntimeExecutableFingerprints,
 } from "../../scripts/local-pilot/preflight.mjs";
 
@@ -99,6 +102,96 @@ describe("local pilot preflight contracts", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("accepts a package-installed pnpm whose wrapper is the CLI module", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lo-pilot-runtime-package-"));
+    try {
+      const nodePath = join(root, "node/bin/node");
+      const cliPath = join(root, "lib/node_modules/pnpm/bin/pnpm.mjs");
+      const wrapperPath = join(root, "bin/pnpm");
+      const pythonPath = join(root, "python/bin/python3.12");
+      await Promise.all([
+        mkdir(join(root, "node/bin"), { recursive: true }),
+        mkdir(join(root, "lib/node_modules/pnpm/bin"), { recursive: true }),
+        mkdir(join(root, "bin"), { recursive: true }),
+        mkdir(join(root, "python/bin"), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(nodePath, "pinned node\n"),
+        writeFile(cliPath, "pinned pnpm payload\n"),
+        writeFile(pythonPath, "pinned python\n"),
+      ]);
+      await Promise.all([chmod(nodePath, 0o700), chmod(cliPath, 0o700), chmod(pythonPath, 0o700)]);
+      await symlink("../lib/node_modules/pnpm/bin/pnpm.mjs", wrapperPath);
+
+      const result = await probeRuntimeExecutableFingerprints({
+        nodePath,
+        pnpmPath: wrapperPath,
+        pythonPath,
+      });
+      const payload = createHash("sha256").update("pinned pnpm payload\n").digest("hex");
+      expect(result.pnpm).toBe(payload);
+      expect(result.pnpmCli).toBe(payload);
+
+      const strayCli = join(root, "lib/node_modules/pnpm/tools/pnpm.mjs");
+      await mkdir(join(root, "lib/node_modules/pnpm/tools"), { recursive: true });
+      await writeFile(strayCli, "unreviewed payload\n");
+      await chmod(strayCli, 0o700);
+      await rm(wrapperPath);
+      await symlink("../lib/node_modules/pnpm/tools/pnpm.mjs", wrapperPath);
+      await expect(probeRuntimeExecutableFingerprints({ nodePath, pnpmPath: wrapperPath, pythonPath }))
+        .rejects.toThrow("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("admits any reviewed toolchain and names the closest mismatch", async () => {
+    const approved = parseApprovedRuntimeManifest(JSON.stringify({
+      schemaVersion: 1,
+      toolchains: [
+        { id: "first-runtime", executables: runtimeExecutableFingerprints() },
+        {
+          id: "second-runtime",
+          executables: runtimeExecutableFingerprints({ python: "1".repeat(64) }),
+        },
+      ],
+    }));
+    expect(assertRuntimeExecutableFingerprints(runtimeExecutableFingerprints(), approved))
+      .toMatchObject({ approvedRuntimeId: "first-runtime" });
+    expect(assertRuntimeExecutableFingerprints(
+      runtimeExecutableFingerprints({ python: "1".repeat(64) }),
+      approved,
+    )).toMatchObject({ approvedRuntimeId: "second-runtime" });
+    expect(() => assertRuntimeExecutableFingerprints(
+      runtimeExecutableFingerprints({ pnpm: "2".repeat(64) }),
+      approved,
+    )).toThrow("LOCAL_PILOT_PNPM_EXECUTABLE_MISMATCH");
+    expect(() => assertRuntimeExecutableFingerprints(runtimeExecutableFingerprints(), []))
+      .toThrow("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+
+    for (const invalid of [
+      "not json",
+      JSON.stringify({ schemaVersion: 2, toolchains: [] }),
+      JSON.stringify({ schemaVersion: 1, toolchains: [] }),
+      JSON.stringify({ schemaVersion: 1, toolchains: [{ id: "Bad Id", executables: runtimeExecutableFingerprints() }] }),
+      JSON.stringify({ schemaVersion: 1, toolchains: [{ id: "dup", executables: { node: "0".repeat(64) } }] }),
+      JSON.stringify({
+        schemaVersion: 1,
+        toolchains: [
+          { id: "dup", executables: runtimeExecutableFingerprints() },
+          { id: "dup", executables: runtimeExecutableFingerprints() },
+        ],
+      }),
+    ]) {
+      expect(() => parseApprovedRuntimeManifest(invalid))
+        .toThrow("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+    }
+
+    const checkedIn = await loadApprovedRuntimeToolchains();
+    expect(checkedIn.length).toBeGreaterThan(0);
+    expect(new Set(checkedIn.map(({ id }) => id)).size).toBe(checkedIn.length);
   });
 
   it("pins the Python lock minor and both isolated service image digests", () => {

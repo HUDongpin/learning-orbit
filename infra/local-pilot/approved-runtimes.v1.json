@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "toolchains": [
+    {
+      "id": "codex-primary-runtime",
+      "note": "Sandbox runtime that produced the first local-pilot receipts.",
+      "executables": {
+        "node": "27db838bb204ef7c21df2931f5656e4c8fb32e6e947f363a402b49714d32b5b1",
+        "pnpm": "cbed0a17e28f10bc29cfd6ea913043aac47a3169ed39a6e5290f0b4b1cc7dae8",
+        "pnpmCli": "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+        "python": "71720f1fc66989ebd691e81c96111b47ae6ff3f1a478666084d1cacbf0fccbf2"
+      }
+    },
+    {
+      "id": "owner-workstation-darwin-arm64",
+      "note": "Owner macOS workstation: nodejs.org Node 24.19.0, npm-global pnpm 11.19.0, uv CPython 3.12.13.",
+      "executables": {
+        "node": "27db838bb204ef7c21df2931f5656e4c8fb32e6e947f363a402b49714d32b5b1",
+        "pnpm": "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+        "pnpmCli": "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
+        "python": "a395f264e5612a2819662ed3e37fd30d39ed61179b98e5f86c3c783a008d8623"
+      }
+    }
+  ]
+}

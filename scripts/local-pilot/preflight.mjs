@@ -17,12 +17,11 @@ export const MAILPIT_IMAGE = "axllent/mailpit:v1.31.0@sha256:c96991d9bef73594c24
 export const PLAYWRIGHT_TEST_VERSION = "1.62.1";
 export const PLAYWRIGHT_CHROMIUM_REVISION = "1234";
 export const PLAYWRIGHT_CHROMIUM_VERSION = "151.0.7922.34";
-export const RUNTIME_EXECUTABLE_SHA256 = Object.freeze({
-  node: "27db838bb204ef7c21df2931f5656e4c8fb32e6e947f363a402b49714d32b5b1",
-  pnpm: "cbed0a17e28f10bc29cfd6ea913043aac47a3169ed39a6e5290f0b4b1cc7dae8",
-  pnpmCli: "ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd",
-  python: "71720f1fc66989ebd691e81c96111b47ae6ff3f1a478666084d1cacbf0fccbf2",
-});
+export const RUNTIME_EXECUTABLE_NAMES = Object.freeze(["node", "pnpm", "pnpmCli", "python"]);
+export const APPROVED_RUNTIME_MANIFEST_URL = new URL(
+  "../../infra/local-pilot/approved-runtimes.v1.json",
+  import.meta.url,
+);
 
 const CHROMIUM_EXECUTABLE_RELATIVE = [
   "chrome-mac-arm64",
@@ -71,30 +70,59 @@ async function fileFingerprint(path, { executable, allowRequestedSymlink }) {
   return Object.freeze({ canonical, sha256: hash.digest("hex") });
 }
 
+const PNPM_CLI_BASENAMES = Object.freeze(["pnpm.mjs", "pnpm.cjs"]);
+
+function isPnpmPackageCli(path) {
+  const segments = path.split("/");
+  const basename = segments.at(-1);
+  return PNPM_CLI_BASENAMES.includes(basename ?? "")
+    && segments.at(-2) === "bin"
+    && segments.at(-3) === "pnpm"
+    && segments.at(-4) === "node_modules";
+}
+
+/**
+ * Resolve the pnpm CLI payload the wrapper actually executes.
+ *
+ * Two installation shapes are approved. A bundled runtime keeps the wrapper
+ * beside a private Node tree (`<root>/bin/**\/pnpm` next to `<root>/node`);
+ * that shape additionally proves the wrapper runs the pinned Node. A package
+ * install canonicalises the wrapper straight onto the CLI module inside
+ * `node_modules/pnpm/bin`. Anything else is refused rather than guessed at.
+ */
+async function resolvePnpmCliPath(pnpmCanonical, nodeCanonical) {
+  const bundledRoot = resolve(dirname(pnpmCanonical), "../..");
+  const bundledNode = resolve(bundledRoot, "node/bin/node");
+  let canonicalBundledNode;
+  try {
+    canonicalBundledNode = await realpath(bundledNode);
+  } catch {
+    canonicalBundledNode = undefined;
+  }
+  if (canonicalBundledNode !== undefined) {
+    if (canonicalBundledNode !== nodeCanonical) fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+    return Object.freeze({
+      path: resolve(bundledRoot, "node/node_modules/pnpm/bin/pnpm.mjs"),
+      layout: "bundled-runtime",
+    });
+  }
+  if (isPnpmPackageCli(pnpmCanonical)) {
+    return Object.freeze({ path: pnpmCanonical, layout: "package-install" });
+  }
+  fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
+}
+
 export async function probeRuntimeExecutableFingerprints({ nodePath, pnpmPath, pythonPath }) {
   const [node, pnpm, python] = await Promise.all([
     fileFingerprint(nodePath, { executable: true, allowRequestedSymlink: true }),
     fileFingerprint(pnpmPath, { executable: true, allowRequestedSymlink: true }),
     fileFingerprint(pythonPath, { executable: true, allowRequestedSymlink: true }),
   ]);
-  const expectedPnpmNode = resolve(dirname(pnpm.canonical), "../../node/bin/node");
-  const pnpmCliPath = resolve(dirname(pnpm.canonical), "../../node/node_modules/pnpm/bin/pnpm.mjs");
-  let canonicalPnpmNode;
-  try {
-    canonicalPnpmNode = await realpath(expectedPnpmNode);
-  } catch {
-    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
-  }
-  if (canonicalPnpmNode !== node.canonical) {
-    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
-  }
-  const pnpmCli = await fileFingerprint(pnpmCliPath, {
-    executable: false,
-    allowRequestedSymlink: false,
-  });
-  if (pnpmCli.canonical !== pnpmCliPath) {
-    fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
-  }
+  const cli = await resolvePnpmCliPath(pnpm.canonical, node.canonical);
+  const pnpmCli = cli.path === pnpm.canonical
+    ? pnpm
+    : await fileFingerprint(cli.path, { executable: false, allowRequestedSymlink: false });
+  if (pnpmCli.canonical !== cli.path) fail("LOCAL_PILOT_PNPM_EXECUTION_CLOSURE_INVALID");
   return Object.freeze({
     node: node.sha256,
     pnpm: pnpm.sha256,
@@ -103,22 +131,94 @@ export async function probeRuntimeExecutableFingerprints({ nodePath, pnpmPath, p
   });
 }
 
-export function assertRuntimeExecutableFingerprints(fingerprints) {
-  if (!fingerprints || typeof fingerprints !== "object" || Array.isArray(fingerprints)) {
+function isSha256(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+/**
+ * Parse the reviewed set of toolchains a local-pilot run may execute under.
+ *
+ * The gate refuses byte patterns it has not been shown, but which reviewed
+ * machine produced those bytes is a manifest entry rather than a constant
+ * welded into this file, so a second approved workstation is a reviewed data
+ * change instead of a gate edit.
+ */
+export function parseApprovedRuntimeManifest(source) {
+  if (typeof source !== "string" || source.includes("\u0000")) {
+    fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(source);
+  } catch {
+    fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+  }
+  if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)
+    || manifest.schemaVersion !== 1 || !Array.isArray(manifest.toolchains)
+    || manifest.toolchains.length === 0) {
+    fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+  }
+  const seen = new Set();
+  const toolchains = manifest.toolchains.map((entry) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry.id)
+      || seen.has(entry.id)
+      || entry.executables === null || typeof entry.executables !== "object"
+      || Array.isArray(entry.executables)
+      || Object.keys(entry.executables).length !== RUNTIME_EXECUTABLE_NAMES.length
+      || RUNTIME_EXECUTABLE_NAMES.some((name) => !isSha256(entry.executables[name]))) {
+      fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+    }
+    seen.add(entry.id);
+    return Object.freeze({
+      id: entry.id,
+      executables: Object.freeze({ ...entry.executables }),
+    });
+  });
+  return Object.freeze(toolchains);
+}
+
+export async function loadApprovedRuntimeToolchains(manifestUrl = APPROVED_RUNTIME_MANIFEST_URL) {
+  let source;
+  try {
+    source = await readFile(manifestUrl, "utf8");
+  } catch {
+    fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
+  }
+  return parseApprovedRuntimeManifest(source);
+}
+
+function mismatchedRuntimeNames(fingerprints, toolchain) {
+  return RUNTIME_EXECUTABLE_NAMES.filter(
+    (name) => fingerprints[name] !== toolchain.executables[name],
+  );
+}
+
+export function assertRuntimeExecutableFingerprints(fingerprints, toolchains) {
+  if (!fingerprints || typeof fingerprints !== "object" || Array.isArray(fingerprints)
+    || RUNTIME_EXECUTABLE_NAMES.some((name) => !isSha256(fingerprints[name]))) {
     fail("LOCAL_PILOT_RUNTIME_EXECUTABLE_INVALID");
   }
-  for (const name of ["node", "pnpm", "pnpmCli", "python"]) {
-    if (fingerprints[name] !== RUNTIME_EXECUTABLE_SHA256[name]) {
-      const label = name === "pnpmCli" ? "PNPM_CLI" : name.toUpperCase();
-      fail(`LOCAL_PILOT_${label}_EXECUTABLE_MISMATCH`);
-    }
+  if (!Array.isArray(toolchains) || toolchains.length === 0) {
+    fail("LOCAL_PILOT_APPROVED_RUNTIME_MANIFEST_INVALID");
   }
-  return Object.freeze({
-    nodeBinarySha256: RUNTIME_EXECUTABLE_SHA256.node,
-    pnpmBinarySha256: RUNTIME_EXECUTABLE_SHA256.pnpm,
-    pnpmCliSha256: RUNTIME_EXECUTABLE_SHA256.pnpmCli,
-    pythonBinarySha256: RUNTIME_EXECUTABLE_SHA256.python,
-  });
+  let closest;
+  for (const toolchain of toolchains) {
+    const mismatched = mismatchedRuntimeNames(fingerprints, toolchain);
+    if (mismatched.length === 0) {
+      return Object.freeze({
+        approvedRuntimeId: toolchain.id,
+        nodeBinarySha256: fingerprints.node,
+        pnpmBinarySha256: fingerprints.pnpm,
+        pnpmCliSha256: fingerprints.pnpmCli,
+        pythonBinarySha256: fingerprints.python,
+      });
+    }
+    if (closest === undefined || mismatched.length < closest.length) closest = mismatched;
+  }
+  const name = closest[0];
+  const label = name === "pnpmCli" ? "PNPM_CLI" : name.toUpperCase();
+  fail(`LOCAL_PILOT_${label}_EXECUTABLE_MISMATCH`);
 }
 
 function assertManagedChromiumInstall(fingerprint, homeDirectory) {
@@ -371,6 +471,7 @@ export async function captureLocalPilotPreflight({
   checkPort = checkLoopbackPortFree,
   browserProbe = probeManagedPlaywrightChromium,
   runtimeExecutableProbe = probeRuntimeExecutableFingerprints,
+  approvedRuntimeToolchains,
   baseEnvironment = process.env,
 }) {
   if (!isAbsolute(repository) || !isAbsolute(nodePath) || !isAbsolute(pnpmPath)
@@ -440,11 +541,10 @@ export async function captureLocalPilotPreflight({
       pnpm: pnpm.stdout,
       python: python.stdout,
     });
-    runtimeExecutables = assertRuntimeExecutableFingerprints(await runtimeExecutableProbe({
-      nodePath,
-      pnpmPath,
-      pythonPath,
-    }));
+    runtimeExecutables = assertRuntimeExecutableFingerprints(
+      await runtimeExecutableProbe({ nodePath, pnpmPath, pythonPath }),
+      approvedRuntimeToolchains ?? await loadApprovedRuntimeToolchains(),
+    );
     openssl = opensslResult.stdout.trim();
     compose = composeResult.stdout.trim();
     if (!/^OpenSSL 3\.[0-9]+\.[0-9]+\b/.test(openssl)

@@ -200,6 +200,7 @@ function probe({ protocol, path, certificate }) {
 function makeReceipt(workflow, snapshot, state) {
   const cleanupStatus = workflow.cleanup.every(({ status }) => status === "passed") ? "passed" : "failed";
   const runtimes = Object.freeze({
+    approvedRuntimeId: snapshot.approvedRuntimeId,
     node: snapshot.node,
     nodeBinarySha256: snapshot.nodeBinarySha256,
     pnpm: snapshot.pnpm,

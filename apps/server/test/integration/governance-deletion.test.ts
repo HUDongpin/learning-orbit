@@ -5,9 +5,10 @@ import { teacherRoomExportContract } from "@learning-orbit/contracts";
 import { GovernanceService } from "../../src/modules/governance/governance-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for governance deletion tests");
 
 describe("governance deletion SQL integration", () => {
-  it.skipIf(!databaseUrl)("freezes all surfaces and enqueues eight NULL-room lifecycle jobs", async () => {
+  it("freezes all surfaces and enqueues eight NULL-room lifecycle jobs", async () => {
     const pool = new Pool({ connectionString: databaseUrl, max: 2 });
     const teacherId = randomUUID();
     const roomId = randomUUID();

@@ -11,10 +11,12 @@ import { tokenHash } from "../../src/modules/auth/crypto.js";
 import { resetBusinessTables } from "../db/reset.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
-const configuredDatabaseUrl = databaseUrl ?? "";
+if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for teacher room-list tests");
+
+const configuredDatabaseUrl = databaseUrl;
 const allowedOrigin = "https://app.learning-orbit.test";
 
-describe.skipIf(!databaseUrl)("teacher room-list PostgreSQL integration", () => {
+describe("teacher room-list PostgreSQL integration", () => {
   const pool = new Pool({ connectionString: configuredDatabaseUrl });
   let app: FastifyInstance;
   let ownerToken: string;

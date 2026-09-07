@@ -5,7 +5,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import { provisionTeacher, runTeacherProvisionCli } from "../../src/teacher-provision-cli.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
-describe.skipIf(!databaseUrl)("teacher provision PostgreSQL integration", () => {
+if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for teacher provision tests");
+
+describe("teacher provision PostgreSQL integration", () => {
   const pool = new Pool({ connectionString: databaseUrl });
   const email = `pilot-${randomUUID()}@example.invalid`;
   const cliEmail = `pilot-cli-${randomUUID()}@example.invalid`;
