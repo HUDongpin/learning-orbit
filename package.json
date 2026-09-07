@@ -22,7 +22,9 @@
     "load:pilot": "node tests/load/run-local-pilot.mjs",
     "verify:local-pilot": "node scripts/verify-local-pilot.mjs",
     "storage:init": "tsx scripts/init-private-bucket.ts",
-    "assert:program-contracts": "tsx scripts/assert-program-contracts.ts"
+    "assert:program-contracts": "tsx scripts/assert-program-contracts.ts",
+    "verify:authority": "tsx scripts/verify-controlled-authority.ts",
+    "governance:import-policy": "tsx scripts/import-approved-pilot-policy.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
