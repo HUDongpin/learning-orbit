@@ -169,6 +169,60 @@ function hashMatches(body: unknown, bodySha256: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+export type ServiceAssertionEnvelopeExpected = Readonly<{
+  audience: string;
+  workerId?: string;
+  maxClockSkewMs?: number;
+}>;
+
+/**
+ * Verify that this exact body was signed by a trusted worker for this audience.
+ *
+ * This half owns everything an unauthenticated caller must not be able to
+ * influence: trust resolution, the closed envelope, freshness, the Ed25519
+ * signature and the canonical body hash. It deliberately knows nothing about
+ * the request schema, so a route can complete it *before* running generated
+ * validation and never let an unsigned caller reach a parser at all.
+ *
+ * The signed subject is returned rather than supplied, so a route learns which
+ * worker signed instead of asserting it.
+ */
+export function verifyServiceAssertionEnvelope(
+  raw: unknown,
+  body: unknown,
+  expected: ServiceAssertionEnvelopeExpected,
+  trust: ServiceAssertionTrust,
+  now: Date,
+): string {
+  try {
+    if (!(now instanceof Date) || !Number.isSafeInteger(now.getTime()) || typeof trust?.resolve !== "function") assertionInvalid();
+    if (!boundedString(expected.audience)) assertionInvalid();
+    const encoded = decodeBase64Url(raw);
+    const parsed = parseCanonicalJson(encoded);
+    const envelope = closedEnvelope(parsed);
+    if (!Buffer.from(canonicalJson(parsed)).equals(encoded)) assertionInvalid();
+    const record = trust.resolve(envelope.issuer, envelope.keyId);
+    if (!record || envelope.audience !== expected.audience) assertionInvalid();
+    if (expected.workerId !== undefined && envelope.subject !== expected.workerId) assertionInvalid();
+    if (!boundedString(envelope.subject)) assertionInvalid();
+    const issuedAt = parseRfc3339Utc(envelope.issuedAt);
+    const expiresAt = parseRfc3339Utc(envelope.expiresAt);
+    const skew = expected.maxClockSkewMs ?? 0;
+    if (!Number.isSafeInteger(skew) || skew < 0 || skew > MAX_CLOCK_SKEW_MS || expiresAt - issuedAt < 1_000 || expiresAt - issuedAt > 60_000) assertionInvalid();
+    if (issuedAt - now.getTime() > skew || now.getTime() - expiresAt > skew) assertionInvalid();
+    if (!verify(null, canonicalJson(protectedFields(envelope)), record.publicKey, decodeBase64Url(envelope.signature, 128))) assertionInvalid();
+    if (!hashMatches(body, envelope.bodySha256)) assertionInvalid();
+    return envelope.subject;
+  } catch {
+    return assertionInvalid();
+  }
+}
+
+/**
+ * Bind an already-verified body to the worker-job claim it names. Callers that
+ * cannot separate the two steps may still use it directly; it re-verifies the
+ * envelope so no path loses a check.
+ */
 export function authorizeServiceAssertion(
   raw: unknown,
   body: unknown,
@@ -177,20 +231,7 @@ export function authorizeServiceAssertion(
   now: Date,
 ): JobClaimIdentity {
   try {
-    if (!(now instanceof Date) || !Number.isSafeInteger(now.getTime()) || typeof trust?.resolve !== "function") assertionInvalid();
-    const encoded = decodeBase64Url(raw);
-    const parsed = parseCanonicalJson(encoded);
-    const envelope = closedEnvelope(parsed);
-    if (!Buffer.from(canonicalJson(parsed)).equals(encoded)) assertionInvalid();
-    const record = trust.resolve(envelope.issuer, envelope.keyId);
-    if (!record || envelope.audience !== expected.audience || envelope.subject !== expected.workerId) assertionInvalid();
-    const issuedAt = parseRfc3339Utc(envelope.issuedAt);
-    const expiresAt = parseRfc3339Utc(envelope.expiresAt);
-    const skew = expected.maxClockSkewMs ?? 0;
-    if (!Number.isSafeInteger(skew) || skew < 0 || skew > MAX_CLOCK_SKEW_MS || expiresAt - issuedAt < 1_000 || expiresAt - issuedAt > 60_000) assertionInvalid();
-    if (issuedAt - now.getTime() > skew || now.getTime() - expiresAt > skew) assertionInvalid();
-    if (!verify(null, canonicalJson(protectedFields(envelope)), record.publicKey, decodeBase64Url(envelope.signature, 128))) assertionInvalid();
-    if (!hashMatches(body, envelope.bodySha256)) assertionInvalid();
+    verifyServiceAssertionEnvelope(raw, body, expected, trust, now);
     return assertClaim(body, expected);
   } catch {
     return assertionInvalid();

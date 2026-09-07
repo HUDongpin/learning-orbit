@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/lifecycle-internal-media-surface.v1.json",
+  "title": "LifecycleInternalMediaSurfaceContract",
+  "x-learning-orbit-python-ingress": true,
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "jobType", "roomId", "sourceEventId", "dedupeKey", "deletionJobId", "surface", "correlationId", "claimGeneration", "claimToken", "workerId"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid" },
+        "jobType": { "const": "room.delete-surface.v1" },
+        "roomId": { "type": "null" },
+        "sourceEventId": { "type": "null" },
+        "dedupeKey": { "type": "string", "pattern": "^room\\.delete-surface\\.v1:[0-9a-f-]{36}:media$" },
+        "deletionJobId": { "type": "string", "format": "uuid" },
+        "surface": { "const": "media" },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "claimGeneration": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+        "claimToken": { "type": "string", "format": "uuid" },
+        "workerId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "surface", "verifiedItemCount"],
+          "properties": {
+            "status": { "enum": ["completed", "already_verified"] },
+            "surface": { "const": "media" },
+            "verifiedItemCount": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code", "notBefore"],
+          "properties": {
+            "status": { "const": "retryable" },
+            "code": { "enum": ["MEDIA_SURFACE_NOT_QUIESCENT", "MEDIA_SURFACE_STORE_UNAVAILABLE"] },
+            "notBefore": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "rejected" },
+            "code": { "enum": ["SERVICE_ASSERTION_INVALID", "JOB_CLAIM_STALE", "LIFECYCLE_SURFACE_IDENTITY_INVALID"] }
+          }
+        }
+      ]
+    }
+  }
+}

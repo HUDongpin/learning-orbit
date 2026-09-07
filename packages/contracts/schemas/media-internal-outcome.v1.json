@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/media-internal-outcome.v1.json",
+  "title": "MediaInternalOutcomeContract",
+  "x-learning-orbit-python-ingress": true,
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 0,
+  "$defs": {
+    "Derivative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivativeId", "kind", "objectKey", "mime", "sizeBytes", "sha256"],
+      "properties": {
+        "derivativeId": { "type": "string", "format": "uuid" },
+        "kind": { "enum": ["thumbnail", "sanitized_image", "playback_audio", "waveform"] },
+        "objectKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "mime": { "type": "string", "minLength": 1, "maxLength": 127 },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 26214400 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "jobType", "roomId", "sourceEventId", "dedupeKey", "mediaId", "transitionId", "state", "failureCode", "derivatives", "correlationId", "claimGeneration", "claimToken", "workerId"],
+      "properties": {
+        "jobId": { "type": "string", "format": "uuid" },
+        "jobType": { "const": "media.process.v1" },
+        "roomId": { "type": "string", "format": "uuid" },
+        "sourceEventId": { "type": "null" },
+        "dedupeKey": { "type": "string", "pattern": "^media\\.process\\.v1:[0-9a-f-]{36}$" },
+        "mediaId": { "type": "string", "format": "uuid" },
+        "transitionId": { "type": "string", "format": "uuid" },
+        "state": { "enum": ["processing", "ready", "quarantined", "failed"] },
+        "failureCode": { "type": ["string", "null"], "minLength": 1, "maxLength": 100 },
+        "derivatives": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/Derivative" } },
+        "correlationId": { "type": "string", "format": "uuid" },
+        "claimGeneration": { "type": "string", "pattern": "^[1-9][0-9]{0,18}$" },
+        "claimToken": { "type": "string", "format": "uuid" },
+        "workerId": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "Response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": { "enum": ["applied", "already_applied"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "code"],
+          "properties": {
+            "status": { "const": "rejected" },
+            "code": { "enum": ["SERVICE_ASSERTION_INVALID", "JOB_CLAIM_STALE", "MEDIA_OUTCOME_INVALID", "ROOM_DELETION_IN_PROGRESS"] }
+          }
+        }
+      ]
+    }
+  }
+}

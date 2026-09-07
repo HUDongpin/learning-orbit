@@ -24,7 +24,7 @@ import { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
 import { MessageService } from "./modules/rooms/message-service.js";
 import { CommandService } from "./modules/rooms/command-service.js";
 import { noAttachments } from "./modules/rooms/attachment-validator.js";
-import { isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
+import { forbidsAnyOrigin, isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { closedRateLimitError } from "./modules/security/rate-policies.js";
 import { registerRoutes } from "./routes.js";
 import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
@@ -44,6 +44,9 @@ import { ProjectionOutboxRepository } from "./modules/analytics/projection-outbo
 import { AgentService } from "./modules/agent/agent-service.js";
 import { ProviderHealthRepository } from "./modules/agent/provider-health-repository.js";
 import { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
+import { InternalAgentCompleteRoute } from "./modules/agent/internal-agent-complete-route.js";
+import { MediaInternalOutcomeRoute } from "./modules/media/media-internal-outcome-route.js";
+import { InternalMediaSurfaceRoute, type MediaSurfaceEraser } from "./modules/lifecycle/internal-media-surface-route.js";
 import { registerAnalyticsReviewEventPayloads } from "./modules/analytics/register-analytics-review-event-payloads.js";
 import type { GovernanceService } from "./modules/governance/governance-service.js";
 import { GovernanceService as DefaultGovernanceService } from "./modules/governance/governance-service.js";
@@ -72,6 +75,10 @@ export interface BuildAppOptions {
   media?: MediaDeps;
   mediaStore?: MediaStore;
   agent?: AgentService;
+  agentComplete?: InternalAgentCompleteRoute;
+  mediaInternalOutcome?: MediaInternalOutcomeRoute;
+  lifecycleMediaSurface?: InternalMediaSurfaceRoute;
+  mediaSurfaceEraser?: MediaSurfaceEraser;
   /** Explicitly injected in tests/pilot; production requires LO_AUDIT_SALT. */
   governance?: GovernanceService;
   analytics?: {
@@ -107,7 +114,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(websocket, { options: { maxPayload: RealtimeConnection.MAX_INBOUND_FRAME_BYTES } });
   app.addHook("onRequest", async (request, reply) => {
     const requestOrigin = request.headers.origin;
-    if (requiresAllowedOrigin(request)) {
+    if (forbidsAnyOrigin(request)) {
+      if (requestOrigin) return reply.code(403).send({ code: "ORIGIN_FORBIDDEN" });
+    } else if (requiresAllowedOrigin(request)) {
       if (!isExactAllowedOrigin(requestOrigin, config.allowedOrigins)) return reply.code(403).send({ code: "ORIGIN_FORBIDDEN" });
     } else if (requestOrigin && !isExactAllowedOrigin(requestOrigin, config.allowedOrigins)) {
       return reply.code(403).send({ code: "ORIGIN_FORBIDDEN" });
@@ -187,6 +196,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     new ProviderHealthRepository(pool, clock), assertionTrust, clock,
     { providerId: "fixture", manifestSha256: "0".repeat(64) },
   ) : undefined;
+
+  // The three worker return paths. Each needs the same two authorities the
+  // outbound families already use - the room-event transaction and the signed
+  // service assertion - so each is absent for exactly the same reason its
+  // outbound sibling would be.
+  const events = lifecycle?.events
+    ?? (pool ? new RoomEventRepository(pool, eventPayloadRegistry, clock) : undefined);
+  const agentComplete = options.agentComplete ?? (events && assertionTrust
+    ? new InternalAgentCompleteRoute(events, clock, assertionTrust, jobClaims)
+    : undefined);
+  const mediaInternalOutcome = options.mediaInternalOutcome ?? (events && assertionTrust
+    ? new MediaInternalOutcomeRoute(events, clock, assertionTrust, jobClaims, realtime?.hub)
+    : undefined);
+  const lifecycleMediaSurface = options.lifecycleMediaSurface ?? (pool && assertionTrust
+    ? new InternalMediaSurfaceRoute(pool, clock, assertionTrust, jobClaims, options.mediaSurfaceEraser)
+    : undefined);
   const governance = options.governance ?? (pool && process.env.LO_AUDIT_SALT
     ? new DefaultGovernanceService(pool, {
       auditSalt: process.env.LO_AUDIT_SALT,
@@ -212,6 +237,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     mediaInternalReconcile,
     agent,
     agentProviderHealth,
+    agentComplete,
+    mediaInternalOutcome,
+    lifecycleMediaSurface,
     analytics,
     analyticsTeacher,
     governance,

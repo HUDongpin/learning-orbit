@@ -127,9 +127,14 @@ export const routes = {
     },
     media: {
       reconcileUpload: () => "/internal/media/reconcile-upload",
+      outcome: () => "/internal/media/outcome",
     },
     agent: {
       health: () => "/internal/agent/provider-health",
+      complete: () => "/internal/agent/complete",
+    },
+    lifecycle: {
+      mediaSurface: () => "/internal/lifecycle/media-surface",
     },
   },
 } as const;

@@ -183,7 +183,6 @@ if ((await exists(envPath)) && !force) {
     "",
     "LO_PUBLIC_BASE_ORIGIN=https://localhost:3000",
     "LO_ALLOWED_ORIGINS=https://localhost:3000,https://127.0.0.1:3000",
-    "LO_LOCAL_SAME_ORIGIN_PROXY=1",
     "LO_STORAGE_BROWSER_ORIGINS=",
     "LO_TRUSTED_PROXY_CIDRS=",
     "",
@@ -354,7 +353,8 @@ stdout.write(`
 Bootstrap complete. Two commands run the app:
 
   pnpm --filter @learning-orbit/server dev
-  pnpm --filter @learning-orbit/web exec next dev --hostname localhost --port 3000 \\
+  LO_LOCAL_SAME_ORIGIN_PROXY=1 pnpm --filter @learning-orbit/web exec next dev \\
+    --hostname localhost --port 3000 \\
     --experimental-https --experimental-https-key secrets/local-dev/dev-key.pem \\
     --experimental-https-cert secrets/local-dev/dev-cert.pem
 

@@ -97,6 +97,11 @@
       "sha256": "951eded83d646f3ceb1a5613aaca3899a0e9e9711d6bdea4222c6afa766260d3"
     },
     {
+      "file": "lifecycle-internal-media-surface.v1.json",
+      "id": "https://learning-orbit.local/schemas/lifecycle-internal-media-surface.v1.json",
+      "sha256": "ed87bc0235bb75e84fae60baa9fe932be082414133c07f550f86d41658bf912e"
+    },
+    {
       "file": "media-attachment-view.v1.json",
       "id": "https://learning-orbit.local/schemas/media-attachment-view.v1.json",
       "sha256": "39c5ef14d7ab0cb1bd50a1511eb346218ab82b560b08a09fb0b4f3073e22814f"
@@ -105,6 +110,11 @@
       "file": "media-command.schema.json",
       "id": "https://learning-orbit.local/schemas/media-command.schema.json",
       "sha256": "0c131e0fc99233bb1d9e087f77c896bdb0df7db6322334bc53dd11292170a9c0"
+    },
+    {
+      "file": "media-internal-outcome.v1.json",
+      "id": "https://learning-orbit.local/schemas/media-internal-outcome.v1.json",
+      "sha256": "f31de929014541768c6d36e11d02c39f6fff22e205481a7c5815aadf21ddcca1"
     },
     {
       "file": "media-internal-reconcile.v1.json",
@@ -269,6 +279,11 @@
       "language": "typescript"
     },
     {
+      "sourceFile": "lifecycle-internal-media-surface.v1.json",
+      "moduleFile": "lifecycle-internal-media-surface.v1.ts",
+      "language": "typescript"
+    },
+    {
       "sourceFile": "media-attachment-view.v1.json",
       "moduleFile": "media-attachment-view.v1.ts",
       "language": "typescript"
@@ -276,6 +291,11 @@
     {
       "sourceFile": "media-command.schema.json",
       "moduleFile": "media-command.schema.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "media-internal-outcome.v1.json",
+      "moduleFile": "media-internal-outcome.v1.ts",
       "language": "typescript"
     },
     {

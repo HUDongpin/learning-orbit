@@ -11,8 +11,13 @@ import type { RoomLifecycleService } from "./modules/rooms/lifecycle-service.js"
 import { InternalAutoCloseRoute } from "./modules/rooms/internal-auto-close-route.js";
 import type { ServiceAssertionTrust } from "./modules/security/service-assertion.js";
 import {
+  lifecycleInternalMediaSurfaceContract,
+  mediaInternalOutcomeContract,
   roomInternalAutoCloseContract,
   routes,
+  type AgentInternalCommandResponse,
+  type LifecycleInternalMediaSurfaceResponse,
+  type MediaInternalOutcomeResponse,
   type RoomInternalAutoCloseResponse,
 } from "@learning-orbit/contracts";
 import type { JobClaimAuthority } from "./modules/jobs/job-claim-authority.js";
@@ -31,6 +36,9 @@ import type { MediaInternalReconcileRoute } from "./modules/media/media-internal
 import type { AgentService } from "./modules/agent/agent-service.js";
 import { AgentError } from "./modules/agent/agent-service.js";
 import type { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
+import type { InternalAgentCompleteRoute } from "./modules/agent/internal-agent-complete-route.js";
+import type { MediaInternalOutcomeRoute } from "./modules/media/media-internal-outcome-route.js";
+import type { InternalMediaSurfaceRoute } from "./modules/lifecycle/internal-media-surface-route.js";
 import { agentContract } from "@learning-orbit/contracts";
 import { AnalyticsPolicy, AnalyticsPolicyError, type AnalyticsCapability, type AnalyticsGrant } from "./modules/analytics/analytics-policy.js";
 import { AnalyticsRepository, AnalyticsRepositoryError, patchWire, projectionWire, type ProjectionKey } from "./modules/analytics/analytics-repository.js";
@@ -52,6 +60,9 @@ interface AuthRouteDependencies {
   mediaInternalReconcile: MediaInternalReconcileRoute | undefined;
   agent: AgentService | undefined;
   agentProviderHealth: InternalProviderHealthRoute | undefined;
+  agentComplete: InternalAgentCompleteRoute | undefined;
+  mediaInternalOutcome: MediaInternalOutcomeRoute | undefined;
+  lifecycleMediaSurface: InternalMediaSurfaceRoute | undefined;
   analytics?: {
     policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
     repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
@@ -670,6 +681,60 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       const parsed = agentContract.parseHealthResponse(result);
       const status = parsed.status === "rejected" ? parsed.code === "PROBE_ASSERTION_INVALID" ? 401 : 409 : 200;
       return reply.code(status).type("application/json").send(JSON.parse(agentContract.encodeHealthResponse(parsed)));
+    });
+  }
+
+  // The three worker return paths. Each one carries a result the Python
+  // worker computed back into server state; without them media never leaves
+  // processing, Nova can never speak, and deletion cannot prove its media.
+  if (dependencies.agentComplete) {
+    app.post(routes.internal.agent.complete(), async (request, reply) => {
+      let result: AgentInternalCommandResponse;
+      try {
+        result = await dependencies.agentComplete!.handle(
+          request.headers["x-lo-service-assertion"], request.body,
+        );
+      } catch {
+        return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      }
+      const parsed = agentContract.parseInternalResponse(result);
+      const status = parsed.status !== "rejected" ? 200
+        : parsed.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      return reply.code(status).type("application/json").send(parsed);
+    });
+  }
+
+  if (dependencies.mediaInternalOutcome) {
+    app.post(routes.internal.media.outcome(), async (request, reply) => {
+      let result: MediaInternalOutcomeResponse;
+      try {
+        result = await dependencies.mediaInternalOutcome!.handle(
+          request.headers["x-lo-service-assertion"], request.body,
+        );
+      } catch {
+        return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      }
+      const status = result.status !== "rejected" ? 200
+        : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      return reply.code(status).type("application/json")
+        .send(JSON.parse(mediaInternalOutcomeContract.encodeResponse(result)));
+    });
+  }
+
+  if (dependencies.lifecycleMediaSurface) {
+    app.post(routes.internal.lifecycle.mediaSurface(), async (request, reply) => {
+      let result: LifecycleInternalMediaSurfaceResponse;
+      try {
+        result = await dependencies.lifecycleMediaSurface!.handle(
+          request.headers["x-lo-service-assertion"], request.body,
+        );
+      } catch {
+        return reply.code(500).type("application/json").send({ code: "INTERNAL" });
+      }
+      const status = result.status !== "rejected" ? 200
+        : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      return reply.code(status).type("application/json")
+        .send(JSON.parse(lifecycleInternalMediaSurfaceContract.encodeResponse(result)));
     });
   }
 

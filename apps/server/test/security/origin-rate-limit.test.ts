@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { buildApp } from "../../src/app.js";
 import { apiErrorContract } from "@learning-orbit/contracts";
-import { requiresAllowedOrigin } from "../../src/modules/security/origin-policy.js";
+import {
+  forbidsAnyOrigin,
+  isInternalRoutePath,
+  requiresAllowedOrigin,
+} from "../../src/modules/security/origin-policy.js";
 import { normalizeRateIp } from "../../src/modules/security/rate-policies.js";
 import { buildRatePolicyHarness } from "../fixtures/rate-policy-harness.js";
+import { routes } from "@learning-orbit/contracts";
 
 const allowedOrigin = "https://app.learning-orbit.test";
 
@@ -42,6 +47,28 @@ describe("origin and rate policy", () => {
       headers: {},
       routeOptions: { url: "/v1/auth/teacher/magic-link/consume" },
     } as never)).toBe(true);
+  });
+
+  it("exempts every canonical internal route from the browser-origin rule", () => {
+    // Derived from the route table, not restated: a hand-kept list already
+    // locked the provider-health probe out of its own route.
+    const internal = [
+      routes.internal.rooms.autoClose(),
+      routes.internal.media.reconcileUpload(),
+      routes.internal.media.outcome(),
+      routes.internal.agent.health(),
+      routes.internal.agent.complete(),
+      routes.internal.lifecycle.mediaSurface(),
+    ];
+    expect(new Set(internal).size).toBe(6);
+    for (const url of internal) {
+      expect(isInternalRoutePath(url)).toBe(true);
+      expect(requiresAllowedOrigin({ method: "POST", headers: {}, routeOptions: { url } } as never))
+        .toBe(false);
+      expect(forbidsAnyOrigin({ routeOptions: { url } } as never)).toBe(true);
+    }
+    expect(isInternalRoutePath("/internal/rooms/auto-close-extra")).toBe(false);
+    expect(forbidsAnyOrigin({ routeOptions: { url: "/v1/auth/session" } } as never)).toBe(false);
   });
 
   it("uses production policy definitions for magic, failed join, and agent triggers", async () => {

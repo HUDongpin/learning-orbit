@@ -13,6 +13,8 @@ export { mediaAttachmentContract } from "./media-attachment.js";
 export { mediaCommandContract } from "./media-command.js";
 export { mediaStatusContract } from "./media-status.js";
 export { mediaInternalReconcileContract } from "./media-internal-reconcile.js";
+export { mediaInternalOutcomeContract } from "./media-internal-outcome.js";
+export { lifecycleInternalMediaSurfaceContract } from "./lifecycle-internal-media-surface.js";
 export { agentContract } from "./agent.js";
 export { analyticsContract, analyticsHttpContract, analyticsReviewRoomEventPayloadSchema } from "./analytics.js";
 export { analyticsTeacherHttpContract } from "./analytics-teacher.js";
@@ -98,7 +100,17 @@ export type {
   RequestAgentRunInput, CancelAgentRunInput,
 } from "./generated/agent-command.v1.js";
 export type { Request as AgentProviderHealthRequest, Response as AgentProviderHealthResponse } from "./generated/agent-provider-health.v1.js";
+export type { Request as AgentInternalCommandRequest, Response as AgentInternalCommandResponse } from "./generated/agent-internal-command.v1.js";
 export type {
   Request as MediaInternalReconcileRequest,
   Response as MediaInternalReconcileResponse,
 } from "./generated/media-internal-reconcile.v1.js";
+export type {
+  Request as MediaInternalOutcomeRequest,
+  Response as MediaInternalOutcomeResponse,
+  Derivative as MediaInternalOutcomeDerivative,
+} from "./generated/media-internal-outcome.v1.js";
+export type {
+  Request as LifecycleInternalMediaSurfaceRequest,
+  Response as LifecycleInternalMediaSurfaceResponse,
+} from "./generated/lifecycle-internal-media-surface.v1.js";

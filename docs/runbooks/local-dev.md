@@ -69,7 +69,7 @@ PORT=3001 pnpm --filter @learning-orbit/server dev
 
 ```bash
 set -a; . ./.env; set +a
-pnpm --filter @learning-orbit/web exec next dev \
+LO_LOCAL_SAME_ORIGIN_PROXY=1 pnpm --filter @learning-orbit/web exec next dev \
   --hostname localhost --port 3000 \
   --experimental-https \
   --experimental-https-key "$LO_DEV_TLS_KEY" \
@@ -80,7 +80,9 @@ Then open **<https://localhost:3000/login>** and accept the self-signed
 certificate once. `/` permanently redirects there.
 
 Fastify listens on `http://127.0.0.1:3001`, but the browser never talks to it
-directly. With `LO_LOCAL_SAME_ORIGIN_PROXY=1` the Next dev server externally
+directly. `LO_LOCAL_SAME_ORIGIN_PROXY=1` belongs on that one command and not in
+`.env`: `next.config.ts` refuses the flag outside the dev-server phase, so a
+`.env` carrying it breaks `pnpm typecheck` and `pnpm build`. With it set, the Next dev server externally
 rewrites `/v1/*` — the WebSocket upgrade included — to port 3001, so the whole
 product runs on one origin and the `Secure` `lo_session` cookie works. `/internal`
 is deliberately not proxied; a request for it from the browser origin gets a 404.
