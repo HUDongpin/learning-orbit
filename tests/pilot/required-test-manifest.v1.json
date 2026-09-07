@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 444
+      "expectedTests": 455
     },
     {
       "id": "web-vitest",
@@ -65,6 +65,24 @@
       ],
       "report": "test-results/local-pilot/summaries/pilot-harness-vitest.summary.json",
       "expectedTests": 115
+    },
+    {
+      "id": "chaos-vitest",
+      "runner": "vitest",
+      "argv": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "tests/chaos",
+        "--project",
+        "cross-node",
+        "--sequence.concurrent=false",
+        "--allowOnly=false",
+        "--reporter=json"
+      ],
+      "report": "test-results/local-pilot/summaries/chaos-vitest.summary.json",
+      "expectedTests": 16
     },
     {
       "id": "security-vitest",

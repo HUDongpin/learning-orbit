@@ -50,6 +50,13 @@ describe("production ingress surface", () => {
     for (const line of mentions) expect(line).toMatch(/^location [^{]*\{ return 404; \}$/);
   });
 
+  it("refuses the fault-control surface as well", () => {
+    // The server refuses to start in production with faults enabled; the
+    // ingress refuses the path regardless. Two independent answers to "can the
+    // public pause the outbox" is the right number.
+    expect(config).toContain("location ^~ /test/ { return 404; }");
+  });
+
   it("strips a client-supplied service assertion instead of forwarding it", () => {
     expect(config).toContain('proxy_set_header X-LO-Service-Assertion "";');
   });

@@ -33,6 +33,17 @@ export function isInternalRoutePath(value: string | undefined): boolean {
   return typeof value === "string" && INTERNAL_PATHS.has(value);
 }
 
+/**
+ * Fault-control routes exist only when LEARNING_ORBIT_TEST_FAULTS=1, and even
+ * then a browser must not be able to reach them: a page on the product origin
+ * that could pause the outbox would be a denial of service dressed as a link.
+ */
+export const FAULT_CONTROL_PREFIX = "/test/faults/";
+
+export function isFaultControlPath(value: string | undefined): boolean {
+  return typeof value === "string" && value.startsWith(FAULT_CONTROL_PREFIX);
+}
+
 export function requiresAllowedOrigin(request: FastifyRequest): boolean {
   // Internal routes are authenticated by a signed service assertion, never by
   // a browser Origin, and a worker sends none.
@@ -47,5 +58,5 @@ export function requiresAllowedOrigin(request: FastifyRequest): boolean {
  * so a page on the product origin can never reach the worker surface.
  */
 export function forbidsAnyOrigin(request: FastifyRequest): boolean {
-  return isInternalRoutePath(request.routeOptions.url);
+  return isInternalRoutePath(request.routeOptions.url) || isFaultControlPath(request.routeOptions.url);
 }

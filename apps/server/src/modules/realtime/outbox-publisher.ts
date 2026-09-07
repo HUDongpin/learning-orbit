@@ -17,9 +17,14 @@ export class OutboxPublisher {
     private readonly workerId = `realtime-${process.pid}`,
     private readonly projection?: ProjectionPublisherDeps,
     private readonly telemetry: Telemetry = createTelemetry(),
+    /** Present only when fault controls were enabled at startup. */
+    private readonly faults?: { readonly outboxPaused: boolean },
   ) {}
   async tick(limit = 100): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_OUTBOX_LIMIT");
+    // A paused outbox claims nothing, so the rows stay unlocked and a resumed
+    // publisher finds exactly the backlog a crashed one would have left.
+    if (this.faults?.outboxPaused) return 0;
     const rows = await inTransaction(this.pool, async tx => (await tx.query<any>(`WITH c AS (SELECT outbox_id FROM outbox_event WHERE published_at IS NULL AND available_at<=now() AND (locked_at IS NULL OR locked_at<now()-interval '2 minutes') ORDER BY available_at,created_at,outbox_id FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE outbox_event o SET locked_at=now(),locked_by=$2,publish_attempts=o.publish_attempts+1 FROM c WHERE o.outbox_id=c.outbox_id RETURNING o.outbox_id,o.room_id,o.envelope`, [limit, this.workerId])).rows);
     let published = 0;
     for (const row of rows) {

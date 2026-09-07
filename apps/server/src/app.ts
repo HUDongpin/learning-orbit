@@ -28,6 +28,7 @@ import { forbidsAnyOrigin, isExactAllowedOrigin, requiresAllowedOrigin } from ".
 import { closedRateLimitError } from "./modules/security/rate-policies.js";
 import { registerRoutes } from "./routes.js";
 import { startOtelRuntime, type OtelRuntime } from "./observability/otel.js";
+import { FAULT_NAMES, FaultController, FaultControlError, faultControlsEnabled } from "./modules/security/fault-controls.js";
 import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
 import { projectionDeliveryFailureDecision } from "./modules/realtime/projection-delivery-decision.js";
 import { RealtimeConnection } from "./modules/realtime/connection.js";
@@ -109,6 +110,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // Telemetry starts before Fastify and every plugin so startup work is inside
   // the trace, and is shut down with the server.  With no approved collector
   // configured this is an inert facade, which is a supported deployment.
+  // Checked before Fastify exists, so a production process that was handed
+  // LEARNING_ORBIT_TEST_FAULTS refuses to boot rather than quietly ignoring it.
+  const faults = faultControlsEnabled(process.env) ? new FaultController() : undefined;
   const otel: OtelRuntime = options.otel ?? startOtelRuntime({
     environment: config.environment,
     ...(config.otlpEndpoint ? { endpoint: config.otlpEndpoint } : {}),
@@ -183,7 +187,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return {
       authorizer,
       hub,
-      publisher: new OutboxPublisher(pool, hub, undefined, projection, otel.telemetry),
+      publisher: new OutboxPublisher(pool, hub, undefined, projection, otel.telemetry, faults),
     };
   })() : undefined);
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
@@ -321,6 +325,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     analyticsTeacher,
     governance,
   });
+  if (faults) registerFaultControls(app, faults);
   app.addHook("onClose", async () => {
     if (publisherTimer) clearInterval(publisherTimer);
     if (janitorTimer) clearInterval(janitorTimer);
@@ -332,4 +337,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!options.otel) await otel.shutdown();
   });
   return app;
+}
+
+/**
+ * Fault-control routes, registered only when the gate above allowed them.
+ *
+ * They are POST-only and answer with the whole fault state, so a scenario can
+ * assert what is armed instead of assuming. `DELETE` resets everything: a
+ * scenario that failed part-way must not leave the next one running against a
+ * half-broken server.
+ */
+function registerFaultControls(app: FastifyInstance, faults: FaultController): void {
+  for (const name of FAULT_NAMES) {
+    app.post(`/test/faults/${name}`, async (request, reply) => {
+      const body = request.body as { value?: unknown } | undefined;
+      try {
+        faults.arm(name, body?.value);
+      } catch (error) {
+        const code = error instanceof FaultControlError ? error.code : "FAULT_VALUE_INVALID";
+        return reply.code(400).type("application/json").send({ code });
+      }
+      return reply.type("application/json").send(faults.snapshot());
+    });
+  }
+  app.delete("/test/faults", async (_request, reply) => {
+    faults.reset();
+    return reply.type("application/json").send(faults.snapshot());
+  });
 }
