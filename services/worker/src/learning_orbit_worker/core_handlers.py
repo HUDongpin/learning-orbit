@@ -64,6 +64,11 @@ def room_auto_close_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
             raise RetryableJobError("INTERNAL_HTTP_RETRYABLE") from error
         raise TerminalJobError("INTERNAL_HTTP_REJECTED") from error
     result = response.body
+    if not isinstance(result, dict):
+        # A body the client could not shape is a schema failure, not an
+        # AttributeError: an unbounded error becomes a generic
+        # JOB_HANDLER_FAILED that names nothing an operator can act on.
+        raise TerminalJobError("INTERNAL_HTTP_RESPONSE_SCHEMA")
     status, code = result.get("status"), result.get("code")
     if status == "completed" and code in {"ROOM_CLOSED", "ALREADY_CLOSED"}:
         return HandlerOutcome.SUCCESS
