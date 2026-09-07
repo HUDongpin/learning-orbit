@@ -31,8 +31,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _subject(claim: JobClaim | WorkerJob) -> str:
-    return claim.worker_id if isinstance(claim, JobClaim) else claim.locked_by
+def _subject(claim: Any) -> str:
+    """Resolve the worker that signs, whatever claim shape the caller holds.
+
+    Three types carry the same identity: JobClaim and WorkerClaim name it
+    ``worker_id``, while a raw WorkerJob row names it ``locked_by``. Matching on
+    the class instead of the field meant a handler passing the WorkerClaim it is
+    actually given fell through to ``locked_by`` and raised AttributeError - so
+    every signed internal call from a real worker failed before it was sent.
+    """
+    for field in ("worker_id", "locked_by"):
+        value = getattr(claim, field, None)
+        if isinstance(value, str) and value:
+            return value
+    raise InternalHttpError("INTERNAL_HTTP_SUBJECT_INVALID")
 
 
 class InternalServiceClient:

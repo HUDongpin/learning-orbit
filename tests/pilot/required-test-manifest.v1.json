@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 382
+      "expectedTests": 386
     },
     {
       "id": "web-vitest",
@@ -76,7 +76,7 @@
         "services/worker/tests"
       ],
       "report": "test-results/local-pilot/summaries/worker-python.summary.json",
-      "expectedTests": 128
+      "expectedTests": 134
     },
     {
       "id": "browser-playwright",
