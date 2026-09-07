@@ -2,14 +2,21 @@
 
 import type { AuthSession, DeleteRoomAccepted, DeletionStatus, RoomDetails } from "@learning-orbit/contracts";
 import { useRouter } from "next/navigation";
-import React, { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import {
   FetchSessionGateway,
   SessionGatewayError,
   type SessionGateway,
 } from "../../../src/lib/session/session-gateway";
-import { isRoomId, roomPagePath } from "../../../src/lib/session/room-route";
+import {
+  DEFAULT_ROOM_VIEW,
+  isRoomId,
+  parseRoomViewPreferences,
+  roomPagePath,
+  roomViewSearch,
+  type RoomViewPreferences,
+} from "../../../src/lib/session/room-route";
 import { HydratedSessionState } from "../../../src/lib/session/hydrated-session-state";
 import { ChatPanel } from "../../../src/lib/chat/chat-panel";
 import { identityInitial, identityStyle } from "../../../src/lib/chat/identity";
@@ -269,6 +276,18 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
     // whole access check by bumping it, so a retry is a real second request to
     // the server rather than a cosmetic reset of the error screen.
   }, [agentStatusTimeoutMs, api, authority, mode, retryToken, roomId, router, validRoomId]);
+
+  // The TRACE window and view live in the URL. `replace` keeps the back button
+  // meaningful: a view toggle is not a navigation a student wants to undo.
+  const [viewPreferences, applyViewPreferences] = useState<RoomViewPreferences>(DEFAULT_ROOM_VIEW);
+  useEffect(() => {
+    applyViewPreferences(parseRoomViewPreferences(globalThis.location?.search ?? ""));
+  }, []);
+  const setViewPreferences = useCallback((next: RoomViewPreferences) => {
+    applyViewPreferences(next);
+    const search = roomViewSearch(next, globalThis.location?.search ?? "");
+    router.replace(`${globalThis.location?.pathname ?? ""}${search ? `?${search}` : ""}`, { scroll: false });
+  }, [router]);
 
   const seatedHydrated = "hydrated" in state ? state.hydrated : undefined;
   // One tick a second while a session is live. The value shown is derived from
@@ -632,6 +651,8 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
               <TracePanel
                 slot={hydrated.projections.slot(traceProjectionKey)}
                 onRetry={() => void hydrated.refreshProjection(traceProjectionKey)}
+                preferences={viewPreferences}
+                onPreferencesChange={setViewPreferences}
               />
             </div>
           </div>

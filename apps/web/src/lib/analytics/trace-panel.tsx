@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { SnaProjectionBundle } from "@learning-orbit/contracts";
 import type { ProjectionSlot } from "../session/projection-sync";
+import { DEFAULT_ROOM_VIEW, type RoomViewPreferences } from "../session/room-route";
 import { identityInitial, identityStyle } from "../chat/identity";
 import { AnalysisWarnings } from "./analysis-warnings";
 import { ProjectionPanelState } from "./projection-panel-state";
@@ -232,13 +233,30 @@ function edgeGeometry(
   };
 }
 
-export function TracePanel({ slot, onRetry }: Readonly<{ slot: ProjectionSlot; onRetry: () => void }>) {
+/**
+ * The window and view a viewer chose live in the URL, not in this component.
+ * A reload, a restored tab or a link pasted to a colleague must land on the
+ * same view, and this product may not put anything in browser storage.
+ */
+export function TracePanel({ slot, onRetry, preferences, onPreferencesChange }: Readonly<{
+  slot: ProjectionSlot;
+  onRetry: () => void;
+  preferences?: RoomViewPreferences;
+  onPreferencesChange?: (next: RoomViewPreferences) => void;
+}>) {
   const canonical = slot.snapshot && (slot.snapshot.projectionKey === "trace.student_bundle" || slot.snapshot.projectionKey === "trace.teacher_bundle")
     ? slot.snapshot as TraceBundle : undefined;
   const [storedPresented, setPresented] = useState<TraceBundle | undefined>(() => canonical);
   const [paused, setPaused] = useState(false);
-  const [windowName, setWindowName] = useState<WindowName>("recent_10m");
-  const [viewName, setViewName] = useState<ViewName>("observed");
+  // Fall back to local state only when no URL owner is supplied, so the panel
+  // stays usable in isolation (and in its own unit tests).
+  const [localPreferences, setLocalPreferences] = useState<RoomViewPreferences>(DEFAULT_ROOM_VIEW);
+  const current = preferences ?? localPreferences;
+  const update = onPreferencesChange ?? setLocalPreferences;
+  const windowName = current.window as WindowName;
+  const viewName = current.view as ViewName;
+  const setWindowName = (next: WindowName) => update({ ...current, window: next });
+  const setViewName = (next: ViewName) => update({ ...current, view: next });
   const [selectedKey, setSelectedKey] = useState<string>();
   const [graphRef, canvas] = useMeasuredCanvas();
   const markerId = `trace-arrow-${useId().replace(/[^a-zA-Z0-9_-]/gu, "")}`;
