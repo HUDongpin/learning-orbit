@@ -349,9 +349,22 @@ Ruled out, each by a change that made no difference to the symptom:
 - **Upgrade data lost in the ingress.** The upgrade socket is paused until the
   upstream connects (also a real fix, also kept).
 
-What remains unidentified is which path opens a socket that never sends its
-`hello`. A `verify:local-pilot` run on the pinned ports is the next step: its
-disposable checkout removes this working tree as a variable.
+**It reproduces in a clean checkout.** A detached `git worktree` at the same
+commit, a fresh `pnpm install --frozen-lockfile`, its own build, run on the
+same free ports, fails byte-identically: `K4400`, `G2 N2 W1 R1`, teacher on
+surface `H2`. This working tree is not the variable, and neither is the
+environment as far as it can be varied here.
+
+That changes what this is. It is a defect, not an artifact — which also means
+the `browser-playwright` gate very likely does not pass today, and its
+manifest count of `2` describes an intention rather than an observation. Worth
+settling before any receipt is read as covering the browser journey.
+
+What is still unidentified is which path opens the socket that never sends its
+`hello`. The teacher receives events on its first socket (`E5`), then the spec
+reloads the page, and the socket that comes back is the one that dies. Both
+obvious candidates have been closed off: `RoomSocket.connect` now closes the
+socket it supersedes, and `dispose()` reaches `socket.destroy()`.
 
 Worth carrying into that: the five-second budget is measured from the server's
 accept but can only be answered when the client's main thread is free. On the
