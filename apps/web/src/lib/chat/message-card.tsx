@@ -3,6 +3,7 @@
 import type { AuthSession, MediaStatusFrame } from "@learning-orbit/contracts";
 import React, { useEffect, useRef, useState } from "react";
 
+import { UntrustedText } from "../../security/render-untrusted";
 import { MediaAttachment } from "../media/media-attachment";
 import type { MediaGateway } from "../media/media-upload";
 import type { LedgerMessage } from "../session/event-ledger";
@@ -110,7 +111,9 @@ export function MessageCard({
           </button>
         ) : null}
         <div className="bubble">
-          {message.operation === "retract" ? <span>訊息已由伺服器標記為撤回</span> : <span>{message.text}</span>}
+          {message.operation === "retract"
+            ? <span>訊息已由伺服器標記為撤回</span>
+            : <UntrustedText value={message.text} />}
           {message.operation !== "retract" && message.mediaIds.length && roomId && mediaGateway
             ? message.mediaIds.map((mediaId) => (
               <MediaAttachment
