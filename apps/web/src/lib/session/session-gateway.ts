@@ -14,7 +14,10 @@ import {
   teacherRoomExportContract,
   type ApiError,
   type AgentCurrentState,
+  type AgentRunAccepted,
   type AgentSettingsInput,
+  type CancelAgentRunAccepted,
+  type RequestAgentRunInput,
   type AgentSettingsResponse,
   type AnalyticsPatchPage,
   type AnalyticsReviewAccepted,
@@ -76,6 +79,8 @@ export interface SessionGateway {
   getMedia(roomId: string, mediaId: string): Promise<MediaAttachmentView>;
   getMediaDownloadGrant(roomId: string, mediaId: string): Promise<MediaDownloadGrant>;
   getAgentCurrent(roomId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AgentCurrentState>;
+  requestAgentRun(roomId: string, triggerEventId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<AgentRunAccepted>;
+  cancelAgentRun(roomId: string, agentRunId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<CancelAgentRunAccepted>;
   setAgentSettings(roomId: string, input: AgentSettingsInput, options?: AnalyticsRequestOptions): Promise<AgentSettingsResponse>;
   getDerivedTextArtifacts(roomId: string, query?: DerivedTextArtifactQuery, options?: AnalyticsRequestOptions): Promise<DerivedTextArtifactPage>;
   submitAnalyticsReview(roomId: string, input: AnalyticsReviewCommand, options?: AnalyticsRequestOptions): Promise<AnalyticsReviewAccepted>;
@@ -587,6 +592,66 @@ export class FetchSessionGateway implements SessionGateway {
       if (current.roomId !== roomId) return responseInvalid();
       return current;
     }
+    catch { return responseInvalid(); }
+  }
+
+  /**
+   * Ask Nova to answer one committed message.
+   *
+   * The trigger is a room event the server already accepted, never text the
+   * client is optimistically showing: a run must be attributable to something
+   * in the ledger, or its answer cites a message that may never have existed.
+   */
+  async requestAgentRun(
+    roomId: string,
+    triggerEventId: string,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<AgentRunAccepted> {
+    let body: RequestAgentRunInput;
+    try { body = agentContract.parseRequest({ triggerEventId }); }
+    catch { return responseInvalid(); }
+    const response = await this.#request(routes.agent.request(roomId), {
+      method: "POST",
+      body: JSON.stringify(body),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status !== 202 && response.status !== 200) {
+      return legalError(response, {
+        401: ["AUTH_REQUIRED"],
+        403: ["FORBIDDEN", "AGENT_DISABLED"],
+        404: ["ROOM_NOT_FOUND"],
+        409: ["ROOM_DELETION_IN_PROGRESS", "ROOM_NOT_OPEN", "AGENT_RUN_ALREADY_ACTIVE"],
+        429: ["RATE_LIMITED"],
+        500: ["INTERNAL"],
+        503: ["AGENT_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return agentContract.parseAccepted(await jsonBody(response)); }
+    catch { return responseInvalid(); }
+  }
+
+  /** Withdraw a run in flight. The server owns whether it is still cancellable. */
+  async cancelAgentRun(
+    roomId: string,
+    agentRunId: string,
+    options: Readonly<{ signal?: AbortSignal }> = {},
+  ): Promise<CancelAgentRunAccepted> {
+    const response = await this.#request(routes.agent.cancel(roomId, agentRunId), {
+      method: "POST",
+      body: JSON.stringify({}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (response.status !== 202 && response.status !== 200) {
+      return legalError(response, {
+        401: ["AUTH_REQUIRED"],
+        403: ["FORBIDDEN"],
+        404: ["ROOM_NOT_FOUND", "AGENT_RUN_NOT_FOUND"],
+        409: ["ROOM_DELETION_IN_PROGRESS", "AGENT_RUN_NOT_ACTIVE"],
+        500: ["INTERNAL"],
+        503: ["AGENT_SERVICE_UNAVAILABLE"],
+      });
+    }
+    try { return agentContract.parseCancelAccepted(await jsonBody(response)); }
     catch { return responseInvalid(); }
   }
 

@@ -150,6 +150,8 @@ function gateway(session: AuthSession = student, overrides: Partial<SessionGatew
       agentEnabled: false,
       updatedAt: "2026-08-31T01:00:00.000Z",
     })),
+    requestAgentRun: vi.fn(async () => ({ agentRunId: "00000000-0000-4000-8000-000000000901", state: "queued" as const })),
+    cancelAgentRun: vi.fn(async () => ({ agentRunId: "00000000-0000-4000-8000-000000000901", state: "cancelled" as const })),
     setAgentSettings: vi.fn(async (_requestedRoomId: string, input) => ({ enabled: input.enabled, cancelledRunId: null })),
     getDerivedTextArtifacts: vi.fn(async () => ({ items: [], throughRoomSeq: 0, nextAfterArtifactId: null, includeHistory: false })),
     submitAnalyticsReview: vi.fn(async () => { throw new SessionGatewayError("ANALYTICS_NOT_READY"); }),
