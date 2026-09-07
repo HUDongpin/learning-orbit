@@ -1,7 +1,11 @@
 export const MAILPIT_BASE_URL = "http://127.0.0.1:8025";
 const MAILPIT_SEARCH_LIMIT = 50;
 const MAX_JSON_BYTES = 1024 * 1024;
-const consumeOrigin = "https://127.0.0.1:3000";
+// The origin the pilot harness serves on. It is configurable for the same
+// reason the e2e base URL is — a machine whose 3000 is taken by another
+// project must still be able to run the suite — and it is still pinned, so a
+// link pointing anywhere but the origin under test is refused.
+const consumeOrigin = process.env.LO_E2E_BASE_URL ?? "https://127.0.0.1:3000";
 const consumePath = "/v1/auth/teacher/magic-link/consume";
 
 const fail = (code) => {

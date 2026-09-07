@@ -269,3 +269,34 @@ Next 16's dev server runs as a reusable daemon. If `--port` appears to be
 ignored, an older daemon for this repository is still alive and the new
 invocation attached to it; `pgrep -f next-server` finds it and the port it
 actually bound.
+
+### A finding from running the browser suite off the default ports
+
+Running the suite on 3400/3401 instead of 3000/3001 reached this state:
+
+- `local-public-boundary` passes.
+- `real-classroom-journey` signs the teacher in, creates a room and joins four
+  students, then times out waiting for the room-open event.
+- No `room_event` rows are committed at all, so the commands never arrived.
+- A WebSocket upgrade sent **directly** to the API answers `101`; the same
+  upgrade sent **through the Next dev rewrite proxy** times out.
+
+So the same-origin dev proxy carries `/v1` HTTP requests and does not carry the
+WebSocket upgrade. Every room command travels over that socket, which is why
+the journey stops exactly where it does.
+
+This was observed on non-default ports. Whether the harness's own 3000/3001 run
+behaves the same way is untested here, because 3000 was held by another
+project. If it does, the `browser-playwright` gate has never actually passed
+and its manifest count is aspirational — worth settling before anyone treats a
+green pilot receipt as covering the browser journey.
+
+Two things a run needs that are easy to miss:
+
+- Browse `localhost`, not `127.0.0.1`, over plain HTTP. Next 16 dev refuses
+  cross-origin dev requests from an origin it did not bind, and the failure is
+  silent: the HTML arrives, hydration does not, and every assertion about a
+  heading fails as "element not found".
+- `real-classroom-journey` needs HTTPS. The session cookie is `Secure`, so a
+  browser will not store it over plain HTTP, and lowering that assertion to
+  make the suite run would be testing something weaker than production.
