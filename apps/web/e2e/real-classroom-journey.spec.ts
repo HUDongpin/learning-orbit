@@ -163,7 +163,20 @@ async function assertProtectedSurfaceQuality(page: Page, code: string): Promise<
     await cdp.send("Emulation.clearDeviceMetricsOverride");
     await cdp.detach();
   }
+  // Restoring the width is part of this helper's contract: every later step
+  // assumes a desktop workspace, and below 768px the analysis column is
+  // `display: none` so its regions leave the accessibility tree entirely.
+  //
+  // The restore has to be forced. The loop above already ended at 1440, so
+  // Playwright believes that is the current size and skips a request for it —
+  // while the CDP override changed the real metrics behind its back. Asking
+  // for a size it does not already believe makes it issue the command, and
+  // the width is then verified rather than assumed, because a silent failure
+  // here surfaces much later as a control that "does not exist".
+  await page.setViewportSize({ width: 1439, height: 900 });
   await page.setViewportSize({ width: 1440, height: 900 });
+  const restoredWidth = await page.evaluate(() => innerWidth);
+  if (restoredWidth !== 1440) fail(`PILOT_VIEWPORT_NOT_RESTORED_${code}_${restoredWidth}`);
   const axe = await new AxeBuilder({ page }).analyze();
   if (axe.violations.length !== 0) {
     const ruleIds = [...new Set(axe.violations.map(({ id }) => id))]

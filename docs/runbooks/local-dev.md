@@ -321,50 +321,32 @@ product bugs. `--keep-data` skips that, for inspecting what a failed run left.
 the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
 
-**Known, still open — one step from the end.**
+**The browser suite passes.** `pnpm e2e:local` runs both specs green, three
+consecutive times, matching the `browser-playwright` gate's expected count of
+two.
 
-`local-public-boundary` passes. `real-classroom-journey` now drives sign-in,
-room creation, four students joining, room open, chat, revision, reply, pause,
-resume, the fail-closed media surface and the role-scoped analytics
-boundaries — and stops at the last step: the teacher's TRACE panel never shows
-its window tabs (`最近 10 分鐘`).
+Two defects had to be fixed to get there, and they are worth knowing about.
 
-**And that last one is the spec, not the product.** Measured at the moment of
-failure, the teacher page reports:
+**A student policy notice killed the teacher's socket.** The listener
+broadcast a `degraded` frame naming a student projection key to every socket
+in the room. A teacher holds neither student key, so acting on it threw
+`PROJECTION_ROLE_FORBIDDEN`, which the frame handler cannot tell from a corrupt
+frame — the client closed its own socket with `4400` and stopped reconnecting.
+A teacher lost live sync for the rest of a lesson because the server mentioned
+a student's panel. The server now targets that notice at students, and the
+client ignores one naming a surface it does not hold.
 
-```
-headings=…,共學對話,概念與論證,互動網絡 | surface=chat | col=none | w=320
-```
+**The viewport helper silently stopped restoring the width.**
+`assertProtectedSurfaceQuality` ends with a CDP zoom-reflow check, and after
+clearing the override its `setViewportSize(1440)` was a no-op — Playwright
+already believed the page was 1440 from the loop's last iteration, while CDP
+had changed the real metrics behind its back. Every later step then ran at
+320px, where the workspace correctly shows one surface at a time and the
+analysis column is `display: none`, so its regions leave the accessibility
+tree and controls that exist cannot be found. The restore now asks for a size
+Playwright does not already believe, and verifies the result rather than
+assuming it.
 
-The 互動網絡 panel is rendered — its heading is right there. The page is 320px
-wide, where the workspace deliberately shows one surface at a time, so
-`.analysis-column` is `display: none` and its regions leave the accessibility
-tree. `getByRole` cannot see them, and the assertion fails against a panel that
-is present and correct.
-
-`setViewportSize` does not fix it: the page still reports `innerWidth` 320
-immediately after being told 1440. A CDP `Emulation.setDeviceMetricsOverride`
-outranks the viewport API, and `assertProtectedSurfaceQuality` leaves one in
-force after its zoom-reflow check, so every later viewport call on that page is
-silently ignored. Any later assertion that depends on width is running at
-whichever size that helper finished at.
-
-Two ways to fix it, both in the spec: restore the width through CDP rather
-than `setViewportSize`, or have the analytics steps select the 互動網絡 surface
-tab so they work at any width. The second is closer to what a person on a
-phone actually does.
-
-The failure that used to hide all of this — the teacher's socket closing with
-`4400` — was a real defect and is fixed: a student-scoped `degraded` notice
-was broadcast room-wide, the teacher acted on a projection key its role does
-not hold, and the resulting `PROJECTION_ROLE_FORBIDDEN` was indistinguishable
-from a corrupt frame, so the client closed its own socket and stopped
-reconnecting. The server now targets that notice at students and the client
-ignores one naming a surface it does not hold.
-
-What made it findable: per-socket instrumentation recording the close code, the
-number of frames the client had sent, and the *shapes* of the last frames
-received — keys only, never values, because the payloads are classroom
-content. `4400/5[…>degraded{code,projectionKey,scope,type,updatedAt}]` named
-the culprit in one run after ten that had not.
+If a width-dependent assertion ever fails again, check `innerWidth` before
+concluding anything about the component.
 
