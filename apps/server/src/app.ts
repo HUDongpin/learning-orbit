@@ -35,6 +35,7 @@ import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
 import { MediaRepository } from "./modules/media/media-repository.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
+import { SecurityAuditLog } from "./modules/security/security-audit.js";
 import { StudentAnalyticsPolicyListener } from "./modules/lifecycle/student-analytics-policy-listener.js";
 import { StudentAnalyticsPromotionService } from "./modules/lifecycle/student-analytics-promotion.js";
 import { MediaStagingJanitor } from "./modules/media/media-staging-janitor.js";
@@ -140,8 +141,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const assertionTrust = options.serviceAssertionTrust ?? (config.serviceAssertionTrustFile
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   const jobClaims = options.jobClaims ?? new JobClaimAuthority();
+  // One audit writer for every authorization decision the process makes.
+  const securityAudit = pool && process.env.LO_AUDIT_SALT
+    ? new SecurityAuditLog(pool, process.env.LO_AUDIT_SALT)
+    : undefined;
   const analytics = options.analytics ?? (pool ? {
-    policy: new AnalyticsPolicy(pool),
+    policy: new AnalyticsPolicy(pool, securityAudit),
     repository: new AnalyticsRepository(pool),
   } : undefined);
   const realtime = options.realtime ?? (pool ? (() => {
@@ -282,6 +287,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     agentComplete,
     mediaInternalOutcome,
     lifecycleMediaSurface,
+    securityAudit,
     analytics,
     analyticsTeacher,
     governance,

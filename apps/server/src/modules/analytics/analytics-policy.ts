@@ -1,5 +1,9 @@
+import { randomUUID } from "node:crypto";
+
 import type { Pool } from "pg";
 import type { AuthSession } from "@learning-orbit/contracts";
+
+import type { SecurityAuditLog } from "../security/security-audit.js";
 
 export const STUDENT_PROJECTIONS = new Set([
   "echo.student_approved",
@@ -29,9 +33,55 @@ export interface AnalyticsGrant {
  * governance migration installs a signed per-projection grant.
  */
 export class AnalyticsPolicy {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly audit?: Pick<SecurityAuditLog, "record">,
+  ) {}
 
+  /**
+   * Every analytics decision is recorded, allowed or refused alike. A trail
+   * that holds only refusals cannot show who saw what, and one that holds only
+   * grants cannot show what was attempted.
+   */
   async requireRoomAccess(
+    principal: AuthSession | null,
+    roomId: string,
+    capability: AnalyticsCapability,
+    sessionId?: string,
+  ): Promise<AnalyticsGrant> {
+    try {
+      const grant = await this.#evaluate(principal, roomId, capability, sessionId);
+      await this.#audit(principal, roomId, "allowed", grant.role.toUpperCase());
+      return grant;
+    } catch (error) {
+      const rejected = error instanceof AnalyticsPolicyError;
+      await this.#audit(
+        principal,
+        roomId,
+        rejected ? "rejected" : "failed",
+        rejected ? error.code : "ANALYTICS_ACCESS_FAILED",
+      );
+      throw error;
+    }
+  }
+
+  async #audit(
+    principal: AuthSession | null,
+    roomId: string,
+    outcome: "allowed" | "rejected" | "failed",
+    reasonCode: string,
+  ): Promise<void> {
+    await this.audit?.record({
+      principalKind: principal?.role ?? "anonymous",
+      action: "analytics.read",
+      outcome,
+      reasonCode,
+      correlationId: randomUUID(),
+      roomId,
+    });
+  }
+
+  async #evaluate(
     principal: AuthSession | null,
     roomId: string,
     _capability: AnalyticsCapability,

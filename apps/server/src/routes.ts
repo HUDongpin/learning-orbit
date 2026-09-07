@@ -38,7 +38,10 @@ import { AgentError } from "./modules/agent/agent-service.js";
 import type { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
 import type { InternalAgentCompleteRoute } from "./modules/agent/internal-agent-complete-route.js";
 import type { MediaInternalOutcomeRoute } from "./modules/media/media-internal-outcome-route.js";
+import { randomUUID } from "node:crypto";
+
 import type { InternalMediaSurfaceRoute } from "./modules/lifecycle/internal-media-surface-route.js";
+import type { SecurityAuditLog } from "./modules/security/security-audit.js";
 import { agentContract } from "@learning-orbit/contracts";
 import { AnalyticsPolicy, AnalyticsPolicyError, type AnalyticsCapability, type AnalyticsGrant } from "./modules/analytics/analytics-policy.js";
 import { AnalyticsRepository, AnalyticsRepositoryError, patchWire, projectionWire, type ProjectionKey } from "./modules/analytics/analytics-repository.js";
@@ -63,12 +66,42 @@ interface AuthRouteDependencies {
   agentComplete: InternalAgentCompleteRoute | undefined;
   mediaInternalOutcome: MediaInternalOutcomeRoute | undefined;
   lifecycleMediaSurface: InternalMediaSurfaceRoute | undefined;
+  securityAudit?: Pick<SecurityAuditLog, "record"> | undefined;
   analytics?: {
     policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
     repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
   } | undefined;
   analyticsTeacher?: Pick<AnalyticsTeacherService, "authorize" | "listArtifacts" | "review" | "reviewDetail"> | undefined;
   governance?: GovernanceService | undefined;
+}
+
+/**
+ * Record the outcome of one signed worker callback.
+ *
+ * A worker callback is an authorization decision like any other - the
+ * assertion is either trusted or it is not - and it was the only class of
+ * decision with no trail at all.
+ */
+async function auditServiceCallback(
+  audit: Pick<SecurityAuditLog, "record"> | undefined,
+  body: unknown,
+  outcome: "allowed" | "rejected" | "failed",
+  reasonCode: string,
+): Promise<void> {
+  if (!audit) return;
+  const record = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+  const roomId = typeof record.roomId === "string" ? record.roomId : null;
+  const correlationId = typeof record.correlationId === "string"
+    ? record.correlationId
+    : randomUUID();
+  await audit.record({
+    principalKind: "service",
+    action: "service.callback",
+    outcome,
+    reasonCode,
+    correlationId,
+    roomId,
+  });
 }
 
 const genericAccepted = { accepted: true };
@@ -424,6 +457,9 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
       }
       const status = result.status === "completed" || result.status === "retryable" ? 200
         : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      await auditServiceCallback(dependencies.securityAudit, request.body,
+        result.status === "rejected" ? "rejected" : "allowed",
+        result.status === "rejected" ? result.code : `ROOM_AUTO_CLOSE_${result.status.toUpperCase()}`);
       return reply.code(status).type("application/json").send(JSON.parse(roomInternalAutoCloseContract.encodeResponse(result)));
     });
   }
@@ -695,11 +731,15 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
           request.headers["x-lo-service-assertion"], request.body,
         );
       } catch {
+        await auditServiceCallback(dependencies.securityAudit, request.body, "failed", "INTERNAL");
         return reply.code(500).type("application/json").send({ code: "INTERNAL" });
       }
       const parsed = agentContract.parseInternalResponse(result);
       const status = parsed.status !== "rejected" ? 200
         : parsed.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      await auditServiceCallback(dependencies.securityAudit, request.body,
+        parsed.status === "rejected" ? "rejected" : "allowed",
+        parsed.status === "rejected" ? parsed.code : "AGENT_COMPLETE_APPLIED");
       return reply.code(status).type("application/json").send(parsed);
     });
   }
@@ -712,10 +752,14 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
           request.headers["x-lo-service-assertion"], request.body,
         );
       } catch {
+        await auditServiceCallback(dependencies.securityAudit, request.body, "failed", "INTERNAL");
         return reply.code(500).type("application/json").send({ code: "INTERNAL" });
       }
       const status = result.status !== "rejected" ? 200
         : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      await auditServiceCallback(dependencies.securityAudit, request.body,
+        result.status === "rejected" ? "rejected" : "allowed",
+        result.status === "rejected" ? result.code : "MEDIA_OUTCOME_APPLIED");
       return reply.code(status).type("application/json")
         .send(JSON.parse(mediaInternalOutcomeContract.encodeResponse(result)));
     });
@@ -729,10 +773,14 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
           request.headers["x-lo-service-assertion"], request.body,
         );
       } catch {
+        await auditServiceCallback(dependencies.securityAudit, request.body, "failed", "INTERNAL");
         return reply.code(500).type("application/json").send({ code: "INTERNAL" });
       }
       const status = result.status !== "rejected" ? 200
         : result.code === "SERVICE_ASSERTION_INVALID" ? 401 : 409;
+      await auditServiceCallback(dependencies.securityAudit, request.body,
+        result.status === "rejected" ? "rejected" : "allowed",
+        result.status === "rejected" ? result.code : `MEDIA_SURFACE_${result.status.toUpperCase()}`);
       return reply.code(status).type("application/json")
         .send(JSON.parse(lifecycleInternalMediaSurfaceContract.encodeResponse(result)));
     });
