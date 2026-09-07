@@ -333,12 +333,26 @@ The teacher's session and room reads are both 200, so it is not authorization.
 The lifecycle buttons are disabled because the page correctly shows its
 disconnected state; the buttons are a symptom, not the fault.
 
-The failure diagnostics now carry the socket close codes (`K…`), because a
-close without its code cannot say whether the server ended the socket
-(`4401`/`4403`/`4410`) or the transport dropped it (`1006`). That is the next
-thing to read, and it decides between a product defect and an artifact of the
-dev-mode proxy holding a long-lived socket. A `verify:local-pilot` run on the
-pinned ports would settle it independently.
+Every socket diagnostic now carries the close codes (`K…`), because a close
+without its code cannot say whether the server ended the socket
+(`4401`/`4403`/`4410`) or the transport dropped it (`1006`).
+
+Across ten assembled runs the stall moved between steps — room open, the first
+broadcast, a revision, pause, resume — rather than settling on one. A single
+product defect would stop in the same place; a moving stall points at timing.
+The most likely reason is that dev mode compiles each route on its first visit
+and this machine is carrying the compose stack and other projects, which makes
+the spec's 30-second waits marginal. That is a hypothesis, not a finding: it
+has not been separated from a real defect, and the diagnostics above are what
+would separate it.
+
+`--repeat-each` will not help: `pnpm e2e:local` mints one teacher address per
+invocation, so a second repeat fails provisioning with
+`PILOT_TEACHER_PROVISION_OUTPUT_INVALID`.
+
+A `verify:local-pilot` run settles it. Its disposable checkout, own containers
+and pinned ports are the environment the spec was written against, and a stall
+there would be a defect rather than an artifact of a shared machine.
 
 ### What the suite needs assembled around it
 

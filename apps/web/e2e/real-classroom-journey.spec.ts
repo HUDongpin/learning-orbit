@@ -104,7 +104,10 @@ function socketDiagnosticCode(socket: RoomSocketObservation): string {
   return `G${bounded(socket.generation)}N${bounded(socket.count)}`
     + `W${bounded(socket.welcome)}R${bounded(socket.resumeComplete)}E${bounded(socket.durableEvents)}`
     + `A${bounded(socket.acks)}D${bounded(socket.rejects)}`
-    + `C${bounded(socket.closed)}X${bounded(socket.socketErrors)}Y${socket.ready ? 1 : 0}`;
+    + `C${bounded(socket.closed)}X${bounded(socket.socketErrors)}Y${socket.ready ? 1 : 0}`
+    // 4401/4403/4410 mean the server ended the socket; 1006 means the
+    // transport dropped it. Without this a close says only that it happened.
+    + `K${socket.closeCodes.length === 0 ? "none" : socket.closeCodes.join("-")}`;
 }
 
 async function countUndersizedTargets(page: Page): Promise<number> {

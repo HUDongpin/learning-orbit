@@ -124,6 +124,11 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
     socket.on("close", () => {
       result.closed += 1;
       if (result.generation === generation) result.ready = false;
+      // Read the code the page saw. A close without its code cannot say
+      // whether the server ended the socket or the transport dropped it.
+      void page.evaluate(() => (window as unknown as { __loCloseCodes?: number[] }).__loCloseCodes ?? [])
+        .then((codes) => { result.closeCodes = codes; })
+        .catch(() => { /* the page may already be gone */ });
     });
     socket.on("socketerror", () => {
       result.socketErrors += 1;
