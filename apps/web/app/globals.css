@@ -251,6 +251,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .room-bar-topic { margin: 0; font-size: var(--fs-h3); line-height: 1.35; overflow-wrap: anywhere; }
 .room-bar-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin: 0; color: var(--ink-500); font-size: var(--fs-meta); }
 .room-bar-actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; justify-content: flex-end; }
+/* Anything scrolled into view has to clear the sticky room bar, and on narrow
+   screens the fixed tab bar as well. Without this a control can be scrolled to
+   and still sit underneath the header: the click lands on the header, the
+   focus ring is hidden behind it, and a teacher reaching for the button that
+   starts the lesson finds it does not respond. */
+.room-gate-shell :is(button, a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"])) { scroll-margin-block: calc(var(--roombar-h) + var(--s-3)) calc(var(--tabbar-h) + var(--s-3)); }
 .orbit-clock { font-size: var(--fs-meta); font-weight: 700; color: var(--ink-500); white-space: nowrap; }
 
 /* -- crew strip: four anonymous seats made visibly, honestly present.

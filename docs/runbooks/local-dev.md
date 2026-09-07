@@ -270,33 +270,45 @@ ignored, an older daemon for this repository is still alive and the new
 invocation attached to it; `pgrep -f next-server` finds it and the port it
 actually bound.
 
-### A finding from running the browser suite off the default ports
+### Running the browser suite off the default ports
 
-Running the suite on 3400/3401 instead of 3000/3001 reached this state:
+The suite runs on any pair of ports. `local-public-boundary` passes on
+3400/3401.
 
-- `local-public-boundary` passes.
-- `real-classroom-journey` signs the teacher in, creates a room and joins four
-  students, then times out waiting for the room-open event.
-- No `room_event` rows are committed at all, so the commands never arrived.
-- A WebSocket upgrade sent **directly** to the API answers `101`; the same
-  upgrade sent **through the Next dev rewrite proxy** times out.
+Two traps are easy to hit and both fail in confusing ways:
 
-So the same-origin dev proxy carries `/v1` HTTP requests and does not carry the
-WebSocket upgrade. Every room command travels over that socket, which is why
-the journey stops exactly where it does.
-
-This was observed on non-default ports. Whether the harness's own 3000/3001 run
-behaves the same way is untested here, because 3000 was held by another
-project. If it does, the `browser-playwright` gate has never actually passed
-and its manifest count is aspirational — worth settling before anyone treats a
-green pilot receipt as covering the browser journey.
-
-Two things a run needs that are easy to miss:
-
-- Browse `localhost`, not `127.0.0.1`, over plain HTTP. Next 16 dev refuses
-  cross-origin dev requests from an origin it did not bind, and the failure is
-  silent: the HTML arrives, hydration does not, and every assertion about a
-  heading fails as "element not found".
+- Over plain HTTP the suite must browse `localhost`, not `127.0.0.1`. Next 16
+  dev refuses cross-origin dev requests silently: the HTML arrives, hydration
+  does not, and every assertion about a heading fails as "element not found".
 - `real-classroom-journey` needs HTTPS. The session cookie is `Secure`, so a
-  browser will not store it over plain HTTP, and lowering that assertion to
-  make the suite run would be testing something weaker than production.
+  browser will not store it over plain HTTP. Lowering that assertion to make
+  the suite run would be testing something weaker than production, so serve
+  the app with `--experimental-https` and a local certificate instead.
+
+**Do not use `curl` to test whether the WebSocket upgrade reaches the API.**
+curl cannot complete a WebSocket handshake, so it hangs and looks exactly like
+a proxy that is dropping the upgrade. Use a real client:
+
+```bash
+node -e 'const {WebSocket}=require("ws");const w=new WebSocket(process.argv[1],{rejectUnauthorized:false,origin:"https://127.0.0.1:3400"});w.on("open",()=>{console.log("OPEN");process.exit(0)});w.on("unexpected-response",(_q,r)=>{console.log("HTTP",r.statusCode);process.exit(0)})'   'wss://127.0.0.1:3400/v1/rooms/<roomId>/realtime'
+```
+
+Checked that way, the Next dev same-origin proxy does carry the upgrade: both
+the direct API socket and the proxied one open.
+
+### What the suite needs assembled around it
+
+`pnpm verify:local-pilot` assembles all of this. Doing it by hand, these are
+the pieces that each produce a distinct and confusing failure when missing:
+
+| Missing | Looks like |
+| --- | --- |
+| A fresh API process per run | `PILOT_MAILPIT_MESSAGE_TIMEOUT`. The magic-link endpoint is rate limited per process, and a few repeated runs exhaust it — the mail was never sent, not lost. |
+| Storage left configured on the API | `媒體 Provider 目前不可用` never appears; the journey asserts the fail-closed media surface, which needs the server started with no object store. |
+| `LO_STORAGE_BROWSER_ORIGINS` left set for the web process | Same assertion fails from the other side: the client believes storage is reachable. |
+| The Python worker not running | `.server-analysis-panel .analysis-version` resolves to zero elements. Projections only exist once the worker has consumed the events. |
+
+With all of it in place the journey drives sign-in, room creation, four
+students joining, room open, chat, the fail-closed media surface and
+role-scoped analytics, and the worker settles one `analytics.consume.v1` job
+per committed event.
