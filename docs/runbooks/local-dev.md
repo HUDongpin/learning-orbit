@@ -218,3 +218,33 @@ docker compose --env-file .env -f infra/docker-compose.yml down -v  # discard it
 
 `secrets/local-dev/` and `.env` are git-ignored and disposable; delete them and
 rerun `pnpm bootstrap` to start over.
+
+## Load harnesses
+
+There are two, and they measure different things.
+
+`pnpm load:pilot` drives the real protocol: magic-link sign-in, seat-code join,
+WebSocket clients, backpressure, and a contract-validated report. It is the
+harness the required-test manifest gates on, because it is the one that can say
+whether a committed event was lost or duplicated.
+
+`pnpm load:k6 --origin http://localhost:3210` runs the digest-pinned
+`grafana/k6:2.2.0` image against the authenticated HTTP read surface. k6 cannot
+sign in through a magic link, redeem a single-use seat code, or speak the
+WebSocket protocol, so it cannot answer the question above — it answers a
+narrower one about latency and error rate under concurrent reads. Its
+thresholds are the assertion: a breach exits non-zero.
+
+The k6 run needs a server. Start one on a free port (3000 and 3200 are often
+taken by other projects) and point the harness at it:
+
+```bash
+DATABASE_URL="$TEST_DATABASE_URL" PORT=3210 \
+  LO_PUBLIC_BASE_ORIGIN=http://localhost:3210 \
+  LO_ALLOWED_ORIGINS=http://localhost:3210 \
+  pnpm --filter @learning-orbit/server exec tsx src/main.ts
+```
+
+A loopback origin is rewritten to `host.docker.internal` inside the container;
+the host environment is never forwarded, and only `tests/load` (read-only) and
+`test-results/load` are mounted.

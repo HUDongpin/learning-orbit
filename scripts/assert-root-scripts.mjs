@@ -17,6 +17,7 @@ const expectedScripts = {
   "teacher:provision": "pnpm --filter @learning-orbit/server teacher:provision",
   playwright: "playwright test --config apps/web/playwright.config.ts",
   "load:pilot": "node tests/load/run-local-pilot.mjs",
+  "load:k6": "node scripts/run-k6-pilot.mjs",
   "verify:local-pilot": "node scripts/verify-local-pilot.mjs",
   "verify:pilot": "node scripts/verify-release-evidence.mjs",
   "verify:worker-sql": "node scripts/verify-worker-runtime-sql.mjs",

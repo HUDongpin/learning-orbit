@@ -35,10 +35,17 @@ describe("session bootstrap", () => {
     const teacher = await app.inject({ method: "GET", url: "/v1/auth/session", headers: { origin: allowedOrigin, cookie: `lo_session=${teacherToken}` } });
     const student = await app.inject({ method: "GET", url: "/v1/auth/session", headers: { origin: allowedOrigin, cookie: `lo_session=${studentToken}` } });
     expect(none.statusCode).toBe(401);
+    // Every branch answers with the caller's authentication state, so none may
+    // be stored: a cached 200 outlives the sign-out that should have ended it,
+    // and a cached 401 outlives the sign-in that should have replaced it.
+    for (const response of [none, teacher, student]) {
+      expect(response.headers["cache-control"]).toBe("no-store");
+    }
     expect(teacher.json()).toEqual({ role: "teacher", teacherId, actorId: teacherId });
     expect(student.json()).toEqual({ role: "student", roomId, roomMemberId: memberId, actorId, pseudonym: "探索者 A", nova: { actorId: novaId, actorKind: "agent", actorRole: "socratic_facilitator", displayName: "Nova Agent" } });
     const logout = await app.inject({ method: "DELETE", url: "/v1/auth/session", headers: { origin: allowedOrigin, cookie: `lo_session=${studentToken}` } });
     expect(logout.statusCode).toBe(204); expect(logout.headers["set-cookie"]).toContain("Max-Age=0");
+    expect(logout.headers["cache-control"]).toBe("no-store");
     expect((await app.inject({ method: "GET", url: "/v1/auth/session", headers: { origin: allowedOrigin, cookie: `lo_session=${studentToken}` } })).statusCode).toBe(401);
     await app.close();
   });

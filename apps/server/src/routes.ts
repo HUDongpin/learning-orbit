@@ -203,12 +203,17 @@ export async function registerRoutes(app: FastifyInstance, dependencies: AuthRou
   });
 
   app.get("/v1/auth/session", async (request, reply) => {
+    // Both branches answer with the caller's authentication state, so neither
+    // may be stored: a cached 200 outlives the sign-out that should have ended
+    // it, and a cached 401 outlives the sign-in that should have replaced it.
+    reply.header("Cache-Control", "no-store");
     const session = await dependencies.sessions?.get(request.cookies.lo_session);
     if (!session) return reply.code(401).type("application/json").send({ code: "AUTH_REQUIRED" });
     return reply.type("application/json").send(authContract.encodeSession(session));
   });
 
   app.delete("/v1/auth/session", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
     await dependencies.sessions?.revoke(request.cookies.lo_session);
     reply.clearCookie("lo_session", { httpOnly: true, secure: true, sameSite: "lax", path: "/" });
     return reply.code(204).send();

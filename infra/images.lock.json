@@ -17,6 +17,12 @@
       "reference": "axllent/mailpit:v1.31.0",
       "digest": "sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24",
       "usedBy": "infra/docker-compose.pilot.yml, infra/docker-compose.yml"
+    },
+    "k6": {
+      "reference": "grafana/k6:2.2.0",
+      "digest": "sha256:9bd01d6941fca969cb61bb57d2da5ee9b385fe2aa8881df3798c196564d6ace6",
+      "usedBy": "scripts/run-k6-pilot.mjs",
+      "resolvedAt": "2026-09-07"
     }
   }
 }
