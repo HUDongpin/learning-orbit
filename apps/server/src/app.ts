@@ -191,7 +191,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ? new DefaultGovernanceService(pool, {
       auditSalt: process.env.LO_AUDIT_SALT,
       clock: () => clock.now(),
-      ...(realtime ? { evictRoom: realtime.hub.evictRoom.bind(realtime.hub) } : {}),
+      ...(realtime
+        ? { evictRoom: (roomId: string, code?: number) => { realtime.hub.evictRoom(roomId, code); } }
+        : {}),
     })
     : undefined);
   await registerRoutes(app, {
