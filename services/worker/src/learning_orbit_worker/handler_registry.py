@@ -74,6 +74,7 @@ class WorkerDeps:
     # implementations; absent capabilities are never treated as success.
     media_processor: Any = None
     agent_executor: Any = None
+    multimodal_provider: Any = None
 
     def __post_init__(self) -> None:
         if self.job_claims is None:

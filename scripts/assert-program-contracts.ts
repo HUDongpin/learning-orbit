@@ -165,6 +165,7 @@ async function main(): Promise<void> {
     "services/worker/src/learning_orbit_worker/analytics_handlers.py",
     "services/worker/src/learning_orbit_worker/pipeline_handlers.py",
     "services/worker/src/learning_orbit_worker/lifecycle.py",
+    "services/worker/src/learning_orbit_worker/multimodal_handlers.py",
   ].map(source));
   const handlers = handlerSources.join("\n");
   for (const jobType of REQUIRED_JOB_TYPES) {

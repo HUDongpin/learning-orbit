@@ -21,6 +21,7 @@ from .jobs import JobStore
 from .projection_store import ProjectionStore
 from .pipeline_handlers import register_pipeline_handlers
 from .lifecycle import register_lifecycle_handlers
+from .multimodal_handlers import register_multimodal_handlers
 from .service_assertion import ServiceAssertionSigner
 from .agent.executor import DurableAgentExecutor
 
@@ -137,7 +138,7 @@ def supervisor_backoff_seconds(consecutive_failures: int) -> float:
 
 class WorkerSupervisor:
     def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0, telemetry: Telemetry | None = None) -> None:
-        self.registry = registry or register_lifecycle_handlers(register_pipeline_handlers(register_analytics_handlers(register_core_handlers(HandlerRegistry()))))
+        self.registry = registry or register_multimodal_handlers(register_lifecycle_handlers(register_pipeline_handlers(register_analytics_handlers(register_core_handlers(HandlerRegistry())))))
         self.jobs = JobStore(connection, worker_id)
         self.deps = deps or WorkerDeps(connection, self.jobs, projection_store=ProjectionStore(connection))
         self.poll_seconds = poll_seconds
