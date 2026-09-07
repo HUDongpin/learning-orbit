@@ -321,36 +321,43 @@ product bugs. `--keep-data` skips that, for inspecting what a failed run left.
 the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
 
-**Known, still open — and now diagnosed.** With everything assembled,
+**Known, still open — with the mechanism identified and four causes ruled out.**
+
 `local-public-boundary` passes. `real-classroom-journey` drives sign-in, room
 creation, four students joining, room open, pause and resume, then loses the
-teacher's view of new messages.
+teacher's view of new events.
 
-The close code says why: **4400, "hello required"**. The server gives a new
-socket five seconds to send its `hello` frame
-(`apps/server/src/modules/realtime/connection.ts`) and closes it otherwise.
-Only the teacher's socket hits this; all four student sockets report no close
-at all. The client is not at fault in design — `room-socket.ts` sends `hello`
-from the socket's own `open` handler — so the delay is the browser main thread
-not reaching that handler within five seconds while the teacher page hydrates.
+The close code names the mechanism: **4400, "hello required"**. The server
+gives a new socket five seconds to send its `hello` frame
+(`apps/server/src/modules/realtime/connection.ts`) and closes it otherwise. The
+teacher's diagnostic reads `G2 N2 W1 R1 C1 … K4400`: two sockets, only one of
+which ever completed a handshake. All four student sockets report no close.
 
-Two things follow, and they are different questions:
+The server is provably not at fault. After a failing run the message is
+committed at its room sequence and every `outbox_event` row is published — it
+was written and broadcast; the teacher's socket was not there to hear it.
 
-1. *In this environment*, the teacher page hydrates a large unminified dev
-   bundle on a machine also carrying the compose stack. That is the likely
-   cause here, and it is an artifact.
-2. *In general*, the five-second budget is measured from the server's accept
-   but can only be answered when the client's main thread is free. On a slow
-   device — the old classroom laptop this pilot is aimed at — the heaviest
-   page could plausibly exceed it, and the failure a teacher sees is
-   "即時同步已停止" mid-lesson. That is a real robustness question.
+Ruled out, each by a change that made no difference to the symptom:
 
-Raising the deadline is not obviously right: it exists to stop a socket that
-connects and never identifies itself from holding resources. The alternatives —
-opening the socket only once the page can answer, or starting the budget at the
-client's first byte — trade differently. It is a decision, not a bug fix, and
-it wants a measurement on real hardware first.
+- **Dev-mode compilation.** `e2e:local` warms every route first, and the
+  process log shows no compilation during a run.
+- **Dev bundle hydration cost.** The runner now builds and serves a production
+  bundle behind its own ingress.
+- **A superseded socket left abandoned.** `RoomSocket.connect` closed the
+  socket it replaced (a real fix, kept: an abandoned socket is one the client
+  will never speak on, which the server then holds for five seconds).
+- **Upgrade data lost in the ingress.** The upgrade socket is paused until the
+  upstream connects (also a real fix, also kept).
 
-A `verify:local-pilot` run settles (1): its disposable checkout and pinned
-ports are the environment the spec was written against.
+What remains unidentified is which path opens a socket that never sends its
+`hello`. A `verify:local-pilot` run on the pinned ports is the next step: its
+disposable checkout removes this working tree as a variable.
+
+Worth carrying into that: the five-second budget is measured from the server's
+accept but can only be answered when the client's main thread is free. On the
+old classroom laptop this pilot targets, the heaviest page could plausibly
+exceed it, and what a teacher sees is "即時同步已停止" mid-lesson. Raising the
+deadline is not obviously right — it exists to stop a socket that connects and
+never identifies itself from holding resources — so it wants a measurement on
+real hardware before anyone changes it.
 

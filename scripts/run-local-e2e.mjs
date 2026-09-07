@@ -20,14 +20,18 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createIngress } from "./local-e2e-ingress.mjs";
+
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WEB_PORT = Number(process.env.LO_E2E_WEB_PORT ?? "3400");
 const API_PORT = Number(process.env.LO_E2E_API_PORT ?? "3401");
+/** The built Next server, behind the ingress rather than facing the browser. */
+const NEXT_PORT = Number(process.env.LO_E2E_NEXT_PORT ?? "3402");
 const BASE_URL = `https://127.0.0.1:${WEB_PORT}`;
 
 /** Cleared for the API process: the journey asserts the no-provider surface. */
@@ -92,12 +96,12 @@ async function stopAll() {
   }
   // The web daemon outlives its wrapper on purpose, so it is stopped by the
   // port it holds. Anything this script started, this script stops.
-  await Promise.all([killByPort(WEB_PORT), killByPort(API_PORT)]);
+  await Promise.all([killByPort(WEB_PORT), killByPort(API_PORT), killByPort(NEXT_PORT)]);
   await new Promise((done) => setTimeout(done, 1_500));
   for (const { child } of children) {
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
   }
-  await Promise.all([killByPort(WEB_PORT), killByPort(API_PORT)]);
+  await Promise.all([killByPort(WEB_PORT), killByPort(API_PORT), killByPort(NEXT_PORT)]);
 }
 
 function probe(port, path, { secure }) {
@@ -190,15 +194,34 @@ async function main() {
   });
   await waitFor("API", API_PORT, "/v1/auth/session", false, [401]);
 
-  start("web", "pnpm", [
-    "--filter", "@learning-orbit/web", "exec", "next", "dev",
-    "--hostname", "127.0.0.1", "--port", String(WEB_PORT),
-    "--experimental-https",
-    "--experimental-https-key", tls.key,
-    "--experimental-https-cert", tls.certificate,
-  ], {
-    env: withoutStorage({ LO_LOCAL_SAME_ORIGIN_PROXY: "1", LO_LOCAL_API_PORT: String(API_PORT) }),
+  // A *built* Next server, not the dev one. The dev bundle is unminified, and
+  // hydrating it on a loaded machine can delay the WebSocket `hello` past the
+  // server's five-second budget — the socket then closes with 4400 and the
+  // page misses every event after it. A production build also makes this run
+  // resemble the deployment it is evidence about.
+  const build = start("build", "pnpm", ["--filter", "@learning-orbit/web", "exec", "next", "build"], {
+    env: withoutStorage({ LO_PUBLIC_BASE_ORIGIN: BASE_URL }),
   });
+  const built = await new Promise((done) => build.on("close", done));
+  if (built !== 0) throw new Error("E2E_WEB_BUILD_FAILED");
+
+  start("web", "pnpm", [
+    "--filter", "@learning-orbit/web", "exec", "next", "start",
+    "--hostname", "127.0.0.1", "--port", String(NEXT_PORT),
+  ], { detached: true, env: withoutStorage({}) });
+  await waitFor("NEXT", NEXT_PORT, "/login", false, [200]);
+
+  // The browser sees one origin, and this is where that comes from: TLS
+  // terminated once, /v1 to the API and everything else to the built app,
+  // WebSocket upgrades forwarded explicitly.
+  const ingress = createIngress({
+    key: await readFile(tls.key),
+    cert: await readFile(tls.certificate),
+    apiPort: API_PORT,
+    webPort: NEXT_PORT,
+  });
+  await new Promise((done) => ingress.listen(WEB_PORT, "127.0.0.1", done));
+  children.push({ label: "ingress", child: { kill: () => ingress.close() }, lines: [] });
   await waitFor("WEB", WEB_PORT, "/login", true, [200]);
 
   // Projections only exist once the worker has consumed the events, and the

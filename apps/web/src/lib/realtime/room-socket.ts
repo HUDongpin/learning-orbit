@@ -227,6 +227,17 @@ export class RoomSocket {
     this.#connectFactory = factory;
     this.#clearRetry();
     this.#onConnectionChange(false);
+    // Close the socket this one replaces. Abandoning it instead leaves a
+    // connection the client will never speak on: its `open` handler declines
+    // to send `hello` because it is no longer the current socket, so the
+    // server holds it for five seconds and then closes it as `4400 hello
+    // required`. That is a connection slot held for nothing and a puzzling
+    // code in the log, and this is the only place that can prevent it.
+    const previous = this.#socket;
+    this.#socket = undefined;
+    if (previous) {
+      try { previous.close?.(1000, "superseded"); } catch { /* already gone */ }
+    }
     const socket = factory();
     this.#socket = socket;
     socket.addEventListener?.("open", () => {
