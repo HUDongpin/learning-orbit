@@ -61,6 +61,9 @@ export class RoomHub {
     await this.broadcastEphemeral(roomId, frame);
   }
 
+  /** Rooms with at least one attached socket, for policy reconciliation. */
+  connectedRoomIds(): readonly string[] { return [...this.#rooms.keys()]; }
+
   /** Send a degraded notice to exactly one socket. */
   sendDegraded(
     connection: RealtimeConnection,
