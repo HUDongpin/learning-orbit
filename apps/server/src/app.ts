@@ -35,6 +35,7 @@ import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
 import { MediaRepository } from "./modules/media/media-repository.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
+import { MediaStagingJanitor } from "./modules/media/media-staging-janitor.js";
 import { S3MediaStore } from "./modules/media/s3-media-store.js";
 import { S3HttpTransport, S3_HTTP_TRANSPORT_CAPABILITIES } from "./modules/media/s3-http-transport.js";
 import type { MediaStore } from "./modules/media/media-store.js";
@@ -183,6 +184,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       capabilities: S3_HTTP_TRANSPORT_CAPABILITIES,
     })
     : undefined);
+  // Staging objects outlive their write fence until something sweeps them.
+  // A minute is far finer than the five-minute upload TTL and coarse enough
+  // that an idle room costs one indexed query.
+  const janitor = pool && configuredStore
+    ? new MediaStagingJanitor(pool, configuredStore, clock)
+    : undefined;
+  const janitorTimer = janitor
+    ? setInterval(() => { void janitor.sweep().catch(() => undefined); }, 60_000)
+    : undefined;
   const media: MediaDeps | undefined = config.storageBrowserOrigins.length === 0
     ? undefined
     : options.media
@@ -264,6 +274,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
   app.addHook("onClose", async () => {
     if (publisherTimer) clearInterval(publisherTimer);
+    if (janitorTimer) clearInterval(janitorTimer);
     if (ownsPool) await pool?.end();
     if (smtp) await smtp.transport.close();
   });
