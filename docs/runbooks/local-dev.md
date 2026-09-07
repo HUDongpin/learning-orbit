@@ -321,52 +321,36 @@ product bugs. `--keep-data` skips that, for inspecting what a failed run left.
 the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
 
-**Known, still open.** With everything assembled, `local-public-boundary`
-passes. `real-classroom-journey` drives sign-in, room creation, four students
-joining and room open, then stalls non-deterministically — across six runs it
-stopped at the first broadcast, at a message revision, at pause and at resume.
+**Known, still open — and now diagnosed.** With everything assembled,
+`local-public-boundary` passes. `real-classroom-journey` drives sign-in, room
+creation, four students joining, room open, pause and resume, then loses the
+teacher's view of new messages.
 
-Every failure reports the same shape. The teacher page is on surface `H2`
-("即時同步已停止"), its socket closed and not ready (`C1…Y0`), while all four
-student sockets stay ready (`C0…Y1`) on the same proxy for the same duration.
-The teacher's session and room reads are both 200, so it is not authorization.
-The lifecycle buttons are disabled because the page correctly shows its
-disconnected state; the buttons are a symptom, not the fault.
+The close code says why: **4400, "hello required"**. The server gives a new
+socket five seconds to send its `hello` frame
+(`apps/server/src/modules/realtime/connection.ts`) and closes it otherwise.
+Only the teacher's socket hits this; all four student sockets report no close
+at all. The client is not at fault in design — `room-socket.ts` sends `hello`
+from the socket's own `open` handler — so the delay is the browser main thread
+not reaching that handler within five seconds while the teacher page hydrates.
 
-Every socket diagnostic now carries the close codes (`K…`), because a close
-without its code cannot say whether the server ended the socket
-(`4401`/`4403`/`4410`) or the transport dropped it (`1006`).
+Two things follow, and they are different questions:
 
-Across ten assembled runs the stall moved between steps — room open, the first
-broadcast, a revision, pause, resume — rather than settling on one. A single
-product defect would stop in the same place; a moving stall points at timing.
-The most likely reason is that dev mode compiles each route on its first visit
-and this machine is carrying the compose stack and other projects, which makes
-the spec's 30-second waits marginal. That is a hypothesis, not a finding: it
-has not been separated from a real defect, and the diagnostics above are what
-would separate it.
+1. *In this environment*, the teacher page hydrates a large unminified dev
+   bundle on a machine also carrying the compose stack. That is the likely
+   cause here, and it is an artifact.
+2. *In general*, the five-second budget is measured from the server's accept
+   but can only be answered when the client's main thread is free. On a slow
+   device — the old classroom laptop this pilot is aimed at — the heaviest
+   page could plausibly exceed it, and the failure a teacher sees is
+   "即時同步已停止" mid-lesson. That is a real robustness question.
 
-`--repeat-each` will not help: `pnpm e2e:local` mints one teacher address per
-invocation, so a second repeat fails provisioning with
-`PILOT_TEACHER_PROVISION_OUTPUT_INVALID`.
+Raising the deadline is not obviously right: it exists to stop a socket that
+connects and never identifies itself from holding resources. The alternatives —
+opening the socket only once the page can answer, or starting the budget at the
+client's first byte — trade differently. It is a decision, not a bug fix, and
+it wants a measurement on real hardware first.
 
-A `verify:local-pilot` run settles it. Its disposable checkout, own containers
-and pinned ports are the environment the spec was written against, and a stall
-there would be a defect rather than an artifact of a shared machine.
+A `verify:local-pilot` run settles (1): its disposable checkout and pinned
+ports are the environment the spec was written against.
 
-### What the suite needs assembled around it
-
-`pnpm verify:local-pilot` assembles all of this. Doing it by hand, these are
-the pieces that each produce a distinct and confusing failure when missing:
-
-| Missing | Looks like |
-| --- | --- |
-| A fresh API process per run | `PILOT_MAILPIT_MESSAGE_TIMEOUT`. The magic-link endpoint is rate limited per process, and a few repeated runs exhaust it — the mail was never sent, not lost. |
-| Storage left configured on the API | `媒體 Provider 目前不可用` never appears; the journey asserts the fail-closed media surface, which needs the server started with no object store. |
-| `LO_STORAGE_BROWSER_ORIGINS` left set for the web process | Same assertion fails from the other side: the client believes storage is reachable. |
-| The Python worker not running | `.server-analysis-panel .analysis-version` resolves to zero elements. Projections only exist once the worker has consumed the events. |
-
-With all of it in place the journey drives sign-in, room creation, four
-students joining, room open, chat, the fail-closed media surface and
-role-scoped analytics, and the worker settles one `analytics.consume.v1` job
-per committed event.

@@ -627,7 +627,17 @@ test("real teacher and four-student classroom journey remains server-authoritati
         await students[1]!.page.getByRole("button", { name: /^回覆訊息 \d+$/u }).click();
         await students[1]!.page.getByLabel("輸入訊息").fill(replyMessage);
         await students[1]!.page.getByRole("button", { name: "發送訊息" }).click();
-        await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(replyMessage, { exact: true })).toBeVisible({ timeout: 30_000 });
+        try {
+          await expect(teacherPage.getByRole("region", { name: "共學對話" }).getByText(replyMessage, { exact: true })).toBeVisible({ timeout: 30_000 });
+        } catch {
+          // The teacher page is the one this spec reloads, so a reply it never
+          // sees is a question about the socket that came back, not about the
+          // message: the ledger and outbox are checked server-side elsewhere.
+          const boundary = await readTeacherBoundaryState(teacherPage, roomId);
+          fail(`PILOT_REPLY_NOT_VISIBLE_K${boundary.closeCodes.join("-") || "none"}`
+            + `_H${boundary.surface}Q${boundary.sessionStatus}O${boundary.roomStatus}`
+            + `_${socketDiagnosticCode(socketObservations[0]!)}`);
+        }
       });
 
       await test.step("revise message", async () => {

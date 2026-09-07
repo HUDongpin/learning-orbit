@@ -127,6 +127,18 @@ async function waitFor(label, port, path, secure, accept, seconds = 180) {
   throw new Error(`E2E_${label}_NOT_READY`);
 }
 
+/** Fetch each route once so dev-mode compilation happens before the clock starts. */
+async function warmRoutes() {
+  const room = "00000000-0000-4000-8000-000000000001";
+  for (const path of [
+    "/login", "/login?role=teacher", "/teacher",
+    `/session/${room}`, `/session/${room}/teacher`, `/rooms/${room}`,
+  ]) {
+    // Any answer means the route compiled; the status itself is not the point.
+    await probe(WEB_PORT, path, { secure: true });
+  }
+}
+
 async function tlsMaterial() {
   const directory = join(repository, "test-results", "e2e-tls");
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -200,6 +212,15 @@ async function main() {
       }),
     });
 
+  // Compile every route the suite touches before anything is timed.
+  //
+  // In dev mode Next compiles a route on its first request. The journey's
+  // assertions wait thirty seconds, which is generous for a warm route and
+  // marginal for a cold one on a loaded machine — and a first visit that lands
+  // inside a timed step reads as the application failing rather than as the
+  // compiler working. The harness does not need this because it runs in a
+  // checkout of its own; a working tree does.
+  await warmRoutes();
   await waitFor("WEB", WEB_PORT, "/login", true, [200], 30);
   const playwright = start("playwright", "pnpm", [
     "exec", "playwright", "test", "--config", "apps/web/playwright.config.ts",
