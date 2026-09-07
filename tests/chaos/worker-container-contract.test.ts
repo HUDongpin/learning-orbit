@@ -65,6 +65,22 @@ describe("worker container SQL contract", () => {
     expect(dockerfile).not.toMatch(/^FROM python:[^@\s]+\s*$/m);
   });
 
+  it("pins ffmpeg by digest instead of resolving it from an archive", async () => {
+    const dockerfile = await read("infra/docker/worker.Dockerfile");
+    const lock = JSON.parse(await read("infra/images.lock.json"));
+    const digest = lock.images.ffmpeg.digest;
+    expect(digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(dockerfile).toContain(`@${digest} AS ffmpeg`);
+    expect(dockerfile).toContain("COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg");
+    // The worker's only component that decodes attacker-supplied media must
+    // not be whatever an archive serves on the day of the build, and a package
+    // manager in this image would be exactly that. Comments are excluded: the
+    // Dockerfile explains why it does not use one, and that prose is not an
+    // instruction.
+    const instructions = dockerfile.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    expect(instructions.join("\n")).not.toMatch(/apt-get|apk add|yum install/u);
+  });
+
   it("installs from the hashed lock and lets a missing hash fail the build", async () => {
     const dockerfile = await read("infra/docker/worker.Dockerfile");
     expect(dockerfile).toContain("--require-hashes");

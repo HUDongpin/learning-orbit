@@ -9,6 +9,8 @@
 # image and compares them to the sources byte for byte.
 #
 # syntax=docker/dockerfile:1
+FROM mwader/static-ffmpeg:9.0.1@sha256:54e55b0cb8f672870fc38ceb2e6c411855cb3b39c505f5f3b2505ee01ed5f2b7 AS ffmpeg
+
 FROM python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,21 +20,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ffmpeg is deliberately NOT installed here yet.
+# ffmpeg, pinned by digest like everything else in this image.
 #
-# It is the one thing the worker would run that decodes attacker-supplied
-# media, and `apt-get install ffmpeg` resolves whatever the Debian archive
-# serves on the day of the build. Every other dependency in this repository is
-# pinned — the base image by digest, Python by hashed lock, Node by lockfile
-# under a supply-chain policy — and an unpinned install of exactly the
-# highest-risk component would be the one unreviewed thing in the image.
+# It is the worker's only component that decodes attacker-supplied media, so
+# `apt-get install ffmpeg` — which resolves whatever the archive serves on the
+# day of the build — would have been the one unreviewed thing here. A static
+# build copied from an image pinned by digest is reviewable and reproducible:
+# the bytes are fixed by the hash, and there is no package manager, no
+# transitive set and no network in the build.
 #
-# Pinning it properly needs either exact package versions against a Debian
-# snapshot repository or a reviewed ffmpeg image to copy from, and that is a
-# supply-chain decision rather than a code change. Until then the transcoder
-# reports MEDIA_TRANSCODE_UNAVAILABLE and the media row is failed with a stated
-# reason, which is the correct behaviour for a capability the deployment does
-# not have.
+# The binary is static, so it needs nothing from this base beyond a place to
+# live, and it is installed read-only and owned by root like the rest of /app.
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
 
 # Dependencies first, from the hashed lock only.  `--require-hashes` makes a
 # lock edit that forgot a hash fail the build instead of silently resolving.

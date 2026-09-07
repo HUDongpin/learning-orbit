@@ -48,6 +48,17 @@ Until both happen, the health probe reports `unavailable` and the server
 answers agent requests with a 503 — which is the correct behaviour, and is
 different from the system being broken.
 
+## Media transcoding
+
+ffmpeg is in the worker image, copied as a static binary from an image pinned
+by digest in `infra/images.lock.json`. There is no package manager in the
+image: the worker's only component that decodes attacker-supplied media should
+not be whatever an archive serves on the day of the build.
+
+Verified inside the built image, as the unprivileged runtime user: a WAV goes
+in and Opus-in-Ogg comes out. `tests/chaos/worker-container-contract.test.ts`
+asserts the pin so an `apt-get` cannot creep back in.
+
 ## What this does *not* unlock
 
 Turning the provider on does not make the pilot admissible for a classroom.

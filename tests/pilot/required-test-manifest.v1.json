@@ -82,7 +82,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/chaos-vitest.summary.json",
-      "expectedTests": 16
+      "expectedTests": 17
     },
     {
       "id": "security-vitest",
