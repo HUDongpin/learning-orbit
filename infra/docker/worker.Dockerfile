@@ -18,6 +18,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ffmpeg is deliberately NOT installed here yet.
+#
+# It is the one thing the worker would run that decodes attacker-supplied
+# media, and `apt-get install ffmpeg` resolves whatever the Debian archive
+# serves on the day of the build. Every other dependency in this repository is
+# pinned — the base image by digest, Python by hashed lock, Node by lockfile
+# under a supply-chain policy — and an unpinned install of exactly the
+# highest-risk component would be the one unreviewed thing in the image.
+#
+# Pinning it properly needs either exact package versions against a Debian
+# snapshot repository or a reviewed ffmpeg image to copy from, and that is a
+# supply-chain decision rather than a code change. Until then the transcoder
+# reports MEDIA_TRANSCODE_UNAVAILABLE and the media row is failed with a stated
+# reason, which is the correct behaviour for a capability the deployment does
+# not have.
+
 # Dependencies first, from the hashed lock only.  `--require-hashes` makes a
 # lock edit that forgot a hash fail the build instead of silently resolving.
 COPY services/worker/requirements.lock /tmp/requirements.lock

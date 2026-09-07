@@ -24,6 +24,11 @@ from .lifecycle import register_lifecycle_handlers
 from .multimodal_handlers import register_multimodal_handlers
 from .service_assertion import ServiceAssertionSigner
 from .agent.executor import DurableAgentExecutor
+from .media.processor import MediaProcessor
+from .media.scan import ClamAvScanner
+from .media.sigv4 import S3Credentials
+from .media.store import PrivateObjectStore
+from .media.transcode import FfmpegTranscoder
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +236,11 @@ def build_supervisor(
         )
         internal_http = client_factory(config.internal_base_origin, signer)
         jobs = JobStore(connection, config.worker_id)
+        # The media processor exists only when the private store is fully
+        # configured. A partly supplied store is always a mistake, and a
+        # processor that could not read the object would report failures that
+        # look like bad uploads.
+        media_processor = build_media_processor(connection, internal_http)
         deps = WorkerDeps(
             connection,
             jobs,
@@ -242,6 +252,7 @@ def build_supervisor(
             # never answers; with a fixture in its place students would get
             # canned text they could not tell from a real answer.
             agent_executor=DurableAgentExecutor(connection, internal_http),
+            **({"media_processor": media_processor} if media_processor else {}),
         )
         telemetry, span_sink = telemetry_from_env()
         supervisor = WorkerSupervisor(
@@ -258,6 +269,35 @@ def build_supervisor(
         if callable(close):
             close()
         raise
+
+
+def build_media_processor(connection: Any, internal_http: Any, env: Mapping[str, str] | None = None) -> Any:
+    """Compose the media processor, or return None when there is no store.
+
+    Absent is a supported state: `media.process.v1` then refuses every job with
+    a stated reason rather than reporting an upload as processed. Partly
+    supplied is not, because it is always a mistake.
+    """
+    env = os.environ if env is None else env
+    parts = {
+        name: env.get(f"LO_STORAGE_{name.upper()}", "")
+        for name in ("endpoint", "bucket", "access_key_id", "secret_access_key")
+    }
+    supplied = [value for value in parts.values() if value]
+    if not supplied:
+        return None
+    if len(supplied) != 4:
+        raise ValueError("LO_STORAGE_TRANSPORT_INCOMPLETE")
+    store = PrivateObjectStore(
+        parts["endpoint"], parts["bucket"],
+        S3Credentials(parts["access_key_id"], parts["secret_access_key"],
+                      env.get("LO_STORAGE_REGION") or "us-east-1"),
+    )
+    scanner = ClamAvScanner(
+        env.get("LO_CLAMAV_HOST") or "127.0.0.1",
+        int(env.get("LO_CLAMAV_PORT") or "3310"),
+    )
+    return MediaProcessor(connection, store, internal_http, scanner=scanner, transcoder=FfmpegTranscoder())
 
 
 def main() -> int:

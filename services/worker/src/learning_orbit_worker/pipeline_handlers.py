@@ -28,7 +28,11 @@ def media_process_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
     processor = deps.media_processor
     if not callable(processor):
         raise RetryableJobError("MEDIA_PROCESSOR_UNAVAILABLE")
-    result = processor(media_id=media_id, room_id=job.room_id, claim=deps.claim)
+    # The job travels with the call because the outcome is reported through
+    # the signed route, and that body is bound to this claim.
+    result = processor(media_id=media_id, room_id=job.room_id, claim=deps.claim, job=job)
+    if result is HandlerOutcome.LOST_LEASE or result == HandlerOutcome.LOST_LEASE:
+        return HandlerOutcome.LOST_LEASE
     if result is not HandlerOutcome.SUCCESS and result != HandlerOutcome.SUCCESS:
         raise RetryableJobError("MEDIA_PROCESS_NOT_SETTLED")
     return HandlerOutcome.SUCCESS

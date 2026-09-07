@@ -111,7 +111,7 @@
         "services/worker/tests"
       ],
       "report": "test-results/local-pilot/summaries/worker-python.summary.json",
-      "expectedTests": 239
+      "expectedTests": 264
     },
     {
       "id": "browser-playwright",
