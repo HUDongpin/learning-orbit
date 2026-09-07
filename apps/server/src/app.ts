@@ -51,6 +51,7 @@ import { ProjectionOutboxRepository } from "./modules/analytics/projection-outbo
 import { AgentService } from "./modules/agent/agent-service.js";
 import { ProviderHealthRepository } from "./modules/agent/provider-health-repository.js";
 import { InternalProviderHealthRoute } from "./modules/agent/internal-provider-health-route.js";
+import { AgentRunReconciler } from "./modules/agent/agent-run-reconciler.js";
 import { InternalAgentCompleteRoute } from "./modules/agent/internal-agent-complete-route.js";
 import { MediaInternalOutcomeRoute } from "./modules/media/media-internal-outcome-route.js";
 import { InternalMediaSurfaceRoute, type MediaSurfaceEraser } from "./modules/lifecycle/internal-media-surface-route.js";
@@ -201,6 +202,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const janitorTimer = janitor
     ? setInterval(() => { void janitor.sweep().catch(() => undefined); }, 60_000)
     : undefined;
+  // A run whose job died, or whose room closed underneath it, has no other
+  // owner. Left alone it also blocks every future run in that room.
+  const agentReconciler = pool ? new AgentRunReconciler(pool, clock) : undefined;
+  const agentReconcileTimer = agentReconciler
+    ? setInterval(() => { void agentReconciler.reconcile().catch(() => undefined); }, 30_000)
+    : undefined;
+
   // Retention is the half of the privacy promise nobody presses a button for.
   // An hour is far finer than a window measured in days, and coarse enough
   // that an idle deployment costs one indexed query an hour.
@@ -307,6 +315,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (publisherTimer) clearInterval(publisherTimer);
     if (janitorTimer) clearInterval(janitorTimer);
     if (retentionTimer) clearInterval(retentionTimer);
+    if (agentReconcileTimer) clearInterval(agentReconcileTimer);
     if (policyListener) await policyListener.stop();
     if (ownsPool) await pool?.end();
     if (smtp) await smtp.transport.close();

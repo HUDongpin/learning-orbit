@@ -31,7 +31,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/server-vitest.summary.json",
-      "expectedTests": 405
+      "expectedTests": 412
     },
     {
       "id": "web-vitest",
