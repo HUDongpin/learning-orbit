@@ -36,6 +36,7 @@ import { MediaAttachmentValidator } from "./modules/media/media-attachment-valid
 import { MediaRepository } from "./modules/media/media-repository.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
 import { SecurityAuditLog } from "./modules/security/security-audit.js";
+import { RetentionScheduler } from "./modules/lifecycle/retention-scheduler.js";
 import { StudentAnalyticsPolicyListener } from "./modules/lifecycle/student-analytics-policy-listener.js";
 import { StudentAnalyticsPromotionService } from "./modules/lifecycle/student-analytics-promotion.js";
 import { MediaStagingJanitor } from "./modules/media/media-staging-janitor.js";
@@ -200,6 +201,16 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const janitorTimer = janitor
     ? setInterval(() => { void janitor.sweep().catch(() => undefined); }, 60_000)
     : undefined;
+  // Retention is the half of the privacy promise nobody presses a button for.
+  // An hour is far finer than a window measured in days, and coarse enough
+  // that an idle deployment costs one indexed query an hour.
+  const retention = pool && process.env.LO_AUDIT_SALT
+    ? new RetentionScheduler(pool, clock, process.env.LO_AUDIT_SALT)
+    : undefined;
+  const retentionTimer = retention
+    ? setInterval(() => { void retention.sweep().catch(() => undefined); }, 3_600_000)
+    : undefined;
+
   // Student analytics visibility. The read path is already fail-closed; this
   // is the writer and the listener that makes a withdrawal reach sockets that
   // are already open, rather than only the next request.
@@ -295,6 +306,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.addHook("onClose", async () => {
     if (publisherTimer) clearInterval(publisherTimer);
     if (janitorTimer) clearInterval(janitorTimer);
+    if (retentionTimer) clearInterval(retentionTimer);
     if (policyListener) await policyListener.stop();
     if (ownsPool) await pool?.end();
     if (smtp) await smtp.transport.close();

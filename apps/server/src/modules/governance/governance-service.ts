@@ -29,7 +29,7 @@ function teacherOnly(principal: AuthSession | null): asserts principal is Extrac
   if (principal.role !== "teacher") throw new GovernanceError("ROOM_NOT_FOUND", 404);
 }
 
-function refHash(roomId: string, salt: string): string {
+export function refHash(roomId: string, salt: string): string {
   return createHash("sha256").update(`${salt}:room:${roomId}`).digest("hex");
 }
 
@@ -41,7 +41,7 @@ function stableUuid(parts: readonly string[]): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roomId: string, frozenAt: Date): Promise<void> {
+export async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roomId: string, frozenAt: Date): Promise<void> {
   const countQueries: Record<typeof SURFACES[number], string> = {
     events: "SELECT count(*)::text AS count FROM room_event WHERE room_id=$1",
     media: "SELECT count(*)::text AS count FROM media_asset WHERE room_id=$1",
@@ -77,7 +77,7 @@ async function freezeDeletionSurfaces(tx: PoolClient, deletionJobId: string, roo
   }
 }
 
-async function enqueueDeletionSurfaceJobs(
+export async function enqueueDeletionSurfaceJobs(
   tx: PoolClient,
   deletionJobId: string,
   correlationId: string,
