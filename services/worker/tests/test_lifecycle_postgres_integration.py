@@ -217,7 +217,10 @@ class LifecyclePostgresIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 conn.execute("SELECT status,last_error FROM worker_job WHERE job_id=%s", (job_id,)).fetchone(),
-                ("retryable", "MEDIA_PROVIDER_DEPENDENCY_PENDING"),
+                # With no route to the surface owner the saga stays retryable:
+                # the media surface belongs to TypeScript, and a receipt must
+                # never be issued for a deletion nobody could perform.
+                ("retryable", "MEDIA_SURFACE_PENDING"),
             )
         finally:
             conn.rollback()

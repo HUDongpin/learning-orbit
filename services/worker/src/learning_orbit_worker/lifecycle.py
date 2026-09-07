@@ -14,7 +14,8 @@ from uuid import UUID
 
 from .core_handlers import RetryableJobError, TerminalJobError
 from .handler_registry import HandlerOutcome, WorkerDeps
-from .jobs import WorkerJob
+from .internal_http import InternalHttpError
+from .jobs import StaleClaim, WorkerJob
 from .room_lock import lock_room_in_transaction
 
 SURFACES = ("events", "media", "derivatives", "artifacts", "projections", "agent_runs", "caches", "provider_copies")
@@ -168,6 +169,44 @@ def _valid_receipt(row: Any) -> bool:
     return len(normalized) == len(SURFACES) and set(normalized) == set(SURFACES)
 
 
+def _verify_media_surface(deps: WorkerDeps, claim: Any, deletion_id: str) -> None:
+    """Ask the server to verify and clear the media surface it owns."""
+    if deps.internal_http is None:
+        raise RetryableJobError("MEDIA_SURFACE_PENDING")
+    body = {
+        "jobId": claim.job_id,
+        "jobType": claim.job_type,
+        "roomId": claim.room_id,
+        "sourceEventId": claim.source_event_id,
+        "dedupeKey": claim.dedupe_key,
+        "deletionJobId": deletion_id,
+        "surface": "media",
+        "correlationId": claim.correlation_id,
+        "claimGeneration": claim.claim_generation,
+        "claimToken": claim.claim_token,
+        "workerId": claim.worker_id,
+    }
+    try:
+        response = deps.internal_http.post(
+            "/internal/lifecycle/media-surface", "internal.lifecycle.mediaSurface", body, claim,
+        )
+    except InternalHttpError as error:
+        if error.code in {"INTERNAL_HTTP_TIMEOUT", "INTERNAL_HTTP_TRANSPORT", "INTERNAL_HTTP_STATUS"}:
+            raise RetryableJobError("MEDIA_SURFACE_PENDING") from error
+        raise TerminalJobError("MEDIA_SURFACE_REJECTED") from error
+    result = response.body
+    if not isinstance(result, dict):
+        raise TerminalJobError("INTERNAL_HTTP_RESPONSE_SCHEMA")
+    status = result.get("status")
+    if status in {"completed", "already_verified"}:
+        return
+    if status == "retryable":
+        raise RetryableJobError("MEDIA_SURFACE_PENDING")
+    if status == "rejected" and result.get("code") == "JOB_CLAIM_STALE":
+        raise StaleClaim("JOB_CLAIM_STALE")
+    raise TerminalJobError("MEDIA_SURFACE_REJECTED")
+
+
 def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
     if deps.claim is None:
         raise TerminalJobError("LIFECYCLE_CLAIM_MISSING")
@@ -223,12 +262,27 @@ def delete_surface_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome:
             raise RetryableJobError("LIFECYCLE_DEPENDENCY_PENDING")
         current_count = _surface_count(deps.db, surface, room_id)
         expected = manifest["expected_item_count"]
-        if surface in {"media", "provider_copies"}:
-            # This minimal worker has no reviewed object-store/provider
-            # capability. A frozen non-zero count cannot be certified merely
-            # because a current SQL sweep happens to be empty.
+        if surface == "media" and (expected > 0 or current_count > 0):
+            # The media surface is owned by TypeScript - the grants, write
+            # fences and object keys all live there - so it is verified through
+            # its signed route rather than by a SQL sweep here. The route
+            # refuses to mark it verified until every in-flight media job is
+            # quiescent and a configured eraser has proven the stored objects
+            # gone, so a room whose media cannot be reached stays retryable
+            # instead of receiving a receipt that asserts a deletion nobody
+            # performed.
+            _verify_media_surface(deps, claim, deletion_id)
+            manifest = _manifest(deps.db, deletion_id, surface)
+            if manifest["status"] != "verified":
+                raise RetryableJobError("MEDIA_SURFACE_PENDING")
+            deps.job_claims.complete_business(deps.db, claim, "LIFECYCLE_SURFACE_COMPLETED")
+            return HandlerOutcome.SUCCESS
+        if surface == "provider_copies":
+            # No reviewed provider-copy capability exists in this checkout. A
+            # frozen non-zero count cannot be certified merely because a local
+            # SQL sweep happens to be empty.
             if expected > 0 or current_count > 0:
-                raise RetryableJobError("MEDIA_PROVIDER_DEPENDENCY_PENDING" if surface == "media" else "PROVIDER_COPY_DEPENDENCY_PENDING")
+                raise RetryableJobError("PROVIDER_COPY_DEPENDENCY_PENDING")
         elif current_count != expected:
             raise RetryableJobError("LIFECYCLE_SURFACE_COUNT_CHANGED")
         if surface == "events":
