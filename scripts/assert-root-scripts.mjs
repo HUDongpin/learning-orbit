@@ -19,6 +19,7 @@ const expectedScripts = {
   "load:pilot": "node tests/load/run-local-pilot.mjs",
   "verify:local-pilot": "node scripts/verify-local-pilot.mjs",
   "verify:pilot": "node scripts/verify-release-evidence.mjs",
+  "verify:worker-sql": "node scripts/verify-worker-runtime-sql.mjs",
 };
 
 const manifest = JSON.parse(
