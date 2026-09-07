@@ -64,10 +64,10 @@ test("the checked-in required-test manifest is closed and valid", async () => {
   assert.deepEqual(
     Object.fromEntries(manifest.gates.map(({ id, expectedTests }) => [id, expectedTests])),
     {
-      "contracts-vitest": 63,
+      "contracts-vitest": 69,
       "server-vitest": 405,
       "web-vitest": 306,
-      "pilot-harness-vitest": 87,
+      "pilot-harness-vitest": 90,
       "security-vitest": 15,
       "worker-python": 156,
       "browser-playwright": 2,

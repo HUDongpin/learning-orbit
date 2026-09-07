@@ -2,6 +2,7 @@ export { EventPayloadRegistry, createCoreEventPayloadRegistry } from "./event-pa
 export { parseCoreRoomEvent, parseRoomEventEnvelope } from "./core-room-event.js";
 export type { CoreRoomEvent } from "./core-room-event.js";
 export { routes } from "./routes.js";
+export { contractCoverage, type ContractCoverage } from "./coverage.js";
 export { realtimeContract } from "./realtime.js";
 export { makeSchemaAjv } from "./schema-ajv.js";
 export { authContract } from "./auth.js";

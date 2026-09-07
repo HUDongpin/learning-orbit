@@ -21,7 +21,8 @@
     "playwright": "playwright test --config apps/web/playwright.config.ts",
     "load:pilot": "node tests/load/run-local-pilot.mjs",
     "verify:local-pilot": "node scripts/verify-local-pilot.mjs",
-    "storage:init": "tsx scripts/init-private-bucket.ts"
+    "storage:init": "tsx scripts/init-private-bucket.ts",
+    "assert:program-contracts": "tsx scripts/assert-program-contracts.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
