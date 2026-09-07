@@ -18,10 +18,17 @@ export default function nextConfig(phase: string): NextConfig {
         return [];
       }
 
+      // The API port is configurable so a developer whose 3001 is taken by
+      // another project can still run the same-origin proxy. The default is
+      // unchanged, and the value is still loopback-only.
+      const apiPort = Number(process.env.LO_LOCAL_API_PORT ?? "3001");
+      if (!Number.isSafeInteger(apiPort) || apiPort < 1 || apiPort > 65_535) {
+        throw new Error("LO_LOCAL_API_PORT_INVALID");
+      }
       return [
         {
           source: "/v1/:path*",
-          destination: "http://127.0.0.1:3001/v1/:path*",
+          destination: `http://127.0.0.1:${apiPort}/v1/:path*`,
         },
       ];
     },

@@ -11,7 +11,7 @@ import {
 } from "./browser-storage-safety.js";
 
 const execFileAsync = promisify(execFile);
-export const PILOT_PUBLIC_ORIGIN = "https://127.0.0.1:3000";
+export const PILOT_PUBLIC_ORIGIN = process.env.LO_E2E_BASE_URL ?? "https://127.0.0.1:3000";
 const PILOT_ADDRESS = /^pilot-[0-9a-f]{16}@example\.invalid$/u;
 const ROOM_CODE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/u;
 const SEAT_CODE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/u;

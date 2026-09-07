@@ -248,3 +248,24 @@ DATABASE_URL="$TEST_DATABASE_URL" PORT=3210 \
 A loopback origin is rewritten to `host.docker.internal` inside the container;
 the host environment is never forwarded, and only `tests/load` (read-only) and
 `test-results/load` are mounted.
+
+## Running the browser suite when a port is taken
+
+The pilot harness serves the app on 3000 and the API on 3001. If another
+project already holds one of those, nothing needs editing — three environment
+variables move the run:
+
+```bash
+LO_LOCAL_API_PORT=3401 LO_LOCAL_SAME_ORIGIN_PROXY=1 \
+  pnpm --filter @learning-orbit/web exec next dev --port 3400
+LO_E2E_BASE_URL=http://127.0.0.1:3400 \
+  pnpm exec playwright test --config apps/web/playwright.config.ts
+```
+
+The defaults are unchanged, so the pilot harness and the required-test manifest
+still describe the same run.
+
+Next 16's dev server runs as a reusable daemon. If `--port` appears to be
+ignored, an older daemon for this repository is still alive and the new
+invocation attached to it; `pgrep -f next-server` finds it and the port it
+actually bound.
