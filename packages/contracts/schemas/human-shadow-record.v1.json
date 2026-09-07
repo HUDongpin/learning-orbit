@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/human-shadow-record.v1.json",
+  "title": "HumanShadowRecord",
+  "description": "The evidence a completed non-student teacher shadow produces. Engineering supplies the format and the validator; only a teacher who ran the session can supply the record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recordKind",
+    "shadowId",
+    "roomId",
+    "teacherRef",
+    "rehearsal",
+    "studentsPresent",
+    "startedAt",
+    "endedAt",
+    "agentRunsObserved",
+    "observations",
+    "verdict"
+  ],
+  "properties": {
+    "recordKind": { "const": "human_shadow_completed" },
+    "shadowId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "teacherRef": {
+      "description": "A salted digest of the teacher's identity, never the identity itself.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rehearsal": {
+      "description": "A synthetic rehearsal is useful preparation and is not a shadow. A record admitting it is one is refused.",
+      "type": "boolean"
+    },
+    "studentsPresent": {
+      "description": "A shadow is conducted without students. True is refused.",
+      "type": "boolean"
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "agentRunsObserved": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "format": "uuid" }
+    },
+    "observations": {
+      "description": "One entry per observed run. A verdict that is not grounded in observations is an opinion.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agentRunId", "outcome", "note"],
+        "properties": {
+          "agentRunId": { "type": "string", "format": "uuid" },
+          "outcome": { "enum": ["appropriate", "unhelpful", "harmful", "blocked", "failed"] },
+          "note": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "verdict": { "enum": ["ready_for_students", "not_ready"] },
+    "conditions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    }
+  }
+}

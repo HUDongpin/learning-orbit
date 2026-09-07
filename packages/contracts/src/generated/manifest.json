@@ -97,6 +97,11 @@
       "sha256": "951eded83d646f3ceb1a5613aaca3899a0e9e9711d6bdea4222c6afa766260d3"
     },
     {
+      "file": "human-shadow-record.v1.json",
+      "id": "https://learning-orbit.local/schemas/human-shadow-record.v1.json",
+      "sha256": "e2f661cc39ead451d073b5f1c5024ce1f9e369c8e5325e5bf3f955466ff5e2ed"
+    },
+    {
       "file": "lifecycle-internal-media-surface.v1.json",
       "id": "https://learning-orbit.local/schemas/lifecycle-internal-media-surface.v1.json",
       "sha256": "ed87bc0235bb75e84fae60baa9fe932be082414133c07f550f86d41658bf912e"
@@ -276,6 +281,11 @@
     {
       "sourceFile": "echo-concept-projection.v1.json",
       "moduleFile": "echo-concept-projection.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "human-shadow-record.v1.json",
+      "moduleFile": "human-shadow-record.v1.ts",
       "language": "typescript"
     },
     {

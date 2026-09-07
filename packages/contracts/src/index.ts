@@ -44,11 +44,13 @@ export type {
 } from "./analytics.js";
 export {
   deletionLifecycleContract,
+  humanShadowRecordContract,
   parseDeletionReceipt,
   pilotRetentionPolicyContract,
   providerCopyAuthorityContract,
 } from "./governance.js";
 export type {
+  HumanShadowRecord,
   PilotRetentionPolicyRecord,
   ProviderCopyAuthorityRecord,
   DeleteRoomRequest,

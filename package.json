@@ -28,6 +28,7 @@
     "storage:init": "tsx scripts/init-private-bucket.ts",
     "assert:program-contracts": "tsx scripts/assert-program-contracts.ts",
     "verify:authority": "tsx scripts/verify-controlled-authority.ts",
+    "verify:shadow": "tsx scripts/verify-shadow-record.ts",
     "governance:import-policy": "tsx scripts/import-approved-pilot-policy.ts"
   },
   "devDependencies": {
