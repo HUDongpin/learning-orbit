@@ -635,7 +635,14 @@ export class HydratedSessionState {
       if (frame.type === "degraded") {
         this.degraded.set(`${frame.scope}:${frame.projectionKey ?? "all"}`, frame);
         this.degraded.set(frame.scope, frame);
-        if (frame.scope === "analytics" && frame.code === "STUDENT_ANALYTICS_NOT_PROMOTED" && frame.projectionKey) {
+        // A degraded notice naming a projection this role does not hold is
+        // about somebody else's panel. Acting on it throws
+        // PROJECTION_ROLE_FORBIDDEN, which `onFrame` cannot tell from a
+        // corrupt frame — so the client used to close its own socket with
+        // 4400 and stop reconnecting. A teacher then lost live sync for the
+        // rest of the lesson because the server mentioned a student's panel.
+        if (frame.scope === "analytics" && frame.code === "STUDENT_ANALYTICS_NOT_PROMOTED"
+          && frame.projectionKey && this.projections.holds(frame.projectionKey)) {
           this.#cancelProjectionRefresh(frame.projectionKey);
           this.#cancelTimelineRequest(frame.projectionKey);
           this.projections.markPolicyUnavailable(frame.projectionKey);

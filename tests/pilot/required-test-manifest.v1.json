@@ -47,7 +47,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/web-vitest.summary.json",
-      "expectedTests": 331
+      "expectedTests": 332
     },
     {
       "id": "pilot-harness-vitest",

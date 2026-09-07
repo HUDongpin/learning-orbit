@@ -45,6 +45,12 @@ export class ProjectionSync {
 
   allowedKeys(): ProjectionKey[] { return [...this.#allowed]; }
 
+  /** Whether this role holds the projection at all, without throwing. */
+  holds(key: ProjectionKey): boolean {
+    if (this.#role === undefined) return false;
+    return (this.#role === "teacher" ? TEACHER_KEYS : STUDENT_KEYS).has(key);
+  }
+
   #assertAllowed(key: ProjectionKey): void {
     if (this.#role === undefined) throw new Error("PROJECTION_AUTHORITY_CLEARED");
     const allowed = this.#role === "teacher" ? TEACHER_KEYS : STUDENT_KEYS;

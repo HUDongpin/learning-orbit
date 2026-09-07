@@ -14,6 +14,7 @@ import { SessionGatewayError } from "./session-gateway.js";
 const ROOM_ID = "00000000-0000-4000-8000-000000000010";
 const AT = "2026-08-30T09:00:00.000Z";
 const CLOSES = "2026-08-30T09:45:00.000Z";
+const TEACHER_ID = "00000000-0000-4000-8000-0000000000t1".replace("t", "e");
 const student: Extract<AuthSession, { role: "student" }> = {
   role: "student",
   roomId: ROOM_ID,
@@ -252,6 +253,30 @@ describe("HydratedSessionState", () => {
     expect(timelineSignal?.aborted).toBe(true);
     await expect(pending).rejects.toThrow();
     expect(hydrated.projections.references()).toEqual([]);
+  });
+
+  it("ignores a degraded notice about a projection this role does not hold", async () => {
+    const hydrated = await HydratedSessionState.create({
+      session: { role: "teacher", teacherId: TEACHER_ID, actorId: TEACHER_ID },
+      room,
+      gateway: { getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })) },
+    });
+    // A student policy change used to be broadcast to the whole room. Acting
+    // on it threw PROJECTION_ROLE_FORBIDDEN, which the frame handler could not
+    // tell from a corrupt frame, so the client closed its own socket with 4400
+    // and stopped reconnecting — a teacher lost live sync for the rest of the
+    // lesson because the server mentioned a student's panel.
+    expect(() => hydrated.receiveFrame({
+      type: "degraded", scope: "analytics", code: "STUDENT_ANALYTICS_NOT_PROMOTED",
+      projectionKey: "echo.student_approved", updatedAt: AT,
+    })).not.toThrow();
+    // The notice is still recorded; it simply does not touch a surface this
+    // role has no slot for.
+    expect(hydrated.degraded.get("analytics:echo.student_approved")).toMatchObject({
+      code: "STUDENT_ANALYTICS_NOT_PROMOTED",
+    });
+    expect(hydrated.projections.slot("echo.teacher_shadow")).toMatchObject({ availability: "loading" });
+    hydrated.dispose();
   });
 
   it("aborts only the matching Timeline request when a student projection is revoked", async () => {

@@ -88,9 +88,27 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
     } as typeof send;
     (window as unknown as { WebSocket: unknown }).WebSocket = new Proxy(native, {
       construct(target, args: [string | URL, (string | string[])?]) {
-        const socket = new target(...args) as WebSocket & { __loSent?: number };
+        const socket = new target(...args) as WebSocket & { __loSent?: number; __loSeen?: string[] };
+        socket.__loSeen = [];
+        socket.addEventListener("message", (event) => {
+          // Only the frame's `type` is kept. The payloads are classroom
+          // content and a diagnostic is not a place to put it.
+          let type = "unparsed";
+          try {
+            const value: unknown = JSON.parse(String((event as MessageEvent).data));
+            const record = value as Record<string, unknown> | null;
+            // Type plus the top-level key names. Keys are structure, not
+            // content, so a shape mismatch shows without putting a word of the
+            // classroom into a diagnostic.
+            type = typeof record?.type === "string"
+              ? `${record.type}{${Object.keys(record).sort().join(",")}}`
+              : "untyped";
+          } catch { type = "nonjson"; }
+          socket.__loSeen = [...(socket.__loSeen ?? []), type].slice(-4);
+        });
         socket.addEventListener("close", (event) => {
-          codes.push(`${(event as CloseEvent).code}/${socket.__loSent ?? 0}`);
+          codes.push(`${(event as CloseEvent).code}/${socket.__loSent ?? 0}`
+            + `[${(socket.__loSeen ?? []).join(">")}]`);
         });
         return socket;
       },

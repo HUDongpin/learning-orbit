@@ -58,7 +58,13 @@ export class RoomHub {
    * could not tell "not promoted" from "still loading".
    */
   async broadcastDegraded(roomId: string, frame: Extract<RealtimeFrame, { type: "degraded" }>): Promise<void> {
-    await this.broadcastEphemeral(roomId, frame);
+    // A notice naming a student projection is addressed to students. A teacher
+    // holds neither of those keys, so the frame says nothing about any surface
+    // they can see — and telling them anyway is how a student policy change
+    // ended up closing the teacher's socket.
+    const studentScoped = frame.projectionKey === "echo.student_approved"
+      || frame.projectionKey === "trace.student_bundle";
+    await this.broadcastEphemeral(roomId, frame, studentScoped ? "student" : undefined);
   }
 
   /** Rooms with at least one attached socket, for policy reconciliation. */
@@ -73,7 +79,7 @@ export class RoomHub {
     connection.send(frame);
   }
   async roomState(roomId: string): Promise<{ cursor: number; status: Status }> { const result = await this.pool.query<{ next_room_seq: string; status: Status }>("SELECT next_room_seq,status FROM classroom_room WHERE room_id=$1", [roomId]); const row = result.rows[0]; if (!row) throw new Error("ROOM_NOT_FOUND"); return { cursor: Math.max(0, Number(row.next_room_seq) - 1), status: row.status }; }
-  async broadcastEphemeral(roomId: string, frame: RealtimeFrame): Promise<void> { for (const connection of [...(this.#rooms.get(roomId) ?? [])]) { if (!connection.helloReceived) continue; const result = await this.authorizer.reauthorize(connection.identity.sessionId, roomId); if (!result.ok) { connection.close(result.closeCode, "authorization changed"); continue; } connection.send(frame); } }
+  async broadcastEphemeral(roomId: string, frame: RealtimeFrame, onlyRole?: "student" | "teacher"): Promise<void> { for (const connection of [...(this.#rooms.get(roomId) ?? [])]) { if (!connection.helloReceived) continue; const result = await this.authorizer.reauthorize(connection.identity.sessionId, roomId); if (!result.ok) { connection.close(result.closeCode, "authorization changed"); continue; } if (onlyRole && result.principal.role !== onlyRole) continue; connection.send(frame); } }
   async broadcastAuthorized(roomId: string, frame: RealtimeFrame): Promise<number> { let sent = 0; for (const connection of [...(this.#rooms.get(roomId) ?? [])]) { const result = await this.authorizer.reauthorize(connection.identity.sessionId, roomId); if (!result.ok) { connection.close(result.closeCode, "authorization changed"); continue; } if (frame.type === "event") connection.sendDurable(frame); else connection.send(frame); sent += 1; } return sent; }
   /**
    * Deliver a durable analytics pointer only after the caller has evaluated
