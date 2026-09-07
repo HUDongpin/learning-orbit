@@ -81,7 +81,12 @@ class AnalyticsHandlerTests(unittest.TestCase):
         with patch("learning_orbit_worker.analytics_handlers._materialize") as materialize:
             result = analytics_replay_handler(deps, job)
         self.assertIs(result, HandlerOutcome.SUCCESS)
-        materialize.assert_called_once_with(deps, ROOM, 1, unittest.mock.ANY, enqueue_replay=False)
+        # replaying=True is the only thing that lifts the online lateness gate
+        # for the rebuild. Without it a replay reproduces the projection that
+        # dropped the late event and then clears the flag anyway.
+        materialize.assert_called_once_with(
+            deps, ROOM, 1, unittest.mock.ANY, enqueue_replay=False, replaying=True,
+        )
         self.assertEqual(claims.codes, ["ANALYTICS_REPLAYED"])
 
     def test_consume_rejects_cross_room_event_before_materialization(self):

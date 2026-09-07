@@ -1011,6 +1011,7 @@ def _materialize(
     epoch: str,
     *,
     enqueue_replay: bool = True,
+    replaying: bool = False,
 ) -> None:
     canonical_events = _canonical_events(deps.db, room_id, through)
     if not canonical_events or int(canonical_events[-1]["roomSeq"]) != through:
@@ -1024,6 +1025,14 @@ def _materialize(
     projector = StreamingProjector(room_id)
     for event in events:
         projector.consume(event)
+    if replaying:
+        # A replay is the only path allowed to admit a late event. Feeding
+        # history back through ``consume`` reapplies the online five-second
+        # lateness gate, so the rebuild reproduced exactly the projection that
+        # had dropped the event - and then cleared the flag, leaving the
+        # projection claiming to have caught up when nothing had changed.
+        # ``replay`` disables the gate for the whole epoch.
+        projector.replay()
     requires_replay = bool(
         projector.state.echo.requires_replay or projector.state.trace.requires_replay
     )
@@ -1264,7 +1273,7 @@ def analytics_replay_handler(deps: WorkerDeps, job: WorkerJob) -> HandlerOutcome
                    and int(head.get("complete_through_seq", 0)) >= through for head in existing_heads):
                 deps.job_claims.complete_business(deps.db, deps.claim.as_job_claim(), "ANALYTICS_REPLAYED")
                 return HandlerOutcome.SUCCESS
-        _materialize(deps, room_id, through, epoch, enqueue_replay=False)
+        _materialize(deps, room_id, through, epoch, enqueue_replay=False, replaying=True)
         deps.job_claims.complete_business(deps.db, deps.claim.as_job_claim(), "ANALYTICS_REPLAYED")
     return HandlerOutcome.SUCCESS
 
