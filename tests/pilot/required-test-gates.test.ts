@@ -70,7 +70,7 @@ test("the checked-in required-test manifest is closed and valid", async () => {
       "pilot-harness-vitest": 115,
       "chaos-vitest": 16,
       "security-vitest": 15,
-      "worker-python": 222,
+      "worker-python": 239,
       "browser-playwright": 2,
       "pilot-load": 1,
     },
