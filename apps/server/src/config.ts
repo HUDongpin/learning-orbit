@@ -16,6 +16,14 @@ export interface ServerConfig {
   roomCodePepperCurrentVersion?: number | undefined;
   roomCodePeppers?: ReadonlyMap<number, Buffer> | undefined;
   storage?: StorageTransportConfig | undefined;
+  /** Deployment name attached to spans; never a hostname or a room identifier. */
+  environment: string;
+  /**
+   * OTLP/HTTP base origin of the approved collector.  Absent means telemetry
+   * is collected in-process and exported nowhere, which is supported: a
+   * missing collector must never block a classroom write.
+   */
+  otlpEndpoint?: string | undefined;
 }
 
 /** Server-side credentials for the private object store. Never sent to a browser. */
@@ -153,7 +161,12 @@ export function loadServerConfig(env = process.env): ServerConfig {
   const workerAssertionPrivateKeyFile = externalPath(env.LO_WORKER_ASSERTION_PRIVATE_KEY_FILE, "LO_WORKER_ASSERTION_PRIVATE_KEY_FILE_INVALID");
   const pepperConfig = roomCodePepperConfig(env);
   const storage = storageTransportConfig(env, storageBrowserOrigins.length > 0);
+  const environment = env.LO_ENVIRONMENT ?? "development";
+  if (!/^[a-z0-9_-]{1,32}$/.test(environment)) throw new Error("LO_ENVIRONMENT_INVALID");
+  const otlpEndpoint = env.LO_OTLP_ENDPOINT ? origin(env.LO_OTLP_ENDPOINT, "LO_OTLP_ENDPOINT_INVALID") : undefined;
   return {
+    environment,
+    ...(otlpEndpoint ? { otlpEndpoint } : {}),
     ...(storage ? { storage } : {}),
     databaseUrl, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs,
     trustProxy: trustedProxyCidrs.length ? trustedProxyCidrs : false,
@@ -168,5 +181,6 @@ export function testServerConfig(override: Partial<ServerConfig> = {}): ServerCo
   const publicBaseOrigin = override.publicBaseOrigin ?? allowedOrigins[0]!;
   const trustedProxyCidrs = override.trustedProxyCidrs ?? [];
   const trustProxy = override.trustProxy ?? (trustedProxyCidrs.length ? trustedProxyCidrs : false);
-  return { ...override, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs, trustProxy };
+  const environment = override.environment ?? "test";
+  return { ...override, environment, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs, trustProxy };
 }

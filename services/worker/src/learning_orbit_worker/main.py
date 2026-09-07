@@ -12,7 +12,7 @@ from threading import Event
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
-from .observability import Telemetry, create_telemetry
+from .observability import OtlpHttpSpanSink, Telemetry, create_telemetry, telemetry_from_env
 from .core_handlers import register_core_handlers
 from .analytics_handlers import register_analytics_handlers
 from .handler_registry import HandlerOutcome, HandlerRegistry, WorkerDeps, run_with_lease
@@ -141,6 +141,7 @@ class WorkerSupervisor:
         self.deps = deps or WorkerDeps(connection, self.jobs, projection_store=ProjectionStore(connection))
         self.poll_seconds = poll_seconds
         self.telemetry = telemetry or create_telemetry()
+        self.span_sink: OtlpHttpSpanSink | None = None
         self.consecutive_failures = 0
 
     def run_once(self) -> HandlerOutcome | None:
@@ -148,7 +149,25 @@ class WorkerSupervisor:
         if not jobs:
             return None
         job = jobs[0]
-        return run_with_lease(job, self.registry.get(job.job_type), self.deps)
+        # The correlation id comes from the claimed row, never from a new
+        # identifier minted here, so the worker's spans join the same trace as
+        # the command that created the job.
+        started = time.monotonic()
+        self.telemetry.record("worker.claim", {
+            "jobId": job.job_id, "roomId": job.room_id,
+            "correlationId": job.correlation_id, "attempts": job.attempts,
+        })
+        outcome = run_with_lease(job, self.registry.get(job.job_type), self.deps)
+        self.telemetry.record(
+            "worker.job",
+            {
+                "jobId": job.job_id, "roomId": job.room_id,
+                "correlationId": job.correlation_id,
+                "failureCode": getattr(outcome, "completion_code", None) or "COMPLETED",
+            },
+            duration_ms=(time.monotonic() - started) * 1000.0,
+        )
+        return outcome
 
     def run_forever(self, stop: Event | None = None) -> None:
         """Claim and run jobs until stopped, surviving transient failure.
@@ -217,12 +236,16 @@ def build_supervisor(
             internal_http=internal_http,
             projection_store=ProjectionStore(connection),
         )
-        return WorkerSupervisor(
+        telemetry, span_sink = telemetry_from_env()
+        supervisor = WorkerSupervisor(
             connection,
             config.worker_id,
             deps=deps,
             poll_seconds=config.poll_seconds,
+            telemetry=telemetry,
         )
+        supervisor.span_sink = span_sink
+        return supervisor
     except BaseException:
         close = getattr(connection, "close", None)
         if callable(close):
@@ -244,6 +267,8 @@ def main() -> int:
         else:
             supervisor.run_forever(stop)
     finally:
+        if supervisor.span_sink is not None:
+            supervisor.span_sink.flush()
         close = getattr(supervisor.jobs.db, "close", None)
         if callable(close):
             close()

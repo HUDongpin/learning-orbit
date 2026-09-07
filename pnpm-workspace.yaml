@@ -1,5 +1,8 @@
-packages: ["apps/*", "packages/*"]
+packages: [ "apps/*", "packages/*" ]
 allowBuilds:
   "esbuild@0.25.12": true
   "esbuild@0.28.2": true
+  # OTLP export uses the JSON encoding, so protobufjs never needs its
+  # generated protobuf sources; refuse the install script.
+  "protobufjs@7.6.6": false
   "sharp@0.34.5": false

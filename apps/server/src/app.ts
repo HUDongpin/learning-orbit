@@ -27,6 +27,7 @@ import { noAttachments } from "./modules/rooms/attachment-validator.js";
 import { forbidsAnyOrigin, isExactAllowedOrigin, requiresAllowedOrigin } from "./modules/security/origin-policy.js";
 import { closedRateLimitError } from "./modules/security/rate-policies.js";
 import { registerRoutes } from "./routes.js";
+import { startOtelRuntime, type OtelRuntime } from "./observability/otel.js";
 import { RoomHub, type ProjectionDeliveryAuthorizer } from "./modules/realtime/room-hub.js";
 import { projectionDeliveryFailureDecision } from "./modules/realtime/projection-delivery-decision.js";
 import { RealtimeConnection } from "./modules/realtime/connection.js";
@@ -94,6 +95,8 @@ export interface BuildAppOptions {
     repository: Pick<AnalyticsRepository, "latest" | "patchesAfter" | "timeline">;
   };
   analyticsTeacher?: Pick<AnalyticsTeacherService, "authorize" | "listArtifacts" | "review" | "reviewDetail">;
+  /** Injected by telemetry tests; an injected runtime is owned by its caller. */
+  otel?: OtelRuntime;
 }
 
 function resolvedConfig(options: BuildAppOptions): ServerConfig {
@@ -103,6 +106,13 @@ function resolvedConfig(options: BuildAppOptions): ServerConfig {
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const config = resolvedConfig(options);
+  // Telemetry starts before Fastify and every plugin so startup work is inside
+  // the trace, and is shut down with the server.  With no approved collector
+  // configured this is an inert facade, which is a supported deployment.
+  const otel: OtelRuntime = options.otel ?? startOtelRuntime({
+    environment: config.environment,
+    ...(config.otlpEndpoint ? { endpoint: config.otlpEndpoint } : {}),
+  });
   if (options.mediaStore && config.storageBrowserOrigins.length === 0) {
     throw new Error("LO_STORAGE_BROWSER_ORIGINS_REQUIRED");
   }
@@ -173,7 +183,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return {
       authorizer,
       hub,
-      publisher: new OutboxPublisher(pool, hub, undefined, projection),
+      publisher: new OutboxPublisher(pool, hub, undefined, projection, otel.telemetry),
     };
   })() : undefined);
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
@@ -297,7 +307,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     lifecycle,
     serviceAssertionTrust: assertionTrust,
     jobClaims,
-    commands: pool && lifecycle ? new CommandService(new MessageService(lifecycle.events, media ? new MediaAttachmentValidator() : noAttachments, clock), lifecycle) : undefined,
+    commands: pool && lifecycle ? new CommandService(new MessageService(lifecycle.events, media ? new MediaAttachmentValidator() : noAttachments, clock), lifecycle, otel.telemetry) : undefined,
     realtime,
     media,
     mediaInternalReconcile,
@@ -319,6 +329,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (policyListener) await policyListener.stop();
     if (ownsPool) await pool?.end();
     if (smtp) await smtp.transport.close();
+    if (!options.otel) await otel.shutdown();
   });
   return app;
 }

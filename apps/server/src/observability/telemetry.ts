@@ -23,7 +23,13 @@ export class InMemoryTelemetry implements TelemetrySink {
 }
 
 export interface SpanHandle {
-  end(durationMs?: number): void;
+  /**
+   * `extraAttributes` exists because the identifier that makes a span useful —
+   * the correlation id — is assigned by the database commit, i.e. after the
+   * span has already started.  Naming it at `end` keeps the measured duration
+   * honest without having to guess the id up front.
+   */
+  end(durationMs?: number, extraAttributes?: Record<string, unknown>): void;
 }
 
 export interface Telemetry {
@@ -72,13 +78,18 @@ export function createTelemetry(options: TelemetryOptions = {}): Telemetry {
       const startedAt = now();
       let ended = false;
       return {
-        end(durationMs) {
+        end(durationMs, extraAttributes) {
           if (ended) return;
           ended = true;
           const safeDuration = Number.isFinite(durationMs) && durationMs !== undefined
             ? Math.max(0, durationMs)
             : Math.max(0, now() - startedAt);
-          emit({ name, attributes: redactLog(attributes), startedAt, endedAt: startedAt + safeDuration });
+          emit({
+            name,
+            attributes: redactLog({ ...attributes, ...extraAttributes }),
+            startedAt,
+            endedAt: startedAt + safeDuration,
+          });
         },
       };
     },
