@@ -110,6 +110,22 @@ shell, no effect ever fires, and it looks exactly like a hung fetch rather than
 a blocked asset. (The Playwright suite is self-consistent the other way — its
 harness starts Next on `127.0.0.1` and its `baseURL` matches.)
 
+**The worker prefers `TEST_DATABASE_URL` over `DATABASE_URL`.** `WorkerConfig.from_env`
+reads `TEST_DATABASE_URL` first, so a worker started in a shell that sourced
+`.env` polls the *test* database and quietly processes nothing while the
+development room's jobs pile up as `queued`. Start it with that variable
+cleared:
+
+```bash
+set -a; . ./.env; set +a
+unset TEST_DATABASE_URL
+.venv/bin/python -m learning_orbit_worker.main
+```
+
+Without a running worker there are no ECHO or TRACE projections, and both
+panels correctly say the server has not produced one yet — which reads like a
+permission problem but is not.
+
 **Never point `TEST_DATABASE_URL` at data you care about.** The server suite
 calls `resetBusinessTables`, which `TRUNCATE`s rooms, members and `auth_session`.
 Running `pnpm test:server` in the middle of a browser session silently logs the
