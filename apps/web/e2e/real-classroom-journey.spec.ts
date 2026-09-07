@@ -77,6 +77,7 @@ async function readTeacherBoundaryState(page: Page, roomId: string): Promise<{
   surface: number;
   sessionStatus: number;
   roomStatus: number;
+  closeCodes: number[];
 }> {
   return page.evaluate(async ({ sessionPath, roomPath }) => {
     const headings = [...document.querySelectorAll("h1")]
@@ -86,13 +87,16 @@ async function readTeacherBoundaryState(page: Page, roomId: string): Promise<{
         : headings.includes("目前的 Session 無法再開啟這個課堂") ? 3
           : headings.includes("課堂服務暫時不可用") ? 4
             : headings.includes("無法開啟這個課堂") ? 5 : 0;
+    // A socket that dropped has to say why: 4401/4403/4410 mean the server
+    // ended it, 1006 means the transport did.
+    const closeCodes = (window as unknown as { __loCloseCodes?: number[] }).__loCloseCodes ?? [];
     const [sessionResponse, roomResponse] = await Promise.all([
       fetch(sessionPath, { credentials: "include", cache: "no-store" }),
       fetch(roomPath, { credentials: "include", cache: "no-store" }),
     ]);
-    return { surface, sessionStatus: sessionResponse.status, roomStatus: roomResponse.status };
+    return { surface, sessionStatus: sessionResponse.status, roomStatus: roomResponse.status, closeCodes };
   }, { sessionPath: routes.auth.session(), roomPath: routes.rooms.get(roomId) })
-    .catch(() => ({ surface: 9, sessionStatus: 0, roomStatus: 0 }));
+    .catch(() => ({ surface: 9, sessionStatus: 0, roomStatus: 0, closeCodes: [] }));
 }
 
 function socketDiagnosticCode(socket: RoomSocketObservation): string {
@@ -566,7 +570,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
             await pauseButton.click({ timeout: 30_000 });
           } catch {
             const boundary = await readTeacherBoundaryState(teacherPage, roomId);
-            fail(`PILOT_PAUSE_COMMAND_UNAVAILABLE_H${boundary.surface}`
+            fail(`PILOT_PAUSE_COMMAND_UNAVAILABLE_K${boundary.closeCodes.join("-") || "none"}_H${boundary.surface}`
               + `Q${boundary.sessionStatus}O${boundary.roomStatus}_${socketDiagnosticCode(socketObservations[0]!)}`);
           }
         });
@@ -582,7 +586,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
             await resumeButton.click({ timeout: 30_000 });
           } catch {
             const boundary = await readTeacherBoundaryState(teacherPage, roomId);
-            fail(`PILOT_RESUME_COMMAND_UNAVAILABLE_H${boundary.surface}`
+            fail(`PILOT_RESUME_COMMAND_UNAVAILABLE_K${boundary.closeCodes.join("-") || "none"}_H${boundary.surface}`
               + `Q${boundary.sessionStatus}O${boundary.roomStatus}_${socketDiagnosticCode(socketObservations[0]!)}`);
           }
         });
@@ -611,7 +615,7 @@ test("real teacher and four-student classroom journey remains server-authoritati
             `${index === 0 ? "T" : `S${index}`}`
             + `V${visible[index] ? 1 : 0}${socketDiagnosticCode(socket)}`
           )).join("_");
-          fail(`PILOT_FIRST_MESSAGE_NOT_VISIBLE_H${teacherBoundary.surface}`
+          fail(`PILOT_FIRST_MESSAGE_NOT_VISIBLE_K${teacherBoundary.closeCodes.join("-") || "none"}_H${teacherBoundary.surface}`
             + `Q${teacherBoundary.sessionStatus}O${teacherBoundary.roomStatus}_${observations}`);
         }
       });

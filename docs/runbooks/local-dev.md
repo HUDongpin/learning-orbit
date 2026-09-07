@@ -322,15 +322,23 @@ the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
 
 **Known, still open.** With everything assembled, `local-public-boundary`
-passes and `real-classroom-journey` drives sign-in, room creation, four
-students joining, room open and the first broadcast, then stops
-non-deterministically at one of the teacher's lifecycle controls — sometimes
-pause, sometimes resume. The diagnostic string in the failure reports the
-teacher socket as closed once and not ready (`C1…Y0`) while all four student
-sockets are ready (`C0…Y1`), so the teacher's realtime connection is the thing
-to look at. It is not yet known whether that is a product defect or an artifact
-of the dev-mode same-origin proxy carrying a long-lived socket; a
-`verify:local-pilot` run on the pinned ports would separate the two.
+passes. `real-classroom-journey` drives sign-in, room creation, four students
+joining and room open, then stalls non-deterministically — across six runs it
+stopped at the first broadcast, at a message revision, at pause and at resume.
+
+Every failure reports the same shape. The teacher page is on surface `H2`
+("即時同步已停止"), its socket closed and not ready (`C1…Y0`), while all four
+student sockets stay ready (`C0…Y1`) on the same proxy for the same duration.
+The teacher's session and room reads are both 200, so it is not authorization.
+The lifecycle buttons are disabled because the page correctly shows its
+disconnected state; the buttons are a symptom, not the fault.
+
+The failure diagnostics now carry the socket close codes (`K…`), because a
+close without its code cannot say whether the server ended the socket
+(`4401`/`4403`/`4410`) or the transport dropped it (`1006`). That is the next
+thing to read, and it decides between a product defect and an artifact of the
+dev-mode proxy holding a long-lived socket. A `verify:local-pilot` run on the
+pinned ports would settle it independently.
 
 ### What the suite needs assembled around it
 

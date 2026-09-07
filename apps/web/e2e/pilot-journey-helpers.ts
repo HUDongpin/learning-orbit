@@ -29,6 +29,8 @@ export type RoomSocketObservation = {
   acks: number;
   rejects: number;
   closed: number;
+  /** Close codes seen on room sockets, so a close says why it happened. */
+  closeCodes: number[];
   socketErrors: number;
 };
 
@@ -61,8 +63,26 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
     acks: 0,
     rejects: 0,
     closed: 0,
+    closeCodes: [],
     socketErrors: 0,
   };
+  // Playwright's close event carries no code, and a close without its code
+  // cannot say whether the server ended the socket or the transport dropped
+  // it. The page's own WebSocket records it.
+  void page.addInitScript(() => {
+    const native = window.WebSocket;
+    const codes: number[] = [];
+    (window as unknown as { __loCloseCodes: number[] }).__loCloseCodes = codes;
+    class Recorded extends native {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        this.addEventListener("close", (event) => {
+          codes.push((event as CloseEvent).code);
+        });
+      }
+    }
+    (window as unknown as { WebSocket: typeof WebSocket }).WebSocket = Recorded as unknown as typeof WebSocket;
+  });
   page.on("websocket", (socket) => {
     let url: URL;
     try { url = new URL(socket.url()); } catch { return; }
