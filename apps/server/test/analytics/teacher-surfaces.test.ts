@@ -201,13 +201,36 @@ describe("teacher analytics surfaces", () => {
       targetType: "derived_text", targetId: artifactId, decision: "approve", rationale: "可追溯至原始文字。",
       expectedAnalysisEpoch: epoch, expectedProjectionVersion: 1,
     } as const;
+    // Reviewing after the 45 minutes are over is the ordinary case, not an
+    // error: closing a room deliberately preserves its analytics jobs.
     const closedClient = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
+      if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
+      if (sql.includes("SELECT analysis_epoch,version,complete_through_seq")) return { rows: [{ analysis_epoch: epoch, version: "1", complete_through_seq: "1", requires_replay: false }] };
+      if (sql.includes("derived_text_artifact")) return { rowCount: 1, rows: [{}] };
+      return { rowCount: 1, rows: [] };
+    }) };
+    events.transact.mockImplementationOnce(async (_room: string, work: any) => work({
+      client: closedClient,
+      room: { next_room_seq: 2, teacher_id: teacherId, status: "closed" },
+      append: async () => ({ eventId: "00000000-0000-4000-8000-000000000019", roomSeq: 2, correlationId: "00000000-0000-4000-8000-000000000018" }),
+    }));
+    const afterClose = await svc.review(
+      teacher,
+      "00000000-0000-4000-8000-000000000016",
+      roomId,
+      command,
+    );
+    expect(afterClose.reviewEventId).toBe("00000000-0000-4000-8000-000000000019");
+
+    // Deletion, not room lifecycle, is the boundary that still refuses.
+    const deletingClient = { query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM deletion_job")) return { rowCount: 1, rows: [{ deletion_job_id: "00000000-0000-4000-8000-000000000020" }] };
       if (sql.includes("pilot_retention_policy")) return { rows: [{ policy_current: true }] };
       return { rowCount: 0, rows: [] };
     }) };
     events.transact.mockImplementationOnce(async (_room: string, work: any) => work({
-      client: closedClient,
+      client: deletingClient,
       room: { next_room_seq: 2, teacher_id: teacherId, status: "closed" },
     }));
     await expect(svc.review(
@@ -215,8 +238,7 @@ describe("teacher analytics surfaces", () => {
       "00000000-0000-4000-8000-000000000016",
       roomId,
       command,
-    )).rejects.toMatchObject({ statusCode: 409, code: "ROOM_NOT_OPEN" });
-    expect(closedClient.query).not.toHaveBeenCalled();
+    )).rejects.toMatchObject({ statusCode: 410 });
 
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM deletion_job")) return { rowCount: 0, rows: [] };
@@ -247,7 +269,7 @@ describe("teacher analytics surfaces", () => {
       command,
     );
     expect(retry).toEqual(result);
-    expect(events.transact).toHaveBeenCalledTimes(3);
+    expect(events.transact).toHaveBeenCalledTimes(4);
   });
 
   it("fails closed when an artifact row has a non-boolean active flag", async () => {

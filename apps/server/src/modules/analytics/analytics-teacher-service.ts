@@ -276,9 +276,11 @@ export class AnalyticsTeacherService {
       if (context.room.teacher_id !== teacher.teacherId) {
         throw new AnalyticsTeacherError(404, "ROOM_NOT_FOUND");
       }
-      if (context.room.status === "closed") {
-        throw new AnalyticsTeacherError(409, "ROOM_NOT_OPEN");
-      }
+      // A closed room is the ordinary case for review: the teacher looks at
+      // the session's analytics after the 45 minutes are over. Room lifecycle
+      // is not the boundary here - deletion and retention are, and both are
+      // checked below. Closing a room deliberately preserves its analytics
+      // consume and replay jobs for the same reason.
       await this.assertNotDeleting(client, roomId);
       await this.assertRetentionCurrent(client, roomId);
       // Idempotency is checked before the optimistic head CAS.  A retry may
