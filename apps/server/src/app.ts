@@ -35,6 +35,8 @@ import { OutboxPublisher } from "./modules/realtime/outbox-publisher.js";
 import { MediaAttachmentValidator } from "./modules/media/media-attachment-validator.js";
 import { MediaRepository } from "./modules/media/media-repository.js";
 import type { MediaDeps } from "./modules/media/media-service.js";
+import { S3MediaStore } from "./modules/media/s3-media-store.js";
+import { S3HttpTransport, S3_HTTP_TRANSPORT_CAPABILITIES } from "./modules/media/s3-http-transport.js";
 import type { MediaStore } from "./modules/media/media-store.js";
 import { MediaInternalReconcileRoute } from "./modules/media/media-internal-reconcile-route.js";
 import { AnalyticsPolicy } from "./modules/analytics/analytics-policy.js";
@@ -165,6 +167,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     };
   })() : undefined);
   const publisherTimer = realtime ? setInterval(() => { void realtime.publisher.tick().catch(() => undefined); }, 250) : undefined;
+  // A configured store is built here so production gets a real transport
+  // without a test having to inject one; an injected store still wins.
+  const configuredStore = options.mediaStore ?? (config.storage
+    ? new S3MediaStore({
+      transport: new S3HttpTransport({
+        endpoint: config.storage.endpoint,
+        bucket: config.storage.bucket,
+        credentials: {
+          accessKeyId: config.storage.accessKeyId,
+          secretAccessKey: config.storage.secretAccessKey,
+          region: config.storage.region,
+        },
+      }),
+      capabilities: S3_HTTP_TRANSPORT_CAPABILITIES,
+    })
+    : undefined);
   const media: MediaDeps | undefined = config.storageBrowserOrigins.length === 0
     ? undefined
     : options.media
@@ -172,9 +190,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         ...options.media,
         config: { ...(options.media.config ?? {}), storageBrowserOrigins: config.storageBrowserOrigins },
       }
-      : pool && options.mediaStore ? {
+      : pool && configuredStore ? {
         pool,
-        store: options.mediaStore,
+        store: configuredStore,
         repo: new MediaRepository(pool, clock),
         clock,
         config: { storageBrowserOrigins: config.storageBrowserOrigins },

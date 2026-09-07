@@ -183,8 +183,16 @@ if ((await exists(envPath)) && !force) {
     "",
     "LO_PUBLIC_BASE_ORIGIN=https://localhost:3000",
     "LO_ALLOWED_ORIGINS=https://localhost:3000,https://127.0.0.1:3000",
-    "LO_STORAGE_BROWSER_ORIGINS=",
     "LO_TRUSTED_PROXY_CIDRS=",
+    "",
+    "# Private object store. The browser only ever sees a short-lived presigned",
+    "# URL; these credentials stay on the server.",
+    "LO_STORAGE_BROWSER_ORIGINS=http://127.0.0.1:59000",
+    "LO_STORAGE_ENDPOINT=http://127.0.0.1:59000",
+    "LO_STORAGE_BUCKET=learning-orbit-media",
+    "LO_STORAGE_REGION=us-east-1",
+    "LO_STORAGE_ACCESS_KEY_ID=learning-orbit-local",
+    `LO_STORAGE_SECRET_ACCESS_KEY=${secret()}`,
     "",
     "LO_SMTP_HOST=127.0.0.1",
     "LO_SMTP_PORT=1025",
@@ -274,7 +282,7 @@ for (let attempt = 0; attempt < 60; attempt += 1) {
   await new Promise((resolvePromise) => { setTimeout(resolvePromise, 1_000); });
 }
 if (!healthy) abort("PostgreSQL or Mailpit did not become healthy within 60 seconds.");
-done("postgres and mailpit are healthy on 127.0.0.1:55432, :1025 and :8025");
+done("postgres, mailpit and minio are healthy on 127.0.0.1:55432, :1025, :8025 and :59000");
 
 /**
  * POSTGRES_PASSWORD only takes effect the first time the data volume is
@@ -332,6 +340,10 @@ if (!(await credentialsAccepted())) {
   }
   done("recreated an empty PostgreSQL 18 volume");
 }
+
+step("Creating the private media bucket");
+await run("pnpm", ["storage:init"], { env: environment });
+done(`${environment.LO_STORAGE_BUCKET} is private on ${environment.LO_STORAGE_ENDPOINT}`);
 
 step("Applying migrations");
 await run("pnpm", ["db:migrate"], { env: environment });

@@ -15,6 +15,16 @@ export interface ServerConfig {
   workerAssertionPrivateKeyFile?: string | undefined;
   roomCodePepperCurrentVersion?: number | undefined;
   roomCodePeppers?: ReadonlyMap<number, Buffer> | undefined;
+  storage?: StorageTransportConfig | undefined;
+}
+
+/** Server-side credentials for the private object store. Never sent to a browser. */
+export interface StorageTransportConfig {
+  readonly endpoint: string;
+  readonly bucket: string;
+  readonly region: string;
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
 }
 
 function csv(env: NodeJS.ProcessEnv, name: string): string[] {
@@ -99,6 +109,33 @@ function roomCodePepperConfig(env: NodeJS.ProcessEnv): {
   return { roomCodePepperCurrentVersion: currentVersion, roomCodePeppers: peppers };
 }
 
+/**
+ * Read the object-store credentials, if any.
+ *
+ * Absent credentials are a supported state: the media routes then answer a
+ * stable 503 and write nothing, which is the documented no-provider boundary.
+ * A *partly* supplied transport is not, because it is always a mistake, and a
+ * transport the browser could never reach is refused for the same reason.
+ */
+function storageTransportConfig(
+  env: NodeJS.ProcessEnv,
+  browserOriginsConfigured: boolean,
+): StorageTransportConfig | undefined {
+  const endpoint = env.LO_STORAGE_ENDPOINT ?? "";
+  const bucket = env.LO_STORAGE_BUCKET ?? "";
+  const accessKeyId = env.LO_STORAGE_ACCESS_KEY_ID ?? "";
+  const secretAccessKey = env.LO_STORAGE_SECRET_ACCESS_KEY ?? "";
+  const region = env.LO_STORAGE_REGION ?? "us-east-1";
+  const provided = [endpoint, bucket, accessKeyId, secretAccessKey].filter(Boolean).length;
+  if (provided === 0) return undefined;
+  if (provided !== 4) throw new Error("LO_STORAGE_TRANSPORT_INCOMPLETE");
+  if (!browserOriginsConfigured) throw new Error("LO_STORAGE_BROWSER_ORIGINS_REQUIRED");
+  const parsed = origin(endpoint, "LO_STORAGE_ENDPOINT_INVALID");
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new Error("LO_STORAGE_BUCKET_INVALID");
+  if (!/^[a-z0-9-]{1,32}$/.test(region)) throw new Error("LO_STORAGE_REGION_INVALID");
+  return Object.freeze({ endpoint: parsed, bucket, region, accessKeyId, secretAccessKey });
+}
+
 export function loadServerConfig(env = process.env): ServerConfig {
   const publicBaseOrigin = origin(env.LO_PUBLIC_BASE_ORIGIN ?? "", "LO_PUBLIC_BASE_ORIGIN_REQUIRED");
   const allowedOrigins = csv(env, "LO_ALLOWED_ORIGINS").map((value) => origin(value, "LO_ALLOWED_ORIGINS_INVALID"));
@@ -115,7 +152,9 @@ export function loadServerConfig(env = process.env): ServerConfig {
   const serviceAssertionTrustFile = externalPath(env.LO_SERVICE_ASSERTION_TRUST_FILE, "LO_SERVICE_ASSERTION_TRUST_FILE_REQUIRED", true);
   const workerAssertionPrivateKeyFile = externalPath(env.LO_WORKER_ASSERTION_PRIVATE_KEY_FILE, "LO_WORKER_ASSERTION_PRIVATE_KEY_FILE_INVALID");
   const pepperConfig = roomCodePepperConfig(env);
+  const storage = storageTransportConfig(env, storageBrowserOrigins.length > 0);
   return {
+    ...(storage ? { storage } : {}),
     databaseUrl, publicBaseOrigin, allowedOrigins, storageBrowserOrigins, trustedProxyCidrs,
     trustProxy: trustedProxyCidrs.length ? trustedProxyCidrs : false,
     smtpHost, smtpPort, smtpFrom, serviceAssertionTrustFile, workerAssertionPrivateKeyFile,

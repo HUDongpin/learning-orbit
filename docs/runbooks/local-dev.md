@@ -42,8 +42,8 @@ One idempotent command. It checks the toolchain, generates owner-only secrets
 under `secrets/local-dev/` (an Ed25519 worker-assertion pair and a `localhost`
 TLS certificate), writes a `.env` of disposable local values, installs the
 workspace, builds `.venv` with the locked worker dependencies, starts
-PostgreSQL 18 and Mailpit, migrates both databases, and provisions
-`teacher@learning-orbit.local`.
+PostgreSQL 18, Mailpit and MinIO, creates the private media bucket, migrates
+both databases, and provisions `teacher@learning-orbit.local`.
 
 Rerunning it never rotates an existing secret and never overwrites `.env`.
 Pass `--force` to reissue both.
@@ -126,6 +126,15 @@ never constructed and every `/v1/rooms*` route answers
 `503 ROOM_SERVICE_UNAVAILABLE`. The same is true of
 `LO_SERVICE_ASSERTION_TRUST_FILE`: it must contain a real Ed25519 public key —
 an empty `keys` array is refused. `pnpm bootstrap` writes both.
+
+**The object store is private and stays private.** The bucket carries no
+anonymous policy, and `pnpm storage:init` refuses to treat a bucket with one as
+private rather than silently rewriting it. Every browser read and write goes
+through a short-lived presigned URL whose signature covers the object key and
+the SHA-256 checksum, so a grant issued for one file cannot upload another.
+Promotion to the immutable destination key is a conditional PUT, not a
+server-side copy: MinIO honours `If-None-Match: *` on a PUT and ignores it on a
+copy, so only the PUT actually delivers a write-once destination.
 
 **No browser storage, ever.** `localStorage.length !== 0` is a hard end-to-end
 failure, so no user preference — theme, density, display mode — may be persisted.
