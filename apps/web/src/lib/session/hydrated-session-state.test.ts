@@ -974,3 +974,77 @@ describe("HydratedSessionState", () => {
     expect(lost.ledger.events()).toEqual([]);
   });
 });
+
+describe("server-derived countdown", () => {
+  const AT = "2026-08-30T08:00:00.000Z";
+
+  async function seated(closesAt: string | null) {
+    return HydratedSessionState.create({
+      session: student,
+      room: {
+        ...room,
+        status: "open",
+        startsAt: "2026-08-30T08:00:00.000Z",
+        closesAt,
+      },
+      gateway: {
+        getRoomEvents: vi.fn(async () => ({ events: [], throughRoomSeq: 0 })),
+        getProjectionLatest: vi.fn(async () => { throw new SessionGatewayError("STUDENT_ANALYTICS_NOT_PROMOTED"); }),
+      },
+    });
+  }
+
+  it("has no countdown until the server's clock is known", async () => {
+    const hydrated = await seated("2026-08-30T08:45:00.000Z");
+    // A countdown drawn from the device clock would be wrong by exactly how
+    // wrong that clock is, and the room closes on the server's.
+    expect(hydrated.serverNow(Date.now())).toBeUndefined();
+    expect(hydrated.remaining(Date.now())).toBeUndefined();
+  });
+
+  it("counts down against the server clock, not the browser's", async () => {
+    const hydrated = await seated("2026-08-30T08:45:00.000Z");
+    const browserNow = Date.parse("2020-01-01T00:00:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(browserNow);
+    try {
+      hydrated.receiveFrame({
+        type: "welcome", serverTime: AT, roomId: ROOM_ID, cursor: 0, status: "open",
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+
+    // The device is six years behind; the countdown is unaffected.
+    expect(hydrated.serverNow(browserNow)).toBe(Date.parse(AT));
+    expect(hydrated.remaining(browserNow)).toEqual({ seconds: 2700, expired: false });
+    expect(hydrated.remaining(browserNow + 60_000)).toEqual({ seconds: 2640, expired: false });
+  });
+
+  it("reports expiry rather than a negative countdown", async () => {
+    const hydrated = await seated("2026-08-30T08:45:00.000Z");
+    const browserNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(browserNow);
+    try {
+      hydrated.receiveFrame({
+        type: "welcome", serverTime: "2026-08-30T08:46:00.000Z", roomId: ROOM_ID, cursor: 0, status: "open",
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+    expect(hydrated.remaining(browserNow)).toEqual({ seconds: 0, expired: true });
+  });
+
+  it("stays silent when the room has no closing time", async () => {
+    const hydrated = await seated(null);
+    const browserNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(browserNow);
+    try {
+      hydrated.receiveFrame({
+        type: "welcome", serverTime: AT, roomId: ROOM_ID, cursor: 0, status: "open",
+      });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+    expect(hydrated.remaining(browserNow)).toBeUndefined();
+  });
+});

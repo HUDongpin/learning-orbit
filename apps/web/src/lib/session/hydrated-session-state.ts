@@ -134,6 +134,8 @@ export class HydratedSessionState {
   agentStatusPending = false;
   lastProjectionResult: ProjectionAcceptResult | undefined;
   lastServerTime: string | undefined;
+  /** Browser time when lastServerTime arrived, so the two can be differenced. */
+  #serverTimeReceivedAt: number | undefined;
   recoveryError: string | undefined;
 
   #state: SessionState;
@@ -453,6 +455,36 @@ export class HydratedSessionState {
     return task;
   }
 
+  /**
+   * The server's clock, as this browser can best estimate it.
+   *
+   * `undefined` until a welcome or heartbeat has been seen. A countdown drawn
+   * from the browser clock alone would be wrong by exactly the amount the
+   * device's clock is wrong, which in a classroom is routinely minutes - and
+   * the room closes on the server's clock, not the tablet's.
+   */
+  serverNow(browserNow: number): number | undefined {
+    if (this.lastServerTime === undefined || this.#serverTimeReceivedAt === undefined) return undefined;
+    const observed = Date.parse(this.lastServerTime);
+    if (!Number.isFinite(observed)) return undefined;
+    return browserNow + (observed - this.#serverTimeReceivedAt);
+  }
+
+  /**
+   * Seconds left in the session, or `undefined` when that cannot be derived.
+   *
+   * Returning `undefined` rather than a guess is the point: the header must be
+   * able to say it does not know instead of counting down to the wrong moment.
+   */
+  remaining(browserNow: number): Readonly<{ seconds: number; expired: boolean }> | undefined {
+    const closesAt = this.#state.closesAt === null ? Number.NaN : Date.parse(this.#state.closesAt);
+    const now = this.serverNow(browserNow);
+    if (now === undefined || !Number.isFinite(closesAt)) return undefined;
+    const remainingMs = closesAt - now;
+    if (remainingMs <= 0) return { seconds: 0, expired: true };
+    return { seconds: Math.ceil(remainingMs / 1_000), expired: false };
+  }
+
   progress(now: number): Readonly<{ elapsedSeconds: number; ratio: number }> {
     const startsAt = this.#state.startsAt === null ? Number.NaN : Date.parse(this.#state.startsAt);
     const closesAt = this.#state.closesAt === null ? Number.NaN : Date.parse(this.#state.closesAt);
@@ -533,6 +565,7 @@ export class HydratedSessionState {
       if (frame.type === "welcome") {
         if (frame.roomId !== this.room.roomId) throw new Error("WELCOME_ROOM_MISMATCH");
         this.lastServerTime = frame.serverTime;
+        this.#serverTimeReceivedAt = Date.now();
         this.#state = sessionReducer(this.#state, { type: "status", status: frame.status });
         return;
       }
@@ -609,7 +642,10 @@ export class HydratedSessionState {
         }
         return;
       }
-      if (frame.type === "heartbeat" && "serverTime" in frame) this.lastServerTime = frame.serverTime;
+      if (frame.type === "heartbeat" && "serverTime" in frame) {
+        this.lastServerTime = frame.serverTime;
+        this.#serverTimeReceivedAt = Date.now();
+      }
     } finally {
       this.#notify();
     }
@@ -641,6 +677,7 @@ export class HydratedSessionState {
     this.#agentMetaUpdatedAt = undefined;
     this.lastProjectionResult = undefined;
     this.lastServerTime = undefined;
+    this.#serverTimeReceivedAt = undefined;
     this.recoveryError = undefined;
     this.#session = undefined;
     this.#room = undefined;

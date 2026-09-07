@@ -271,6 +271,14 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
   }, [agentStatusTimeoutMs, api, authority, mode, retryToken, roomId, router, validRoomId]);
 
   const seatedHydrated = "hydrated" in state ? state.hydrated : undefined;
+  // One tick a second while a session is live. The value shown is derived from
+  // the server clock, so this only decides how often it is re-read.
+  const [, tickCountdown] = useReducer((count: number) => count + 1, 0);
+  useEffect(() => {
+    if (!seatedHydrated) return undefined;
+    const timer = setInterval(() => tickCountdown(), 1_000);
+    return () => clearInterval(timer);
+  }, [seatedHydrated]);
   const [, sweepPresenceClock] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
     if (!seatedHydrated) return undefined;
@@ -471,6 +479,20 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
     ? liveState.connected ? "課堂已結束，連線只用來接收權限變更" : "課堂已結束，不再建立即時連線"
     : liveState.connected ? "即時同步中：WebSocket 已連線" : "正在連線，接通之前不會有新內容出現";
   const durationMinutes = Math.round(details.durationSeconds / 60);
+  // Until a welcome or heartbeat has established the server's clock there is
+  // no honest countdown to draw, so the header keeps saying how long the
+  // session is rather than counting down from the device's own time.
+  const remaining = liveState.status === "closed" ? undefined : hydrated.remaining(Date.now());
+  const clockLabel = remaining === undefined
+    ? `${durationMinutes} 分鐘課堂`
+    : remaining.expired
+      ? "時間已到"
+      : `剩 ${String(Math.floor(remaining.seconds / 60)).padStart(2, "0")}:${String(remaining.seconds % 60).padStart(2, "0")}`;
+  const clockDescription = remaining === undefined
+    ? `這節課共 ${durationMinutes} 分鐘。尚未與伺服器對時，所以還不顯示倒數。`
+    : remaining.expired
+      ? "課堂時間已到，等待伺服器結束課堂。"
+      : `距離課堂結束還有 ${Math.floor(remaining.seconds / 60)} 分 ${remaining.seconds % 60} 秒，以伺服器時間計算。`;
   const themeLabel = theme === undefined ? "自動" : theme === "dark" ? "深色" : "淺色";
   const themeCopy = `深淺 ${themeLabel}：${theme === undefined
     ? "現在跟隨你裝置的深色或淺色設定，按一下改用深色。"
@@ -501,7 +523,12 @@ export function RoomAccessClient({ gateway, mode, roomId, agentStatusTimeoutMs =
             <p className="room-bar-meta">
               <span className={`teacher-status status-${liveState.status}`}>{STATUS_COPY[liveState.status]}</span>
               <span>{details.participants.length} 個匿名座位</span>
-              <span className="orbit-clock">{durationMinutes} 分鐘課堂</span>
+              <span
+                aria-label={clockDescription}
+                className="orbit-clock"
+                data-countdown={remaining === undefined ? "unavailable" : remaining.expired ? "expired" : "live"}
+                title={clockDescription}
+              >{clockLabel}</span>
             </p>
           </div>
         </div>
