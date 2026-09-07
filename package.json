@@ -21,6 +21,7 @@
     "playwright": "playwright test --config apps/web/playwright.config.ts",
     "load:pilot": "node tests/load/run-local-pilot.mjs",
     "verify:local-pilot": "node scripts/verify-local-pilot.mjs",
+    "verify:pilot": "node scripts/verify-release-evidence.mjs",
     "storage:init": "tsx scripts/init-private-bucket.ts",
     "assert:program-contracts": "tsx scripts/assert-program-contracts.ts",
     "verify:authority": "tsx scripts/verify-controlled-authority.ts",
