@@ -45,13 +45,18 @@ function abort(message, remedy) {
 }
 
 async function run(executable, args, options = {}) {
-  return execFileAsync(executable, args, {
+  const { input, ...rest } = options;
+  const pending = execFileAsync(executable, args, {
     cwd: repository,
     shell: false,
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
-    ...options,
+    ...rest,
   });
+  if (input !== undefined) {
+    pending.child.stdin?.end(input);
+  }
+  return pending;
 }
 
 async function exists(path) {
@@ -351,6 +356,28 @@ await run("pnpm", ["db:migrate:test"], { env: environment });
 done("development and test databases are migrated");
 
 // ------------------------------------------------------------------ teacher
+
+/**
+ * Without a current retention policy every room creation answers
+ * RETENTION_POLICY_NOT_CONFIGURED, so a freshly bootstrapped checkout cannot
+ * create a single room. A real pilot policy is a signed record an operator
+ * imports; this is the checked-in synthetic fixture, which guards itself and
+ * refuses to run outside a test environment.
+ */
+step("Installing the synthetic development retention policy");
+const composeServices = await composePs();
+const postgres = composeServices.find(({ Service }) => Service === "postgres");
+if (!postgres?.Name) abort("PostgreSQL container not found for the retention policy step.");
+const fixture = await readFile(
+  join(repository, "infra/postgres/seeds/test/pilot-retention-policy.fixture.sql"),
+  "utf8",
+);
+await run("docker", [
+  "exec", "-i", "-e", `PGPASSWORD=${environment.LO_POSTGRES_PASSWORD}`, postgres.Name,
+  "psql", "-h", "127.0.0.1", "-U", "learning_orbit", "-d", "learning_orbit",
+  "-v", "ON_ERROR_STOP=1", "-c", "SET app.environment = 'test';", "-f", "-",
+], { env: environment, input: fixture });
+done("synthetic-pilot-2026 (development only; a pilot needs a signed imported policy)");
 
 step("Provisioning the local teacher account");
 const teacherEmail = "teacher@learning-orbit.local";

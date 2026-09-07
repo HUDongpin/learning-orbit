@@ -117,6 +117,13 @@ browser out and deletes the room you were looking at, which presents as an
 authentication bug. The bootstrap points it at a separate `learning_orbit_test`
 database for exactly this reason.
 
+**The local retention policy is synthetic.** Room creation refuses with
+`RETENTION_POLICY_NOT_CONFIGURED` until a current `pilot_retention_policy` row
+exists, so `pnpm bootstrap` installs the checked-in fixture, which guards
+itself and refuses to run outside a test environment. A real pilot needs a
+signed policy record imported by an operator; the development row is never
+that, and its `approval_reference` says so.
+
 **Seat codes are single-use.** A join that fails halfway cannot be retried with
 the same seat code. Take the next seat, or create a new room.
 
