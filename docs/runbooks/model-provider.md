@@ -55,3 +55,25 @@ That still needs the three signed human records `pnpm verify:pilot` reports:
 ethics authorization, the completed teacher shadow, and the student-visibility
 promotion. They are separate decisions by separate people, and no amount of
 working software substitutes for them.
+
+## Turning Nova on
+
+The executor is injected in `build_supervisor` and reads its provider from the
+manifest, so the whole switch is one environment variable plus the credential:
+
+```bash
+LO_AGENT_PROVIDER_MANIFEST=/run/learning-orbit/provider-manifest.json
+LO_AGENT_PROVIDER_KEY=<injected at deploy; never committed>
+```
+
+With the manifest unset, `agent.execute.v1` fails with
+`AGENT_PROVIDER_UNCONFIGURED` and retries — the run does not silently fall back
+to the deterministic fixture. That fallback would put canned text in front of
+students under Nova's name, which they could not tell from a real answer, so it
+is not offered.
+
+Each run records an `agent_prompt_artifact` row: the sha256 of exactly what was
+sent, the system prompt's own hash, the room-sequence range, the context event
+ids, and which manifest was in force. The prompt text is not stored — it is the
+room's own events over the recorded range, and a second copy would be one more
+place deletion has to reach.

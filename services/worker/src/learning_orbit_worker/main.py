@@ -22,6 +22,7 @@ from .projection_store import ProjectionStore
 from .pipeline_handlers import register_pipeline_handlers
 from .lifecycle import register_lifecycle_handlers
 from .service_assertion import ServiceAssertionSigner
+from .agent.executor import DurableAgentExecutor
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +236,11 @@ def build_supervisor(
             service_assertion=signer,
             internal_http=internal_http,
             projection_store=ProjectionStore(connection),
+            # The executor is injected here and nowhere else. Without it the
+            # handler refuses every agent job, which is correct but means Nova
+            # never answers; with a fixture in its place students would get
+            # canned text they could not tell from a real answer.
+            agent_executor=DurableAgentExecutor(connection, internal_http),
         )
         telemetry, span_sink = telemetry_from_env()
         supervisor = WorkerSupervisor(
