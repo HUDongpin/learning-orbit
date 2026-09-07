@@ -7,6 +7,12 @@ import { compileFromFile } from "json-schema-to-typescript";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const defaultSchemasDir = join(root, "schemas");
 const defaultOutDir = join(root, "src/generated");
+const defaultWorkerDir = resolve(
+  root,
+  "../../services/worker/src/learning_orbit_worker/generated",
+);
+/** Schemas the Python worker must be able to parse are marked in the schema itself. */
+const PYTHON_INGRESS_KEY = "x-learning-orbit-python-ingress";
 const options = { bannerComment: "/* generated; source is JSON Schema */", unreachableDefinitions: true };
 
 function generatorError(code) {
@@ -31,6 +37,7 @@ async function compileAllSchemas(schemasDir) {
 
   const sourceSchemas = [];
   const generatedModules = [];
+  const pythonIngress = [];
   const modules = [];
   for (const file of files) {
     const sourcePath = join(schemasDir, file);
@@ -39,10 +46,59 @@ async function compileAllSchemas(schemasDir) {
     if (typeof schema.$id !== "string") throw generatorError(`SCHEMA_ID_MISSING:${file}`);
     const moduleFile = file.replace(/\.json$/, ".ts");
     modules.push({ moduleFile, source: await compileFromFile(sourcePath, options) });
-    sourceSchemas.push({ file, id: schema.$id, sha256: createHash("sha256").update(raw).digest("hex") });
+    const sha256 = createHash("sha256").update(raw).digest("hex");
+    sourceSchemas.push({ file, id: schema.$id, sha256 });
     generatedModules.push({ sourceFile: file, moduleFile, language: "typescript" });
+    if (schema[PYTHON_INGRESS_KEY] === true) {
+      pythonIngress.push({
+        file,
+        id: schema.$id,
+        sha256,
+        sourcePath: `packages/contracts/schemas/${file}`,
+        moduleFile: `${file.replace(/\.json$/, "").replace(/[.-]/g, "_")}.py`,
+      });
+    }
   }
-  return { modules, manifest: JSON.stringify({ schemaVersion: 1, sourceSchemas, generatedModules }, null, 2) + "\n" };
+  return {
+    modules,
+    pythonIngress,
+    manifest: JSON.stringify({ schemaVersion: 1, sourceSchemas, generatedModules }, null, 2) + "\n",
+  };
+}
+
+/**
+ * Write the worker's contract manifest and refuse a Python-ingress schema that
+ * has no worker module.
+ *
+ * The manifest was hand-maintained, so two of its entries carried no digest at
+ * all and nothing noticed when a new signed route arrived with no worker-side
+ * contract - the worker could not have parsed a request it is required to
+ * send. Ownership moves here: every Python-ingress schema is listed with the
+ * digest of the exact schema its module parses, and a missing module fails
+ * generation rather than shipping.
+ */
+async function writePythonManifest(workerDir, pythonIngress) {
+  if (!(await directoryState(workerDir, true))) return;
+  const missing = [];
+  for (const entry of pythonIngress) {
+    try {
+      const info = await lstat(join(workerDir, entry.moduleFile));
+      if (!info.isFile()) missing.push(entry.moduleFile);
+    } catch {
+      missing.push(entry.moduleFile);
+    }
+  }
+  if (missing.length) throw generatorError(`PYTHON_INGRESS_MODULE_MISSING:${missing.join(",")}`);
+  const manifest = {
+    schemaVersion: 1,
+    sourceSchemas: pythonIngress.map(({ file, id, sha256, sourcePath }) => ({
+      file, id, language: "python-ingress", sha256, sourcePath,
+    })),
+    generatedModules: pythonIngress.map(({ file, moduleFile }) => ({
+      sourceFile: file, moduleFile, language: "python",
+    })),
+  };
+  await writeFile(join(workerDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function writeStagingDirectory(stage, compiled) {
@@ -50,7 +106,7 @@ async function writeStagingDirectory(stage, compiled) {
   await writeFile(join(stage, "manifest.json"), compiled.manifest);
 }
 
-export async function generateTypes({ schemasDir = defaultSchemasDir, outDir = defaultOutDir } = {}) {
+export async function generateTypes({ schemasDir = defaultSchemasDir, outDir = defaultOutDir, workerDir = defaultWorkerDir } = {}) {
   const trustedSchemasDir = resolve(schemasDir);
   const trustedOutDir = resolve(outDir);
   const outParent = dirname(trustedOutDir);
@@ -58,6 +114,9 @@ export async function generateTypes({ schemasDir = defaultSchemasDir, outDir = d
 
   // No target or lock is touched until every source was read, parsed, and compiled in memory.
   const compiled = await compileAllSchemas(trustedSchemasDir);
+  // Checked before any output moves: a missing worker module must fail the
+  // whole generation, not leave one language ahead of the other.
+  await writePythonManifest(resolve(workerDir), compiled.pythonIngress);
   await mkdir(outParent, { recursive: true });
   await directoryState(outParent);
   await directoryState(trustedOutDir, true);

@@ -1,19 +1,79 @@
 {
   "schemaVersion": 1,
   "sourceSchemas": [
-    {"file":"agent-internal-command.v1.json","id":"https://learning-orbit.local/schemas/agent-internal-command.v1.json","language":"python-ingress"},
-    {"file":"agent-provider-health.v1.json","id":"https://learning-orbit.local/schemas/agent-provider-health.v1.json","language":"python-ingress"},
-    {"file":"derived-text-artifact.v1.json","id":"https://learning-orbit.local/schemas/derived-text-artifact.v1.json","language":"python-ingress","sha256":"9346fd3a5f8ef0453c5bb263eab65e39d0549af0734e531089fa2a97fef20c67","sourcePath":"packages/contracts/schemas/derived-text-artifact.v1.json"},
-    {"file":"analysis-projection-envelope.v1.json","id":"https://learning-orbit.local/schemas/analysis-projection-envelope.v1.json","language":"python-ingress","sha256":"677d7f159b08f979e7e956fdcc96e05bd637e5d508b5100f8c100ae06ba9501a","sourcePath":"packages/contracts/schemas/analysis-projection-envelope.v1.json"},
-    {"file":"analytics-review-command.v1.json","id":"https://learning-orbit.local/schemas/analytics-review-command.v1.json","language":"python-ingress","sha256":"34cd3f11d55fa502b1ce66e8d17b76141920e8d76b407c25baf049a72f3db86e","sourcePath":"packages/contracts/schemas/analytics-review-command.v1.json"},
-    {"file":"deletion-lifecycle.v1.json","id":"https://learning-orbit.local/schemas/deletion-lifecycle.v1.json","language":"python-ingress","sha256":"58ac14a3a6ab3f88265e1535528031d43a6c61ffb9def44770481fbb8bbe32e1","sourcePath":"packages/contracts/schemas/deletion-lifecycle.v1.json"}
+    {
+      "file": "agent-internal-command.v1.json",
+      "id": "https://learning-orbit.local/schemas/agent-internal-command.v1.json",
+      "language": "python-ingress",
+      "sha256": "e636bdfe9815b09fcc18d6159ae89808517c8c647d2d6e523e57bbf15c501520",
+      "sourcePath": "packages/contracts/schemas/agent-internal-command.v1.json"
+    },
+    {
+      "file": "agent-provider-health.v1.json",
+      "id": "https://learning-orbit.local/schemas/agent-provider-health.v1.json",
+      "language": "python-ingress",
+      "sha256": "59cda4189cd7fd4cbcb1cf97932a34cf926b456e214ee1c3cf52f9f58bffd983",
+      "sourcePath": "packages/contracts/schemas/agent-provider-health.v1.json"
+    },
+    {
+      "file": "lifecycle-internal-media-surface.v1.json",
+      "id": "https://learning-orbit.local/schemas/lifecycle-internal-media-surface.v1.json",
+      "language": "python-ingress",
+      "sha256": "ed87bc0235bb75e84fae60baa9fe932be082414133c07f550f86d41658bf912e",
+      "sourcePath": "packages/contracts/schemas/lifecycle-internal-media-surface.v1.json"
+    },
+    {
+      "file": "media-internal-outcome.v1.json",
+      "id": "https://learning-orbit.local/schemas/media-internal-outcome.v1.json",
+      "language": "python-ingress",
+      "sha256": "f31de929014541768c6d36e11d02c39f6fff22e205481a7c5815aadf21ddcca1",
+      "sourcePath": "packages/contracts/schemas/media-internal-outcome.v1.json"
+    },
+    {
+      "file": "media-internal-reconcile.v1.json",
+      "id": "https://learning-orbit.local/schemas/media-internal-reconcile.v1.json",
+      "language": "python-ingress",
+      "sha256": "f57c5650b440a6bee1c389e2d8cf6b6a6db7ed782562d0df5847573905c7a917",
+      "sourcePath": "packages/contracts/schemas/media-internal-reconcile.v1.json"
+    },
+    {
+      "file": "room-internal-auto-close.v1.json",
+      "id": "https://learning-orbit.local/schemas/room-internal-auto-close.v1.json",
+      "language": "python-ingress",
+      "sha256": "09cf63756b8c03c473e308c4d1cad87e09c85d5a580caaf1ceb0f0395df8ea15",
+      "sourcePath": "packages/contracts/schemas/room-internal-auto-close.v1.json"
+    }
   ],
   "generatedModules": [
-    {"sourceFile":"agent-internal-command.v1.json","moduleFile":"agent_internal_command_v1.py","language":"python"},
-    {"sourceFile":"agent-provider-health.v1.json","moduleFile":"agent_provider_health_v1.py","language":"python"},
-    {"sourceFile":"derived-text-artifact.v1.json","moduleFile":"derived_text_artifact_v1.py","language":"python"},
-    {"sourceFile":"analysis-projection-envelope.v1.json","moduleFile":"analysis_projection_envelope_v1.py","language":"python"},
-    {"sourceFile":"analytics-review-command.v1.json","moduleFile":"analytics_review_command_v1.py","language":"python"},
-    {"sourceFile":"deletion-lifecycle.v1.json","moduleFile":"deletion_lifecycle_v1.py","language":"python"}
+    {
+      "sourceFile": "agent-internal-command.v1.json",
+      "moduleFile": "agent_internal_command_v1.py",
+      "language": "python"
+    },
+    {
+      "sourceFile": "agent-provider-health.v1.json",
+      "moduleFile": "agent_provider_health_v1.py",
+      "language": "python"
+    },
+    {
+      "sourceFile": "lifecycle-internal-media-surface.v1.json",
+      "moduleFile": "lifecycle_internal_media_surface_v1.py",
+      "language": "python"
+    },
+    {
+      "sourceFile": "media-internal-outcome.v1.json",
+      "moduleFile": "media_internal_outcome_v1.py",
+      "language": "python"
+    },
+    {
+      "sourceFile": "media-internal-reconcile.v1.json",
+      "moduleFile": "media_internal_reconcile_v1.py",
+      "language": "python"
+    },
+    {
+      "sourceFile": "room-internal-auto-close.v1.json",
+      "moduleFile": "room_internal_auto_close_v1.py",
+      "language": "python"
+    }
   ]
 }
