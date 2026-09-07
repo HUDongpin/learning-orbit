@@ -49,6 +49,15 @@ export const realtimeContract = {
     requireProjectionSnapshotUrl(frame, "INVALID_REALTIME_FRAME");
     return frame;
   },
+  /**
+   * Parse a frame a *client* sent. The union of both directions accepts
+   * server-shaped frames too, so a socket that validates inbound bytes with
+   * `parseRealtimeFrame` will quietly admit `welcome`, `ack` or a presence
+   * frame carrying someone else's actorId. Inbound parsing must use this.
+   */
+  parseClientFrame(value: unknown): ClientFrame {
+    return parse(value, clientValidator, "INVALID_CLIENT_FRAME");
+  },
   parseServerFrame(value: unknown): ServerFrame {
     const frame = parse(value, serverValidator, "INVALID_SERVER_FRAME");
     if (frame.type === "event") parseCoreRoomEvent(frame.event);

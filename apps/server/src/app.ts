@@ -141,7 +141,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   } : undefined);
   const realtime = options.realtime ?? (pool ? (() => {
     const authorizer = new RealtimeDeliveryAuthorizer(pool);
-    const hub = new RoomHub(pool, authorizer);
+    const hub = new RoomHub(pool, authorizer, () => clock.now());
     const authorizeProjection: ProjectionDeliveryAuthorizer = async ({ connection, frame, principal }) => {
       if (!analytics) return { allow: false as const };
       try {

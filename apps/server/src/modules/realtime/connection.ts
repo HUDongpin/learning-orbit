@@ -116,7 +116,7 @@ export class RealtimeConnection {
       }
       if (Buffer.isBuffer(raw) || raw instanceof Uint8Array) value = JSON.parse(Buffer.from(raw).toString("utf8"));
       else if (typeof raw === "string") value = JSON.parse(raw);
-      const frame = realtimeContract.parseRealtimeFrame(value);
+      const frame = realtimeContract.parseClientFrame(value);
       await this.#handle(frame);
     } catch { this.close(4400, "invalid frame"); }
   }
