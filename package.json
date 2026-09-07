@@ -15,6 +15,7 @@
     "test:server": "pnpm --filter @learning-orbit/server test",
     "test:realtime": "pnpm --filter @learning-orbit/server test -- realtime",
     "test:web": "pnpm --filter @learning-orbit/web test",
+    "analytics:gate3": "bash scripts/run-analytics-gate3.sh",
     "db:migrate": "pnpm --filter @learning-orbit/server db:migrate",
     "db:migrate:test": "pnpm --filter @learning-orbit/server db:migrate:test",
     "teacher:provision": "pnpm --filter @learning-orbit/server teacher:provision",
