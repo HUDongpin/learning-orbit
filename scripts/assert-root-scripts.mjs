@@ -16,6 +16,7 @@ const expectedScripts = {
   "db:migrate:test": "pnpm --filter @learning-orbit/server db:migrate:test",
   "teacher:provision": "pnpm --filter @learning-orbit/server teacher:provision",
   playwright: "playwright test --config apps/web/playwright.config.ts",
+  "e2e:local": "node scripts/run-local-e2e.mjs",
   "load:pilot": "node tests/load/run-local-pilot.mjs",
   "load:k6": "node scripts/run-k6-pilot.mjs",
   "verify:local-pilot": "node scripts/verify-local-pilot.mjs",

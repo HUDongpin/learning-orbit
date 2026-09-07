@@ -296,6 +296,26 @@ node -e 'const {WebSocket}=require("ws");const w=new WebSocket(process.argv[1],{
 Checked that way, the Next dev same-origin proxy does carry the upgrade: both
 the direct API socket and the proxied one open.
 
+### `pnpm e2e:local`
+
+`scripts/run-local-e2e.mjs` assembles the whole environment and runs the
+browser suite in a working tree, on any ports:
+
+```bash
+pnpm e2e:local                      # both specs
+pnpm e2e:local --grep "public boundary"
+```
+
+It starts a fresh API (no object store), a dev web server over HTTPS with a
+generated certificate, and the Python worker; runs Playwright against them;
+writes every process's output to `test-results/e2e-processes.log`; and stops
+everything it started, including the Next dev daemon, which it finds by port
+because that daemon deliberately outlives its own wrapper.
+
+`verify:local-pilot` remains the authority: it runs in a disposable checkout on
+the pinned ports and produces the receipt. This is the smaller loop for working
+on the specs themselves.
+
 ### What the suite needs assembled around it
 
 `pnpm verify:local-pilot` assembles all of this. Doing it by hand, these are
