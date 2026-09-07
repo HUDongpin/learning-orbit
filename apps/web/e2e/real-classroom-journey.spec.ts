@@ -77,7 +77,7 @@ async function readTeacherBoundaryState(page: Page, roomId: string): Promise<{
   surface: number;
   sessionStatus: number;
   roomStatus: number;
-  closeCodes: number[];
+  closeCodes: string[];
 }> {
   return page.evaluate(async ({ sessionPath, roomPath }) => {
     const headings = [...document.querySelectorAll("h1")]
@@ -89,7 +89,7 @@ async function readTeacherBoundaryState(page: Page, roomId: string): Promise<{
             : headings.includes("無法開啟這個課堂") ? 5 : 0;
     // A socket that dropped has to say why: 4401/4403/4410 mean the server
     // ended it, 1006 means the transport did.
-    const closeCodes = (window as unknown as { __loCloseCodes?: number[] }).__loCloseCodes ?? [];
+    const closeCodes = (window as unknown as { __loCloseCodes?: string[] }).__loCloseCodes ?? [];
     const [sessionResponse, roomResponse] = await Promise.all([
       fetch(sessionPath, { credentials: "include", cache: "no-store" }),
       fetch(roomPath, { credentials: "include", cache: "no-store" }),

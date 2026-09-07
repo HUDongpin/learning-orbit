@@ -29,8 +29,12 @@ export type RoomSocketObservation = {
   acks: number;
   rejects: number;
   closed: number;
-  /** Close codes seen on room sockets, so a close says why it happened. */
-  closeCodes: number[];
+  /**
+   * `<code>/<frames the client sent>` per closed room socket. The frame count
+   * separates "the client never spoke" from "it spoke and the frame did not
+   * arrive" — different bugs, in different places.
+   */
+  closeCodes: string[];
   socketErrors: number;
 };
 
@@ -71,18 +75,28 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
   // it. The page's own WebSocket records it.
   void page.addInitScript(() => {
     const native = window.WebSocket;
-    const codes: number[] = [];
-    (window as unknown as { __loCloseCodes: number[] }).__loCloseCodes = codes;
-    class Recorded extends native {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols);
-        this.addEventListener("close", (event) => {
-          codes.push((event as CloseEvent).code);
+    const codes: string[] = [];
+    (window as unknown as { __loCloseCodes: string[] }).__loCloseCodes = codes;
+    // `send` is counted on the prototype and the constructor is wrapped in a
+    // Proxy rather than subclassed. A `class extends WebSocket` here changed
+    // enough about the object that the page stopped rendering, and an
+    // instrument that alters what it measures is worse than no instrument.
+    const send = native.prototype.send;
+    native.prototype.send = function patched(this: WebSocket & { __loSent?: number }, data: never) {
+      this.__loSent = (this.__loSent ?? 0) + 1;
+      return send.call(this, data);
+    } as typeof send;
+    (window as unknown as { WebSocket: unknown }).WebSocket = new Proxy(native, {
+      construct(target, args: [string | URL, (string | string[])?]) {
+        const socket = new target(...args) as WebSocket & { __loSent?: number };
+        socket.addEventListener("close", (event) => {
+          codes.push(`${(event as CloseEvent).code}/${socket.__loSent ?? 0}`);
         });
-      }
-    }
-    (window as unknown as { WebSocket: typeof WebSocket }).WebSocket = Recorded as unknown as typeof WebSocket;
+        return socket;
+      },
+    });
   });
+
   page.on("websocket", (socket) => {
     let url: URL;
     try { url = new URL(socket.url()); } catch { return; }
@@ -126,7 +140,7 @@ export function observeRoomWebSockets(page: Page): RoomSocketObservation {
       if (result.generation === generation) result.ready = false;
       // Read the code the page saw. A close without its code cannot say
       // whether the server ended the socket or the transport dropped it.
-      void page.evaluate(() => (window as unknown as { __loCloseCodes?: number[] }).__loCloseCodes ?? [])
+      void page.evaluate(() => (window as unknown as { __loCloseCodes?: string[] }).__loCloseCodes ?? [])
         .then((codes) => { result.closeCodes = codes; })
         .catch(() => { /* the page may already be gone */ });
     });

@@ -360,11 +360,33 @@ the `browser-playwright` gate very likely does not pass today, and its
 manifest count of `2` describes an intention rather than an observation. Worth
 settling before any receipt is read as covering the browser journey.
 
-What is still unidentified is which path opens the socket that never sends its
-`hello`. The teacher receives events on its first socket (`E5`), then the spec
-reloads the page, and the socket that comes back is the one that dies. Both
-obvious candidates have been closed off: `RoomSocket.connect` now closes the
-socket it supersedes, and `dispose()` reaches `socket.destroy()`.
+**The client did speak.** The diagnostic now counts frames sent per socket, and
+the dying one reads `K4400/5`: five frames sent, and the server still answered
+"hello required". That contradicts the obvious reading and rules out every
+theory built on it — the client is not failing to send `hello`.
+
+`connection.ts` produces 4400 in exactly two places: the five-second timer when
+no hello has arrived, and a first frame that is not a hello. Since frames were
+sent, the question is now which of those fired and why the server did not see a
+hello it was sent. The client's own gating makes the second case hard to reach:
+`send` only transmits once `#resumeReady`, and `#sendEphemeral` returns early
+before resume with a comment naming this exact hazard.
+
+Two candidates worth taking next, in order:
+
+1. **The frames went to the wrong place.** `scripts/local-e2e-ingress.mjs`
+   forwards upgrades by hand; a bug there that crossed two client sockets onto
+   one upstream, or lost the first frames of one, would look precisely like
+   this. The students' sockets working through the same ingress argues against
+   it but does not settle it. Running the suite against the API directly, with
+   `LO_ALLOWED_ORIGINS` matching, removes the ingress from the picture.
+2. **Two sockets, one server connection.** `G2` with `W1 R1` and `A3 E3` says
+   one socket is fully healthy while another dies. Logging the connection
+   identity server-side would say whether the server saw one upgrade or two.
+
+Ruled out already: `RoomSocket.connect` leaving a superseded socket open (now
+closed), `dispose()` not reaching `socket.destroy()` (it does), and the
+student-to-teacher redirect creating a socket (it returns first).
 
 Worth carrying into that: the five-second budget is measured from the server's
 accept but can only be answered when the client's main thread is free. On the
