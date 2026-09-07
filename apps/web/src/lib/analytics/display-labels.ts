@@ -78,3 +78,20 @@ export const METRIC_EXPLANATION: Readonly<Record<string, string>> = {
   agentShare: "這段時間內由 Nova 產生的事件比例。",
   semanticCoverage: "討論覆蓋了多少個不同概念。",
 };
+
+/**
+ * The complete TRACE-AI claim ceiling, shown to students verbatim.
+ *
+ * `trace-projection.v1.json` pins this string as a `const`, so the wire value
+ * is already guaranteed. It is repeated here so the surface renders a value it
+ * owns rather than one it received: a shortened or missing disclosure is worse
+ * than a stale one, and a panel that simply prints whatever arrived would show
+ * less the moment the contract loosened.
+ */
+export const TRACE_STUDENT_INTERPRETATION_ZH_HANT =
+  "此圖呈現系統觀測到的近期互動事件，不等同友情、地位、能力、貢獻價值、學習成績、心理關係或 Agent 因果效果。";
+
+/** True when a bundle carries exactly the disclosure this build expects. */
+export function interpretationMatchesClaimCeiling(value: unknown): boolean {
+  return value === TRACE_STUDENT_INTERPRETATION_ZH_HANT;
+}

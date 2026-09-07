@@ -7,7 +7,13 @@ import { DEFAULT_ROOM_VIEW, type RoomViewPreferences } from "../session/room-rou
 import { identityInitial, identityStyle } from "../chat/identity";
 import { AnalysisWarnings } from "./analysis-warnings";
 import { ProjectionPanelState } from "./projection-panel-state";
-import { METRIC_EXPLANATION, traceLayerLabel, traceNodeKindLabel } from "./display-labels";
+import {
+  interpretationMatchesClaimCeiling,
+  METRIC_EXPLANATION,
+  TRACE_STUDENT_INTERPRETATION_ZH_HANT,
+  traceLayerLabel,
+  traceNodeKindLabel,
+} from "./display-labels";
 
 const WINDOWS = ["recent_10m", "session_45m"] as const;
 const VIEWS = ["observed", "human_only", "lineage_adjusted"] as const;
@@ -310,7 +316,12 @@ export function TracePanel({ slot, onRetry, preferences, onPreferencesChange }: 
           </div>
           {presentationPaused && pending ? <p className="analysis-pending" role="status">背景已驗證 {pending} 個較新版本；目前呈現仍停在 v{presented.projectionVersion}。</p> : null}
           <p className="analysis-time-range">伺服器窗口：<time dateTime={adapted?.window.windowStartEventTime}>{adapted?.window.windowStartEventTime}</time> – <time dateTime={adapted?.window.windowEndEventTime}>{adapted?.window.windowEndEventTime}</time></p>
-          {presented.projectionKey === "trace.student_bundle" ? <p className="analysis-interpretation">{presented.payload.interpretation}</p> : null}
+          {presented.projectionKey === "trace.student_bundle" ? (
+            <p
+              className="analysis-interpretation"
+              data-claim-ceiling={interpretationMatchesClaimCeiling(presented.payload.interpretation) ? "expected" : "unexpected"}
+            >{TRACE_STUDENT_INTERPRETATION_ZH_HANT}</p>
+          ) : null}
           <AnalysisWarnings codes={[...presented.warnings, ...(adapted?.view.warnings ?? [])]} />
           <p className="analysis-layout-note">圖上位置只用於穩定排版；關係、方向與群體指標均來自目前選取的伺服器視圖。</p>
           {!hasNetwork ? <div className="analysis-state" role="status">伺服器已返回 Projection，但目前沒有足夠互動事件形成可解讀網絡。</div>

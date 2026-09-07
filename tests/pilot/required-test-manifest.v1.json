@@ -81,7 +81,7 @@
         "--reporter=json"
       ],
       "report": "test-results/local-pilot/summaries/security-vitest.summary.json",
-      "expectedTests": 11
+      "expectedTests": 15
     },
     {
       "id": "worker-python",
