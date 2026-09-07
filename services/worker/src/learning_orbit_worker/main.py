@@ -12,6 +12,7 @@ from threading import Event
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
+from .observability import Telemetry, create_telemetry
 from .core_handlers import register_core_handlers
 from .analytics_handlers import register_analytics_handlers
 from .handler_registry import HandlerOutcome, HandlerRegistry, WorkerDeps, run_with_lease
@@ -83,12 +84,64 @@ class WorkerConfig:
         )
 
 
+# A dropped connection, a restarted database or a serialization failure are
+# expected in a long-running worker. A programming fault is not, and reporting
+# one as if it were routine would hide it.
+TRANSIENT_ERROR_NAMES = frozenset({
+    "OperationalError", "InterfaceError", "ConnectionException",
+    "ConnectionError", "ConnectionResetError", "BrokenPipeError",
+    "TimeoutError", "OSError", "AdminShutdown", "CannotConnectNow",
+    "SerializationFailure", "DeadlockDetected", "LockNotAvailable",
+})
+PERMANENT_ERROR_NAMES = frozenset({
+    "ProgrammingError", "IntegrityError", "DataError", "InternalError",
+    "NotSupportedError", "ValueError", "TypeError", "KeyError",
+    "AttributeError", "ImportError", "LookupError",
+})
+
+BASE_BACKOFF_SECONDS = 0.5
+MAX_BACKOFF_SECONDS = 30.0
+MAX_CONSECUTIVE_FAILURES = 5
+
+
+class WorkerSupervisorUnavailable(RuntimeError):
+    """The loop failed repeatedly with no successful iteration between."""
+
+
+def classify_worker_error(error: BaseException) -> str:
+    """Classify a failure that escaped one supervisor iteration.
+
+    Classification walks the exception's own class hierarchy by name so the
+    worker does not have to import psycopg to reason about a psycopg error, and
+    so a driver-specific subclass (SerializationFailure under OperationalError)
+    is classified by the family it actually belongs to.
+
+    An unrecognised failure is `permanent`: calling it transient would let a
+    real defect retry quietly forever.
+    """
+    names = {cls.__name__ for cls in type(error).__mro__}
+    if names & TRANSIENT_ERROR_NAMES:
+        return "transient"
+    if names & PERMANENT_ERROR_NAMES:
+        return "permanent"
+    return "permanent"
+
+
+def supervisor_backoff_seconds(consecutive_failures: int) -> float:
+    """Exponential backoff, capped, so a database outage is not a hot loop."""
+    if consecutive_failures < 1:
+        return 0.0
+    return min(MAX_BACKOFF_SECONDS, BASE_BACKOFF_SECONDS * (2 ** (consecutive_failures - 1)))
+
+
 class WorkerSupervisor:
-    def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0) -> None:
+    def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0, telemetry: Telemetry | None = None) -> None:
         self.registry = registry or register_lifecycle_handlers(register_pipeline_handlers(register_analytics_handlers(register_core_handlers(HandlerRegistry()))))
         self.jobs = JobStore(connection, worker_id)
         self.deps = deps or WorkerDeps(connection, self.jobs, projection_store=ProjectionStore(connection))
         self.poll_seconds = poll_seconds
+        self.telemetry = telemetry or create_telemetry()
+        self.consecutive_failures = 0
 
     def run_once(self) -> HandlerOutcome | None:
         jobs = self.jobs.claim(1)
@@ -98,9 +151,38 @@ class WorkerSupervisor:
         return run_with_lease(job, self.registry.get(job.job_type), self.deps)
 
     def run_forever(self, stop: Event | None = None) -> None:
+        """Claim and run jobs until stopped, surviving transient failure.
+
+        A failure that escapes `run_once` is outside job handling - claiming,
+        or the connection itself - because `run_with_lease` already owns a
+        handler's own failure. Previously any such failure ended the loop
+        silently, so a single database blip stopped the worker while its
+        process stayed alive and healthy-looking.
+        """
         stop = stop or Event()
+        self.consecutive_failures = 0
         while not stop.is_set():
-            outcome = self.run_once()
+            try:
+                outcome = self.run_once()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as error:  # noqa: BLE001 - the loop must survive
+                self.consecutive_failures += 1
+                classification = classify_worker_error(error)
+                self.telemetry.record("worker.supervisor.iteration_failed", {
+                    "failureCode": f"SUPERVISOR_{classification.upper()}_FAILURE",
+                })
+                if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    # Repeated failure with no successful iteration between is
+                    # not something this loop can recover from. Surface it so a
+                    # process manager restarts the whole worker rather than
+                    # leaving it retrying an unrecoverable state forever.
+                    raise WorkerSupervisorUnavailable(
+                        f"SUPERVISOR_{classification.upper()}_FAILURE",
+                    ) from error
+                stop.wait(supervisor_backoff_seconds(self.consecutive_failures))
+                continue
+            self.consecutive_failures = 0
             if outcome is None:
                 stop.wait(self.poll_seconds)
 

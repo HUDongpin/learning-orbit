@@ -1,7 +1,15 @@
 import unittest
 from pathlib import Path
 
-from learning_orbit_worker.main import WorkerConfig, build_supervisor
+from learning_orbit_worker.main import (
+    WorkerConfig,
+    WorkerSupervisor,
+    WorkerSupervisorUnavailable,
+    build_supervisor,
+    classify_worker_error,
+    supervisor_backoff_seconds,
+)
+from learning_orbit_worker.observability import InMemoryTelemetry, create_telemetry
 
 
 class _Connection:
@@ -112,3 +120,116 @@ class WorkerCompositionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FailingJobs:
+    """Claim raises a chosen error a fixed number of times, then succeeds."""
+
+    def __init__(self, error, failures):
+        self.error = error
+        self.remaining = failures
+        self.claims = 0
+
+    def claim(self, _limit):
+        self.claims += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise self.error
+        return []
+
+
+class _StopAfter:
+    """An Event-like object that stops the loop after N waits."""
+
+    def __init__(self, waits):
+        self.remaining = waits
+        self.slept = []
+
+    def is_set(self):
+        return self.remaining <= 0
+
+    def wait(self, seconds):
+        self.slept.append(seconds)
+        self.remaining -= 1
+
+
+def _supervisor(jobs, telemetry=None):
+    supervisor = WorkerSupervisor.__new__(WorkerSupervisor)
+    supervisor.jobs = jobs
+    supervisor.registry = None
+    supervisor.deps = None
+    supervisor.poll_seconds = 0.0
+    supervisor.telemetry = telemetry or create_telemetry()
+    supervisor.consecutive_failures = 0
+    return supervisor
+
+
+class WorkerSupervisorResilienceTests(unittest.TestCase):
+    def test_classifies_driver_and_programming_failures_apart(self):
+        class OperationalError(Exception):
+            pass
+
+        class SerializationFailure(OperationalError):
+            pass
+
+        class ProgrammingError(Exception):
+            pass
+
+        for error, expected in [
+            (OperationalError("connection reset"), "transient"),
+            (SerializationFailure("could not serialize"), "transient"),
+            (ConnectionResetError("peer went away"), "transient"),
+            (TimeoutError("statement timeout"), "transient"),
+            (ProgrammingError("column does not exist"), "permanent"),
+            (ValueError("ANALYTICS_JOB_PAYLOAD_INVALID"), "permanent"),
+            # An unrecognised failure must not be assumed recoverable, or a
+            # real defect retries quietly forever.
+            (Exception("something new"), "permanent"),
+        ]:
+            with self.subTest(error=type(error).__name__):
+                self.assertEqual(classify_worker_error(error), expected)
+
+    def test_backoff_grows_and_is_capped(self):
+        self.assertEqual(supervisor_backoff_seconds(0), 0.0)
+        self.assertEqual(supervisor_backoff_seconds(1), 0.5)
+        self.assertEqual(supervisor_backoff_seconds(2), 1.0)
+        self.assertEqual(supervisor_backoff_seconds(3), 2.0)
+        self.assertEqual(supervisor_backoff_seconds(99), 30.0)
+
+    def test_survives_a_transient_failure_and_keeps_claiming(self):
+        class OperationalError(Exception):
+            pass
+
+        jobs = _FailingJobs(OperationalError("connection reset"), failures=2)
+        sink = InMemoryTelemetry()
+        supervisor = _supervisor(jobs, sink.telemetry(now=lambda: 0.0))
+        stop = _StopAfter(waits=4)
+
+        supervisor.run_forever(stop)
+
+        # Two failed iterations backed off, then a successful empty claim.
+        self.assertGreaterEqual(jobs.claims, 3)
+        self.assertEqual(stop.slept[:2], [0.5, 1.0])
+        self.assertEqual(supervisor.consecutive_failures, 0)
+        self.assertEqual(
+            [span["name"] for span in sink.spans],
+            ["worker.supervisor.iteration_failed"] * 2,
+        )
+        self.assertEqual(
+            sink.spans[0]["attributes"]["failureCode"],
+            "SUPERVISOR_TRANSIENT_FAILURE",
+        )
+
+    def test_gives_up_when_nothing_succeeds_between_failures(self):
+        jobs = _FailingJobs(ValueError("WORKER_JOB_ROW_INVALID"), failures=99)
+        supervisor = _supervisor(jobs)
+        with self.assertRaises(WorkerSupervisorUnavailable) as raised:
+            supervisor.run_forever(_StopAfter(waits=50))
+        self.assertEqual(str(raised.exception), "SUPERVISOR_PERMANENT_FAILURE")
+        self.assertEqual(jobs.claims, 5)
+
+    def test_a_stop_request_is_never_swallowed_as_a_failure(self):
+        jobs = _FailingJobs(KeyboardInterrupt(), failures=1)
+        supervisor = _supervisor(jobs)
+        with self.assertRaises(KeyboardInterrupt):
+            supervisor.run_forever(_StopAfter(waits=5))
