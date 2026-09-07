@@ -143,8 +143,26 @@ async function tlsMaterial() {
   return { key, certificate };
 }
 
+/**
+ * Empty the business tables before the run.
+ *
+ * The harness gets a disposable database; a working tree does not, and a
+ * previous run's open rooms, queued auto-close jobs and sessions are exactly
+ * the kind of leftover state that makes a journey fail in a way that looks
+ * like a product bug. `--keep-data` skips it for anyone inspecting what a
+ * failed run left behind.
+ */
+async function resetDatabase() {
+  if (process.argv.includes("--keep-data")) return;
+  const { resetBusinessTables } = await import(
+    new URL("../apps/server/test/db/reset.ts", import.meta.url).href
+  );
+  await resetBusinessTables(process.env.TEST_DATABASE_URL);
+}
+
 async function main() {
   if (!process.env.TEST_DATABASE_URL) throw new Error("E2E_TEST_DATABASE_URL_REQUIRED");
+  await resetDatabase();
   const tls = await tlsMaterial();
   const teacher = `pilot-${randomBytes(8).toString("hex")}@example.invalid`;
 

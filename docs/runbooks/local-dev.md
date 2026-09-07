@@ -312,9 +312,25 @@ writes every process's output to `test-results/e2e-processes.log`; and stops
 everything it started, including the Next dev daemon, which it finds by port
 because that daemon deliberately outlives its own wrapper.
 
+It empties the business tables first, because the harness gets a disposable
+database and a working tree does not: a previous run's open rooms, queued
+auto-close jobs and sessions make the journey fail in ways that look like
+product bugs. `--keep-data` skips that, for inspecting what a failed run left.
+
 `verify:local-pilot` remains the authority: it runs in a disposable checkout on
 the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
+
+**Known, still open.** With everything assembled, `local-public-boundary`
+passes and `real-classroom-journey` drives sign-in, room creation, four
+students joining, room open and the first broadcast, then stops
+non-deterministically at one of the teacher's lifecycle controls — sometimes
+pause, sometimes resume. The diagnostic string in the failure reports the
+teacher socket as closed once and not ready (`C1…Y0`) while all four student
+sockets are ready (`C0…Y1`), so the teacher's realtime connection is the thing
+to look at. It is not yet known whether that is a product defect or an artifact
+of the dev-mode same-origin proxy carrying a long-lived socket; a
+`verify:local-pilot` run on the pinned ports would separate the two.
 
 ### What the suite needs assembled around it
 
