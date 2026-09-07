@@ -665,6 +665,18 @@ test("real teacher and four-student classroom journey remains server-authoritati
 
     await test.step("verify Provider and role-scoped analytics boundaries", async () => {
       const studentPage = students[0]!.page;
+      // These steps exercise the desktop analytics controls. Below 768px the
+      // workspace deliberately shows one surface at a time, so the analysis
+      // column is `display: none` and its regions leave the accessibility
+      // tree — the panel is rendered and correct, and the assertions still
+      // fail.
+      //
+      // `setViewportSize` does not fix it: measured here, the page reports
+      // `innerWidth` 320 immediately after being told 1440. A CDP
+      // `Emulation.setDeviceMetricsOverride` outranks the viewport API, and
+      // `assertProtectedSurfaceQuality` leaves one in force, so every later
+      // viewport call on that page is silently ignored. Whatever restores the
+      // width has to go through CDP too.
       const teacherTrace = teacherPage.getByRole("region", { name: "互動網絡" });
       const teacherEcho = teacherPage.getByRole("region", { name: "概念與論證" });
       await test.step("verify fail-closed Provider surfaces", async () => {
@@ -692,7 +704,24 @@ test("real teacher and four-student classroom journey remains server-authoritati
       await test.step("switch TRACE windows and views", async () => {
         for (const windowName of ["最近 10 分鐘", "全課 45 分鐘"]) {
           const button = teacherTrace.getByRole("button", { name: windowName });
-          await expect(button).toBeVisible({ timeout: 30_000 });
+          try {
+            await expect(button).toBeVisible({ timeout: 30_000 });
+          } catch {
+            // The panel replaces its controls with one of a small set of state
+            // messages. Which one it is names the slot's availability, and
+            // that copy is static UI text rather than anything from the room.
+            // Section headings and the workspace surface, which together say
+            // whether the panel is absent, hidden, or present but stateful.
+            // All of it is static UI copy.
+            const shape = await teacherPage.evaluate(() => {
+              const headings = [...document.querySelectorAll("h2")].map((item) => item.textContent?.trim() ?? "");
+              const workspace = document.querySelector(".room-workspace");
+              const column = document.querySelector(".analysis-column");
+              const visible = column ? getComputedStyle(column).display : "absent";
+              return `${headings.join(",")}|surface=${workspace?.getAttribute("data-surface") ?? "none"}|col=${visible}|w=${innerWidth}`;
+            });
+            fail(`PILOT_TRACE_CONTROLS_MISSING_${shape.replace(/[^\p{L}\p{N}_|=,]/gu, "")}`);
+          }
           await button.click({ timeout: 30_000 });
           await expect(button).toHaveAttribute("aria-pressed", "true");
         }

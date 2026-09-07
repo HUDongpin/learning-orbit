@@ -329,12 +329,30 @@ resume, the fail-closed media surface and the role-scoped analytics
 boundaries — and stops at the last step: the teacher's TRACE panel never shows
 its window tabs (`最近 10 分鐘`).
 
-Everything before it is genuinely working. The step immediately prior polls the
-teacher's TRACE authority to the current room sequence and passes, and the
-database holds all four projections at the same version, so the pointer is
-current and the data exists. The panel renders its controls only when the slot
-reaches `ready`, which needs the snapshot fetch behind the pointer to land.
-That is where to look next, and nothing before this point has ever reached it.
+**And that last one is the spec, not the product.** Measured at the moment of
+failure, the teacher page reports:
+
+```
+headings=…,共學對話,概念與論證,互動網絡 | surface=chat | col=none | w=320
+```
+
+The 互動網絡 panel is rendered — its heading is right there. The page is 320px
+wide, where the workspace deliberately shows one surface at a time, so
+`.analysis-column` is `display: none` and its regions leave the accessibility
+tree. `getByRole` cannot see them, and the assertion fails against a panel that
+is present and correct.
+
+`setViewportSize` does not fix it: the page still reports `innerWidth` 320
+immediately after being told 1440. A CDP `Emulation.setDeviceMetricsOverride`
+outranks the viewport API, and `assertProtectedSurfaceQuality` leaves one in
+force after its zoom-reflow check, so every later viewport call on that page is
+silently ignored. Any later assertion that depends on width is running at
+whichever size that helper finished at.
+
+Two ways to fix it, both in the spec: restore the width through CDP rather
+than `setViewportSize`, or have the analytics steps select the 互動網絡 surface
+tab so they work at any width. The second is closer to what a person on a
+phone actually does.
 
 The failure that used to hide all of this — the teacher's socket closing with
 `4400` — was a real defect and is fixed: a student-scoped `degraded` notice
