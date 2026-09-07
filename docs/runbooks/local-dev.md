@@ -321,78 +321,32 @@ product bugs. `--keep-data` skips that, for inspecting what a failed run left.
 the pinned ports and produces the receipt. This is the smaller loop for working
 on the specs themselves.
 
-**Known, still open — with the mechanism identified and four causes ruled out.**
+**Known, still open — one step from the end.**
 
-`local-public-boundary` passes. `real-classroom-journey` drives sign-in, room
-creation, four students joining, room open, pause and resume, then loses the
-teacher's view of new events.
+`local-public-boundary` passes. `real-classroom-journey` now drives sign-in,
+room creation, four students joining, room open, chat, revision, reply, pause,
+resume, the fail-closed media surface and the role-scoped analytics
+boundaries — and stops at the last step: the teacher's TRACE panel never shows
+its window tabs (`最近 10 分鐘`).
 
-The close code names the mechanism: **4400, "hello required"**. The server
-gives a new socket five seconds to send its `hello` frame
-(`apps/server/src/modules/realtime/connection.ts`) and closes it otherwise. The
-teacher's diagnostic reads `G2 N2 W1 R1 C1 … K4400`: two sockets, only one of
-which ever completed a handshake. All four student sockets report no close.
+Everything before it is genuinely working. The step immediately prior polls the
+teacher's TRACE authority to the current room sequence and passes, and the
+database holds all four projections at the same version, so the pointer is
+current and the data exists. The panel renders its controls only when the slot
+reaches `ready`, which needs the snapshot fetch behind the pointer to land.
+That is where to look next, and nothing before this point has ever reached it.
 
-The server is provably not at fault. After a failing run the message is
-committed at its room sequence and every `outbox_event` row is published — it
-was written and broadcast; the teacher's socket was not there to hear it.
+The failure that used to hide all of this — the teacher's socket closing with
+`4400` — was a real defect and is fixed: a student-scoped `degraded` notice
+was broadcast room-wide, the teacher acted on a projection key its role does
+not hold, and the resulting `PROJECTION_ROLE_FORBIDDEN` was indistinguishable
+from a corrupt frame, so the client closed its own socket and stopped
+reconnecting. The server now targets that notice at students and the client
+ignores one naming a surface it does not hold.
 
-Ruled out, each by a change that made no difference to the symptom:
-
-- **Dev-mode compilation.** `e2e:local` warms every route first, and the
-  process log shows no compilation during a run.
-- **Dev bundle hydration cost.** The runner now builds and serves a production
-  bundle behind its own ingress.
-- **A superseded socket left abandoned.** `RoomSocket.connect` closed the
-  socket it replaced (a real fix, kept: an abandoned socket is one the client
-  will never speak on, which the server then holds for five seconds).
-- **Upgrade data lost in the ingress.** The upgrade socket is paused until the
-  upstream connects (also a real fix, also kept).
-
-**It reproduces in a clean checkout.** A detached `git worktree` at the same
-commit, a fresh `pnpm install --frozen-lockfile`, its own build, run on the
-same free ports, fails byte-identically: `K4400`, `G2 N2 W1 R1`, teacher on
-surface `H2`. This working tree is not the variable, and neither is the
-environment as far as it can be varied here.
-
-That changes what this is. It is a defect, not an artifact — which also means
-the `browser-playwright` gate very likely does not pass today, and its
-manifest count of `2` describes an intention rather than an observation. Worth
-settling before any receipt is read as covering the browser journey.
-
-**The client did speak.** The diagnostic now counts frames sent per socket, and
-the dying one reads `K4400/5`: five frames sent, and the server still answered
-"hello required". That contradicts the obvious reading and rules out every
-theory built on it — the client is not failing to send `hello`.
-
-`connection.ts` produces 4400 in exactly two places: the five-second timer when
-no hello has arrived, and a first frame that is not a hello. Since frames were
-sent, the question is now which of those fired and why the server did not see a
-hello it was sent. The client's own gating makes the second case hard to reach:
-`send` only transmits once `#resumeReady`, and `#sendEphemeral` returns early
-before resume with a comment naming this exact hazard.
-
-Two candidates worth taking next, in order:
-
-1. **The frames went to the wrong place.** `scripts/local-e2e-ingress.mjs`
-   forwards upgrades by hand; a bug there that crossed two client sockets onto
-   one upstream, or lost the first frames of one, would look precisely like
-   this. The students' sockets working through the same ingress argues against
-   it but does not settle it. Running the suite against the API directly, with
-   `LO_ALLOWED_ORIGINS` matching, removes the ingress from the picture.
-2. **Two sockets, one server connection.** `G2` with `W1 R1` and `A3 E3` says
-   one socket is fully healthy while another dies. Logging the connection
-   identity server-side would say whether the server saw one upgrade or two.
-
-Ruled out already: `RoomSocket.connect` leaving a superseded socket open (now
-closed), `dispose()` not reaching `socket.destroy()` (it does), and the
-student-to-teacher redirect creating a socket (it returns first).
-
-Worth carrying into that: the five-second budget is measured from the server's
-accept but can only be answered when the client's main thread is free. On the
-old classroom laptop this pilot targets, the heaviest page could plausibly
-exceed it, and what a teacher sees is "即時同步已停止" mid-lesson. Raising the
-deadline is not obviously right — it exists to stop a socket that connects and
-never identifies itself from holding resources — so it wants a measurement on
-real hardware before anyone changes it.
+What made it findable: per-socket instrumentation recording the close code, the
+number of frames the client had sent, and the *shapes* of the last frames
+received — keys only, never values, because the payloads are classroom
+content. `4400/5[…>degraded{code,projectionKey,scope,type,updatedAt}]` named
+the culprit in one run after ten that had not.
 
