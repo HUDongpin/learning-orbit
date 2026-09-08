@@ -89,6 +89,11 @@ async function runWorkerOnce(material: WorkerMaterial, origin: string) {
     env: {
       PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? "",
+      // The worker is imported from the checkout, not from site-packages. The
+      // pilot harness builds its venv from requirements.lock alone, so the
+      // package is only importable at a workstation where someone installed it
+      // editable - which is why this passed locally and failed the gate.
+      PYTHONPATH: join(REPOSITORY, "services/worker/src"),
       DATABASE_URL: lifecycleDatabaseUrl!,
       LO_WORKER_ID: "restart-proof-worker",
       LO_WORKER_ASSERTION_PRIVATE_KEY_FILE: material.privateKeyPath,
