@@ -52,6 +52,36 @@ export async function listReceipts(repository, readDirectory = readdir) {
 }
 
 /**
+ * The receipt for the commit being released, out of however many a machine has
+ * accumulated.
+ *
+ * `listReceipts` orders by file name, and a run id is random hex, so "first"
+ * was whichever run happened to sort highest - on a machine with more than one
+ * run that is an arbitrary choice, and a superseded failing run could be read
+ * as the evidence for a commit that had since passed. The commit is what makes
+ * a receipt relevant, so it is what selects one: only a receipt whose
+ * sourceSha is the commit under evaluation is that commit's evidence.
+ *
+ * Nothing here decides whether the receipt is good. A failing receipt for this
+ * commit is still this commit's receipt, and every existing check - status,
+ * gate coverage, evidence-at-head - still runs against it and still refuses.
+ */
+export async function selectReceiptForCommit(repository, sourceSha, readers = {}) {
+  const { readDirectory = readdir, readReceipt } = readers;
+  const paths = await listReceipts(repository, readDirectory);
+  if (typeof sourceSha !== "string" || !/^[0-9a-f]{40}$/.test(sourceSha)) return paths[0];
+  const read = readReceipt ?? (async (path) => {
+    try { return JSON.parse(await readFile(path, "utf8")); }
+    catch { return undefined; }
+  });
+  for (const path of paths) {
+    const receipt = await read(path);
+    if (receipt?.sourceSha === sourceSha) return path;
+  }
+  return undefined;
+}
+
+/**
  * Check one pilot receipt against the manifest it claims to have satisfied.
  *
  * The manifest is the authority on which gates must run and how many tests

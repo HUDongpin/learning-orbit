@@ -23,17 +23,19 @@
  *   pnpm verify:pilot [--receipt <path>] [--out <path>]
  *                     [--trust <file> --authority <dir|file>]
  */
+import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { argv, exitCode, stderr, stdout } from "node:process";
+import { promisify } from "node:util";
 
 import {
   buildReleaseEvidenceChain,
   collectVerifiedAuthority,
-  listReceipts,
   readManifest,
   ReleaseEvidenceError,
+  selectReceiptForCommit,
 } from "./release-evidence.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,15 +46,33 @@ function option(name) {
   return argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 }
 
+/** HEAD, or undefined when this is not a readable checkout. */
+async function currentHead() {
+  try {
+    const { stdout } = await promisify(execFile)("git", ["rev-parse", "HEAD"], {
+      cwd: repository, shell: false, encoding: "utf8", maxBuffer: 1024 * 1024,
+    });
+    const head = stdout.trim();
+    return /^[0-9a-f]{40}$/.test(head) ? head : undefined;
+  } catch { return undefined; }
+}
+
 async function readJson(path) {
   try { return JSON.parse(await readFile(path, "utf8")); }
   catch { return undefined; }
 }
 
 async function main() {
-  const receiptPath = option("receipt") ?? (await listReceipts(repository))[0];
+  // The commit under evaluation picks its own receipt. A machine accumulates a
+  // receipt per run, and choosing by file name meant an arbitrary one - a
+  // superseded failing run could be read as the evidence for a commit that had
+  // since passed.
+  const headSha = await currentHead();
+  const receiptPath = option("receipt") ?? await selectReceiptForCommit(repository, headSha);
   if (!receiptPath) {
-    stderr.write("RELEASE_RECEIPT_ABSENT: run `pnpm verify:local-pilot` first\n");
+    stderr.write(headSha
+      ? `RELEASE_RECEIPT_ABSENT_FOR_COMMIT ${headSha}: run \`pnpm verify:local-pilot\` at this commit\n`
+      : "RELEASE_RECEIPT_ABSENT: run `pnpm verify:local-pilot` first\n");
     return 1;
   }
   const receipt = await readJson(receiptPath);

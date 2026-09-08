@@ -17,6 +17,7 @@ import {
   collectVerifiedAuthority,
   HUMAN_AUTHORITY_RECORDS,
   listReceipts,
+  selectReceiptForCommit,
 } from "../../scripts/release-evidence.mjs";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -550,6 +551,52 @@ test("the written chain carries the refusals, and never claims admissibility ove
   const clean = await chainFor({}, {}, authority.verified, { trust: authority.trust });
   assert.equal(clean.admissible, true);
   assert.notEqual(chain.chainSha256, clean.chainSha256);
+});
+
+const SHA_A = "a".repeat(40);
+const SHA_B = "b".repeat(40);
+
+/** A directory of receipts, and a reader that answers for each. */
+function receiptDirectory(bySha: Record<string, string>) {
+  const readDirectory = async () => Object.keys(bySha);
+  const readReceipt = async (path: string) => {
+    const sourceSha = bySha[path.split("/").pop() as string];
+    return sourceSha ? { sourceSha } : undefined;
+  };
+  return { readDirectory, readReceipt };
+}
+
+test("the commit under evaluation picks its own receipt, not the highest run id", async () => {
+  // The failing run sorts above the passing one, which is exactly the case
+  // that made the old file-name ordering read superseded evidence.
+  const readers = receiptDirectory({
+    "run-ffffffffffffffff.receipt.json": SHA_B,
+    "run-0000000000000001.receipt.json": SHA_A,
+  });
+  assert.equal(
+    (await selectReceiptForCommit(repository, SHA_A, readers))?.split("/").pop(),
+    "run-0000000000000001.receipt.json",
+  );
+  assert.equal(
+    (await selectReceiptForCommit(repository, SHA_B, readers))?.split("/").pop(),
+    "run-ffffffffffffffff.receipt.json",
+  );
+});
+
+test("a commit with no receipt of its own selects nothing at all", async () => {
+  const readers = receiptDirectory({ "run-ffffffffffffffff.receipt.json": SHA_B });
+  assert.equal(await selectReceiptForCommit(repository, SHA_A, readers), undefined);
+});
+
+test("an unreadable head falls back to the listing rather than guessing a commit", async () => {
+  const readers = receiptDirectory({
+    "run-ffffffffffffffff.receipt.json": SHA_B,
+    "run-0000000000000001.receipt.json": SHA_A,
+  });
+  assert.equal(
+    (await selectReceiptForCommit(repository, undefined, readers))?.split("/").pop(),
+    "run-ffffffffffffffff.receipt.json",
+  );
 });
 
 test("receipts are listed newest first and nothing else is listed", async () => {
