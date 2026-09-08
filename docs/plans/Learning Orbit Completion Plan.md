@@ -22,7 +22,7 @@ measured against lives in the repository rather than only in a chat.
 | R3 | L | 1·1 | Add internal.lifecycle.mediaSurface and the media deletion lifecycle store | `pnpm --filter @learning-orbit/server exec vitest run test/governance` |
 | R4 | S | 3·1 | Fix internal-route admission: origin exemptions and assertion-before-parse | `pnpm --filter @learning-orbit/server exec vitest run test/security/origin-rate-limit.test.ts` |
 | R5 | M | 9 | Complete the realtime signal contract: degraded frames, presence tombstones, frame parsing | `pnpm --filter @learning-orbit/server exec vitest run test/realtime` |
-| M1 | M | 1·1 | Add MinIO, ClamAV and transform services to compose with a private-bucket init | `docker compose -f infra/docker-compose.pilot.yml up -d minio clamav && node scripts/init-private-bucket.mjs` |
+| M1 | M | 1·1 | Add MinIO and ClamAV to the developer compose stack, with a private-bucket init that refuses an anonymous policy | `docker compose --env-file .env -f infra/docker-compose.yml up -d minio clamav && pnpm storage:init` |
 | M2 | L | 1·1 | Implement the real S3-compatible object-store transport | `pnpm --filter @learning-orbit/server exec vitest run test/media/s3-media-store-boundary.test.ts` |
 | M3 | XL | 1·1 | Implement the Python media processor: scan, sanitize, transcode | `.venv/bin/python -m unittest discover -s services/worker/tests -t services/worker` |
 | M4 | L | 7·3 | Close the media integrity gaps: janitor, write fence, reconcile and finalize | `pnpm --filter @learning-orbit/server exec vitest run test/media test/integration/media-finalize.test.ts` |
@@ -91,6 +91,26 @@ they are the privacy promises the pilot answers for.
 6. **Freeze and assert** — Z1 Z2 Z3 Z4 Z5.
    Exit: `assert-program-contracts` and the evidence bundle pass on one frozen
    commit, with no source commit after the evidence run.
+
+### What the local-pilot receipt covers, and what it does not
+
+Phase 1's exit is the receipt the other phases are read through, so it is worth
+being exact about its reach. `pnpm verify:local-pilot` brings up
+`infra/docker-compose.pilot.yml` — PostgreSQL and Mailpit, and no other
+container — builds and runs the server and web processes, drives Chromium, and
+gates the nine suites named in `tests/pilot/required-test-manifest.v1.json`.
+
+It never starts MinIO or ClamAV. The media, object-store and scanner suites
+inside those gates run against injected doubles rather than the real services
+(`apps/server/test/media/s3-http-transport.test.ts`, for instance, supplies its
+own `fetch`). A passing receipt is therefore evidence about the code and the
+database; it is not evidence that a real object store or a real virus scanner
+behaved. Those two run only in the developer stack,
+`infra/docker-compose.yml`, and are exercised by the M1–M5 commands above.
+
+There is also no separate transform service anywhere in the repository:
+transcoding runs inside the worker image against the ffmpeg binary pinned in
+`infra/images.lock.json`, which is M3's scope rather than M1's.
 
 ## Stop points: four gates engineering cannot open
 

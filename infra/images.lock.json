@@ -1,34 +1,56 @@
 {
   "schemaVersion": 1,
-  "note": "Every image this repository runs or builds from, pinned to an immutable digest. A tag is a moving target; a digest is the thing that was actually reviewed.",
+  "note": "The immutable digest behind every image reference this repository runs or builds from. A tag is a moving target; a digest names one artifact. Recording a digest is not by itself a pin, and it is not a vulnerability review: infra/docker-compose.pilot.yml, infra/docker/worker.Dockerfile and scripts/run-k6-pilot.mjs each carry the digest at the point of use, while the developer-only stack in infra/docker-compose.yml still names postgres, minio and clamav by tag and therefore starts whatever those tags resolve to on the day. Every entry says which, in pinnedAtPointOfUse.",
   "images": {
     "python-worker-base": {
       "reference": "python:3.12-slim-trixie",
       "digest": "sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea",
       "usedBy": "infra/docker/worker.Dockerfile",
+      "pinnedAtPointOfUse": "digest",
       "resolvedAt": "2026-09-07"
     },
     "postgres": {
       "reference": "postgres:18",
       "digest": "sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280",
-      "usedBy": "infra/docker-compose.pilot.yml"
+      "usedBy": "infra/docker-compose.pilot.yml, infra/docker-compose.yml",
+      "pinnedAtPointOfUse": "digest in infra/docker-compose.pilot.yml, tag in infra/docker-compose.yml"
     },
     "mailpit": {
       "reference": "axllent/mailpit:v1.31.0",
       "digest": "sha256:c96991d9bef73594c246d89ca81411d4e916f03e76a7d2d72fa2ab5dd3c9ce24",
-      "usedBy": "infra/docker-compose.pilot.yml, infra/docker-compose.yml"
+      "usedBy": "infra/docker-compose.pilot.yml, infra/docker-compose.yml",
+      "pinnedAtPointOfUse": "digest"
     },
     "k6": {
       "reference": "grafana/k6:2.2.0",
       "digest": "sha256:9bd01d6941fca969cb61bb57d2da5ee9b385fe2aa8881df3798c196564d6ace6",
       "usedBy": "scripts/run-k6-pilot.mjs",
+      "pinnedAtPointOfUse": "digest",
+      "note": "The runner composes reference@digest from this file and refuses an entry without one (K6_IMAGE_NOT_PINNED), so this file is the pin rather than a record of one.",
       "resolvedAt": "2026-09-07"
     },
     "ffmpeg": {
       "reference": "mwader/static-ffmpeg:9.0.1",
       "digest": "sha256:54e55b0cb8f672870fc38ceb2e6c411855cb3b39c505f5f3b2505ee01ed5f2b7",
       "usedBy": "infra/docker/worker.Dockerfile",
+      "pinnedAtPointOfUse": "digest",
       "note": "A static build, copied in as a single binary. Pinned by digest for the same reason as everything else: the worker's only component that decodes attacker-supplied media should not be whatever an archive serves on the day of the build.",
+      "resolvedAt": "2026-09-08"
+    },
+    "minio": {
+      "reference": "minio/minio:RELEASE.2025-09-07T16-13-09Z",
+      "digest": "sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "usedBy": "infra/docker-compose.yml",
+      "pinnedAtPointOfUse": "tag",
+      "note": "The private media store for local development. The compose file names the release tag, so this digest records what that tag resolved to rather than constraining what starts. It was read from the registry digest of the image the developer stack had pulled, and is not a vulnerability review.",
+      "resolvedAt": "2026-09-08"
+    },
+    "clamav": {
+      "reference": "clamav/clamav:1.5.4-debian13-slim",
+      "digest": "sha256:4c975c439fcb7ab9cbdd72162c2802f5efcb4a11dcf5b0b37da1d746474ef20e",
+      "usedBy": "infra/docker-compose.yml",
+      "pinnedAtPointOfUse": "tag",
+      "note": "The scanner the media pipeline calls before anything is sanitized. Same standing as minio: the compose file names the tag, this digest records what that tag resolved to, and it is not a vulnerability review.",
       "resolvedAt": "2026-09-08"
     }
   }
