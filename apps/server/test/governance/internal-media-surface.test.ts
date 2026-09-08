@@ -113,6 +113,58 @@ async function seedRoomMedia(room: SeededLifecycleRoom): Promise<string> {
   return mediaId;
 }
 
+/**
+ * An asset with the grant it was uploaded through.
+ *
+ * `promoted` is the settled shape: the copy landed, so the asset's
+ * `object_key` and the grant's `promotion_destination_key` are the same
+ * object under two rows. Otherwise the promotion was abandoned - the asset
+ * names nothing and both of the grant's keys are unreachable once it is gone.
+ * Either way the grant is closed and past its fence, so the room is quiescent.
+ */
+async function seedRoomGrant(
+  room: SeededLifecycleRoom,
+  options: { readonly promoted?: boolean } = {},
+): Promise<{ mediaId: string; stagingKey: string; originalKey: string }> {
+  const mediaId = randomUUID();
+  const grantId = randomUUID();
+  const stagingKey = `rooms/${room.roomId}/staging/${grantId}`;
+  const originalKey = `rooms/${room.roomId}/original/${mediaId}`;
+  await pool.query(
+    `INSERT INTO media_asset(media_id, room_id, owner_actor_id, kind, state,
+                             original_file_name, declared_mime, size_bytes,
+                             declared_sha256, sha256, alt_text, object_key,
+                             promotion_correlation_id, failure_code)
+     SELECT $1,$2,actor_id,'image',$3::media_state,'leaf.png','image/png',2048,$4,
+            $5,'葉片',$6,$7,$8
+     FROM room_member WHERE room_member_id = $9`,
+    [mediaId, room.roomId, options.promoted ? "ready" : "failed", sha("leaf"),
+      options.promoted ? sha("leaf") : null, options.promoted ? originalKey : null,
+      options.promoted ? randomUUID() : null,
+      options.promoted ? null : "PROMOTION_ABANDONED", room.memberIds[0]],
+  );
+  await pool.query(
+    `INSERT INTO media_upload_grant(
+       grant_id, media_id, room_id, object_key, state, correlation_id,
+       reserved_at, expires_at, write_not_after, closed_at,
+       promotion_source_etag, promotion_sha256, promotion_destination_key,
+       promotion_correlation_id, promotion_started_at, promotion_write_not_after)
+     VALUES($1,$2,$3,$4,'closed',$5,
+       now() - interval '2 hours', now() - interval '1 hour',
+       now() - interval '30 minutes', now() - interval '20 minutes',
+       'etag-seeded', $6::char(64), $7,$8::uuid,
+       now() - interval '90 minutes', now() - interval '40 minutes')`,
+    [grantId, mediaId, room.roomId, stagingKey, randomUUID(),
+      sha("leaf"), originalKey, randomUUID()],
+  );
+  return { mediaId, stagingKey, originalKey };
+}
+
+const grantCount = async (roomId: string) => (await pool.query(
+  "SELECT count(*)::int AS count FROM media_upload_grant WHERE room_id = $1",
+  [roomId],
+)).rows[0];
+
 function requestFor(claim: ClaimedJob, deletionJobId: string): LifecycleInternalMediaSurfaceRequest {
   return {
     ...claimIdentity(claim),
@@ -216,6 +268,45 @@ describe("signed internal media surface deletion", () => {
       "SELECT count(*)::int AS count FROM media_asset WHERE room_id = $1", [room.roomId],
     )).rows[0]).toEqual({ count: 0 });
     expect(await surfaceStatus(deletionJobId)).toEqual({ status: "verified" });
+  });
+
+  it("erases both of a grant's object keys, naming a promoted original once", async () => {
+    const room = await seedLifecycleRoom(pool);
+    const promoted = await seedRoomGrant(room, { promoted: true });
+    const abandoned = await seedRoomGrant(room);
+    const { claim, deletionJobId } = await seedMediaSurfaceJob(room, 2);
+    const eraser = new RecordingEraser();
+    const app = await makeApp(eraser);
+
+    expect((await post(app, requestFor(claim, deletionJobId))).body)
+      .toMatchObject({ status: "completed", surface: "media" });
+    expect([...eraser.erased].sort()).toEqual([
+      promoted.originalKey, promoted.stagingKey,
+      abandoned.originalKey, abandoned.stagingKey,
+    ].sort());
+    // The promoted original is named by the asset and by its grant. What the
+    // eraser is handed is the set of distinct objects, not the rows.
+    expect(new Set(eraser.erased).size).toBe(eraser.erased.length);
+    expect(await grantCount(room.roomId)).toEqual({ count: 0 });
+  });
+
+  it("stays retryable, and keeps the grant, when only a grant names the room's objects", async () => {
+    const room = await seedLifecycleRoom(pool);
+    await seedRoomGrant(room);
+    const { claim, deletionJobId } = await seedMediaSurfaceJob(room, 1);
+    const app = await makeApp();
+
+    const response = await post(app, requestFor(claim, deletionJobId));
+
+    // No eraser is configured, so nobody can prove the staging copy or the
+    // abandoned original is gone. Deleting the grant would destroy the only
+    // pointer to them, so the surface holds instead.
+    expect(response.body).toMatchObject({
+      status: "retryable",
+      code: "MEDIA_SURFACE_STORE_UNAVAILABLE",
+    });
+    expect(await surfaceStatus(deletionJobId)).toEqual({ status: "frozen" });
+    expect(await grantCount(room.roomId)).toEqual({ count: 1 });
   });
 
   it("holds the surface while a media job is still claimable", async () => {

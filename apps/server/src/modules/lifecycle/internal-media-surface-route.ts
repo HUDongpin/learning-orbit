@@ -43,10 +43,12 @@ const RETRY_AFTER_MS = 30_000;
  *
  * It refuses to claim more than it can prove. Rows are removed only after every
  * in-flight media job and write fence is quiescent, and only after a configured
- * eraser has confirmed the stored objects are gone. With no eraser injected -
- * the state of this checkout - a room holding any media stays retryable
- * forever rather than issuing a receipt that would assert a remote deletion
- * nobody performed.
+ * eraser has confirmed the stored objects are gone - every object the room's
+ * rows name, including the two the grant row alone points at, since deleting
+ * those rows is what makes the objects unfindable. An eraser exists whenever a
+ * media store is composed; where no store is configured none is injected, and
+ * a room holding any media stays retryable rather than issuing a receipt that
+ * would assert a remote deletion nobody performed.
  */
 export class InternalMediaSurfaceRoute {
   constructor(
@@ -165,16 +167,41 @@ export class InternalMediaSurfaceRoute {
           `SELECT media_id, object_key FROM media_asset WHERE room_id = $1 FOR UPDATE`,
           [roomId],
         );
+        // Two object keys for this room exist only on the grant row: the
+        // staging copy the student's signed PUT wrote to, and - where a
+        // promotion was started but never confirmed - the destination the
+        // original was copied to. `media_asset.object_key` is set only once a
+        // promotion commits, so for an abandoned or still-pending upload the
+        // grant is the sole pointer to those bytes, and the DELETE below
+        // destroys it. They are read here, before any erase, under the same
+        // asset-then-grant lock order the media write paths take.
+        const grants = await tx.query<{
+          object_key: string;
+          promotion_destination_key: string | null;
+        }>(
+          `SELECT object_key, promotion_destination_key FROM media_upload_grant
+           WHERE room_id = $1 FOR UPDATE`,
+          [roomId],
+        );
         const derivatives = await tx.query<{ object_key: string }>(
           `SELECT d.object_key FROM media_derivative d
            JOIN media_asset m ON m.media_id = d.media_id
            WHERE m.room_id = $1`,
           [roomId],
         );
-        const objectKeys = [
-          ...assets.rows.map(({ object_key: key }) => key).filter((key): key is string => key !== null),
-          ...derivatives.rows.map(({ object_key: key }) => key),
-        ];
+        // A committed promotion leaves the same key on both the asset and its
+        // grant, so the same object is named twice. The route collapses that
+        // here rather than leaning on the eraser's own deduplication: what is
+        // handed over should already be the set of distinct objects this
+        // deletion claims to remove.
+        const objectKeys = [...new Set(
+          [
+            ...assets.rows.map(({ object_key: key }) => key),
+            ...grants.rows.flatMap(({ object_key: key, promotion_destination_key: promoted }) =>
+              [key, promoted]),
+            ...derivatives.rows.map(({ object_key: key }) => key),
+          ].filter((key): key is string => key !== null),
+        )];
 
         if (objectKeys.length > 0) {
           if (!this.eraser) return retryable("MEDIA_SURFACE_STORE_UNAVAILABLE");

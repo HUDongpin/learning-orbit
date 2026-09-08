@@ -42,6 +42,7 @@ import { RetentionScheduler } from "./modules/lifecycle/retention-scheduler.js";
 import { StudentAnalyticsPolicyListener } from "./modules/lifecycle/student-analytics-policy-listener.js";
 import { StudentAnalyticsPromotionService } from "./modules/lifecycle/student-analytics-promotion.js";
 import { MediaStagingJanitor } from "./modules/media/media-staging-janitor.js";
+import { MediaStoreSurfaceEraser } from "./modules/media/media-surface-eraser.js";
 import { S3MediaStore } from "./modules/media/s3-media-store.js";
 import { S3HttpTransport, S3_HTTP_TRANSPORT_CAPABILITIES } from "./modules/media/s3-http-transport.js";
 import type { MediaStore } from "./modules/media/media-store.js";
@@ -298,8 +299,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const mediaInternalOutcome = options.mediaInternalOutcome ?? (events && assertionTrust
     ? new MediaInternalOutcomeRoute(events, clock, assertionTrust, jobClaims, realtime?.hub)
     : undefined);
+  // The eraser exists only where a real media surface does. `media` is the one
+  // place that decides a store is present and usable, so deriving from it is
+  // what keeps the two in step: with no store there is no eraser, and the
+  // surface route keeps answering retryable instead of issuing a receipt for a
+  // remote deletion nobody performed.
+  const mediaSurfaceEraser = options.mediaSurfaceEraser
+    ?? (media ? new MediaStoreSurfaceEraser(media.store, clock) : undefined);
   const lifecycleMediaSurface = options.lifecycleMediaSurface ?? (pool && assertionTrust
-    ? new InternalMediaSurfaceRoute(pool, clock, assertionTrust, jobClaims, options.mediaSurfaceEraser)
+    ? new InternalMediaSurfaceRoute(pool, clock, assertionTrust, jobClaims, mediaSurfaceEraser)
     : undefined);
   const governance = options.governance ?? (pool && config.auditSalt
     ? new DefaultGovernanceService(pool, {
