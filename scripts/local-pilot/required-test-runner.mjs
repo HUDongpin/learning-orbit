@@ -20,12 +20,16 @@ export const REQUIRED_GATE_ORDER = Object.freeze([
   "server-vitest",
   "web-vitest",
   "pilot-harness-vitest",
+  "chaos-vitest",
+  "security-vitest",
   "worker-python",
   "browser-playwright",
   "pilot-load",
 ]);
 
 const REQUIRED_RUNNERS = Object.freeze([
+  "vitest",
+  "vitest",
   "vitest",
   "vitest",
   "vitest",

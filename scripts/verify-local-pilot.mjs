@@ -604,8 +604,14 @@ async function main() {
         await evidence.runCheck("required-gate-set", async () => {
           await executeRequiredGateSet({
             manifest: state.manifest,
+            // chaos-vitest reads TEST_DATABASE_URL and so runs after the
+            // migration above; security-vitest is a jsdom render suite that
+            // needs nothing beyond `common`.  Both stay in this ordered group
+            // so every manifest gate has a summary before the closed-summary
+            // set is verified.
             gateIds: [
               "contracts-vitest", "server-vitest", "web-vitest", "pilot-harness-vitest",
+              "chaos-vitest", "security-vitest",
             ],
             checkout,
             pnpmPath,

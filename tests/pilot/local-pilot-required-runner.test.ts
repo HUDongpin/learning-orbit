@@ -41,6 +41,8 @@ const closedManifest = () => ({
     gate("server-vitest", "vitest"),
     gate("web-vitest", "vitest"),
     gate("pilot-harness-vitest", "vitest"),
+    gate("chaos-vitest", "vitest"),
+    gate("security-vitest", "vitest"),
     gate("worker-python", "python-unittest"),
     gate("browser-playwright", "playwright"),
     gate("pilot-load", "load", 1),
@@ -54,6 +56,8 @@ describe("local pilot closed required-test execution", () => {
       "server-vitest",
       "web-vitest",
       "pilot-harness-vitest",
+      "chaos-vitest",
+      "security-vitest",
       "worker-python",
       "browser-playwright",
       "pilot-load",
@@ -63,7 +67,10 @@ describe("local pilot closed required-test execution", () => {
     [reordered.gates[0], reordered.gates[1]] = [reordered.gates[1]!, reordered.gates[0]!];
     expect(() => assertRequiredGateOrder(reordered)).toThrow("REQUIRED_TEST_GATE_ORDER");
     const wrongRunner = closedManifest();
-    wrongRunner.gates[5] = gate("browser-playwright", "vitest");
+    // Index 7 is browser-playwright's own slot: swapping its runner in place
+    // keeps every id unique and ordered, so the runner check is what refuses
+    // rather than the earlier duplicate-id check.
+    wrongRunner.gates[7] = gate("browser-playwright", "vitest");
     expect(() => assertRequiredGateOrder(wrongRunner)).toThrow("REQUIRED_TEST_GATE_RUNNER");
     expect(() => assertRequiredGateEntrypoints(closedManifest(), {
       scripts: { "load:pilot": "node scripts/local-pilot/run-load.mjs" },
