@@ -97,6 +97,11 @@
       "sha256": "951eded83d646f3ceb1a5613aaca3899a0e9e9711d6bdea4222c6afa766260d3"
     },
     {
+      "file": "external-authorization-record.v1.json",
+      "id": "https://learning-orbit.local/schemas/external-authorization-record.v1.json",
+      "sha256": "0468a162f84c5c3d382d5bdb9050e260d13b26b6de845839d37b42576447cf77"
+    },
+    {
       "file": "human-shadow-record.v1.json",
       "id": "https://learning-orbit.local/schemas/human-shadow-record.v1.json",
       "sha256": "e2f661cc39ead451d073b5f1c5024ce1f9e369c8e5325e5bf3f955466ff5e2ed"
@@ -170,6 +175,11 @@
       "file": "room-internal-auto-close.v1.json",
       "id": "https://learning-orbit.local/schemas/room-internal-auto-close.v1.json",
       "sha256": "09cf63756b8c03c473e308c4d1cad87e09c85d5a580caaf1ceb0f0395df8ea15"
+    },
+    {
+      "file": "student-visible-promotion-record.v1.json",
+      "id": "https://learning-orbit.local/schemas/student-visible-promotion-record.v1.json",
+      "sha256": "adf81b52fcf1fc12d16565b7b8c1e5bbfdfcb3f6d02a29d94bcb1d31b37d9597"
     },
     {
       "file": "teacher-room-export.v1.json",
@@ -284,6 +294,11 @@
       "language": "typescript"
     },
     {
+      "sourceFile": "external-authorization-record.v1.json",
+      "moduleFile": "external-authorization-record.v1.ts",
+      "language": "typescript"
+    },
+    {
       "sourceFile": "human-shadow-record.v1.json",
       "moduleFile": "human-shadow-record.v1.ts",
       "language": "typescript"
@@ -356,6 +371,11 @@
     {
       "sourceFile": "room-internal-auto-close.v1.json",
       "moduleFile": "room-internal-auto-close.v1.ts",
+      "language": "typescript"
+    },
+    {
+      "sourceFile": "student-visible-promotion-record.v1.json",
+      "moduleFile": "student-visible-promotion-record.v1.ts",
       "language": "typescript"
     },
     {

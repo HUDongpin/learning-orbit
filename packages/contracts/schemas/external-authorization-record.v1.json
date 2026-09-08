@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://learning-orbit.local/schemas/external-authorization-record.v1.json",
+  "title": "ExternalAuthorizationRecord",
+  "description": "The school and research-ethics decision that admits real students. Engineering supplies the format and the validator and cannot self-issue the decision. Every dimension of the scope is named here explicitly - the rooms are listed, the cohort is counted, the window is closed at both ends, the surfaces are enumerated - so widening the pilot needs a new signed decision rather than a wider reading of this one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recordKind",
+    "authorizationId",
+    "synthetic",
+    "authorizingBody",
+    "scope",
+    "supervisingTeacherRef",
+    "rollbackOwnerRef",
+    "incidentContactRefs",
+    "participantInformation",
+    "reviewedDocuments",
+    "retentionPolicyId",
+    "providerScope",
+    "featureAllowlist",
+    "usedForGradesOrDiscipline",
+    "authorizedSignerRefs"
+  ],
+  "properties": {
+    "recordKind": { "const": "external_authorization" },
+    "authorizationId": { "type": "string", "format": "uuid" },
+    "synthetic": {
+      "description": "A synthetic record is a rehearsal of the paperwork and is not an authorization. True is refused.",
+      "type": "boolean"
+    },
+    "authorizingBody": {
+      "description": "Who decided. The body is carried as a salted digest of its identity, never the identity itself.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bodyKind", "bodyRef", "approvalReference", "decidedAt"],
+      "properties": {
+        "bodyKind": { "enum": ["school", "research_ethics_board", "school_and_research_ethics_board"] },
+        "bodyRef": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "approvalReference": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9._:/-]+$" },
+        "decidedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "scope": {
+      "description": "What was authorized. There is no wildcard and no open end: a room not listed here was not authorized.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schoolRef",
+        "classRef",
+        "roomIds",
+        "maxStudentsPerRoom",
+        "maxStudentsTotal",
+        "sessionsFrom",
+        "sessionsUntil"
+      ],
+      "properties": {
+        "schoolRef": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "classRef": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "roomIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uuid" }
+        },
+        "maxStudentsPerRoom": { "type": "integer", "minimum": 1, "maximum": 40 },
+        "maxStudentsTotal": {
+          "description": "The largest number of distinct students the body admitted across every authorized room.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400
+        },
+        "sessionsFrom": { "type": "string", "format": "date-time" },
+        "sessionsUntil": { "type": "string", "format": "date-time" }
+      }
+    },
+    "supervisingTeacherRef": {
+      "description": "The named teacher who supervises the authorized sessions, as a salted digest.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rollbackOwnerRef": {
+      "description": "Who may stop the pilot, as a salted digest.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "incidentContactRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "participantInformation": {
+      "description": "How participants and their guardians were informed, and by when consent was held. Sessions may not begin before that date.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["informationSheetSha256", "consentPath", "consentObtainedBy"],
+      "properties": {
+        "informationSheetSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "consentPath": { "enum": ["guardian_written_opt_in", "guardian_and_student_written_opt_in"] },
+        "consentObtainedBy": { "type": "string", "format": "date-time" }
+      }
+    },
+    "reviewedDocuments": {
+      "description": "The documents the body actually reviewed, bound by digest. Exactly one entry per required kind: a decision taken over a document version nobody can name is not reviewable later.",
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["documentKind", "documentSha256", "reviewedAt"],
+        "properties": {
+          "documentKind": { "enum": ["threat_model", "data_inventory", "retention_policy"] },
+          "documentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "reviewedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "retentionPolicyId": {
+      "description": "The pilot retention policy version these sessions run under.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "providerScope": {
+      "description": "The exact model provider the decision covers. `no_persistent_copy_attested` must name the signed copy-authority record and its expiry; `delete_and_probe` must name the reviewed capability and port schema versions. Neither may name the other's fields, and no URL, endpoint or secret appears here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "providerManifestSha256", "region", "purpose", "remoteCopyMode"],
+      "properties": {
+        "providerId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9._-]+$" },
+        "providerManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "region": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" },
+        "remoteCopyMode": { "enum": ["no_persistent_copy_attested", "delete_and_probe"] },
+        "copyAuthorityRecordSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "copyAuthorityExpiresAt": { "type": "string", "format": "date-time" },
+        "capabilitySchemaVersion": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9._-]+$" },
+        "portSchemaVersion": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9._-]+$" }
+      }
+    },
+    "featureAllowlist": {
+      "description": "The surfaces this decision opens. Student-visible ECHO and TRACE are deliberately absent from the vocabulary: showing students the analytics built from their own conversation is a separate signed decision, and cannot be reached from here.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": { "enum": ["room_chat", "media_upload", "agent_nova", "teacher_analytics", "teacher_export"] }
+    },
+    "usedForGradesOrDiscipline": {
+      "description": "Whether the analytics feed grades or discipline. True is refused; the pilot makes no claim about an individual student.",
+      "type": "boolean"
+    },
+    "authorizedSignerRefs": {
+      "description": "Who may sign for the body, as salted digests. Naming a signer is not itself proof - the envelope signature is.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    }
+  }
+}
