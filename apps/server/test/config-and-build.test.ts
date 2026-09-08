@@ -26,10 +26,27 @@ describe("deployment-safe configuration and build resources", () => {
     expect(compose).toMatch(/test:\s*\["CMD-SHELL",\s*"pg_isready -U \$\$\{POSTGRES_USER\} -d \$\$\{POSTGRES_DB\}"\]/);
 
     const sentinelPassword = "learning-orbit-compose-test-sentinel";
+    // Every `${VAR:?...}` in the file is supplied here, and the ambient
+    // environment is not inherited. Passing `...process.env` let a developer's
+    // own .env satisfy the storage credentials MinIO added later, so the test
+    // passed at a workstation and failed inside the pilot harness, which hands
+    // its gates a restricted environment. What the compose file requires is
+    // part of what this test is asserting; it cannot be borrowed.
     const { stdout } = await execFileAsync(
       "docker",
       ["compose", "-f", composePath, "config", "--format", "json"],
-      { env: { ...process.env, LO_POSTGRES_PASSWORD: sentinelPassword } },
+      {
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+          ...(process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}),
+          ...(process.env.DOCKER_CONTEXT ? { DOCKER_CONTEXT: process.env.DOCKER_CONTEXT } : {}),
+          ...(process.env.DOCKER_CONFIG ? { DOCKER_CONFIG: process.env.DOCKER_CONFIG } : {}),
+          LO_POSTGRES_PASSWORD: sentinelPassword,
+          LO_STORAGE_ACCESS_KEY_ID: "learning-orbit-compose-test-access-key",
+          LO_STORAGE_SECRET_ACCESS_KEY: "learning-orbit-compose-test-secret-key",
+        },
+      },
     );
     const rendered = JSON.parse(stdout) as {
       services: {
