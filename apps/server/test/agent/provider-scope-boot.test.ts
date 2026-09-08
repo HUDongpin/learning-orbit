@@ -196,6 +196,23 @@ describe("agent provider scope at boot", () => {
       .toBe("fixture-socratic-v1");
   });
 
+  it("refuses a described copy lifecycle this build does not implement", () => {
+    // `delete_and_probe` is a mode the contracts may describe and no code
+    // performs: there is no remote delete, no unreadability probe and no
+    // closure record anywhere in this repository. The worker's reader refuses
+    // it under this same code; accepting it here would let a manifest assert
+    // that remote copies are deleted and the deletion proven, and would put a
+    // digest in a health sample the worker will never report.
+    expect(() => parseAgentProviderManifest(raw({ remoteCopyMode: "delete_and_probe" })))
+      .toThrow("AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED");
+    // Distinct from a mode nobody has ever heard of, so a reader can tell
+    // "unknown" from "real, and not implemented here yet".
+    expect(() => parseAgentProviderManifest(raw({ remoteCopyMode: "keep_forever" })))
+      .toThrow("AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE");
+    // The one mode this build delivers still parses.
+    expect(parseAgentProviderManifest(raw()).providerId).toBe("fixture-socratic-v1");
+  });
+
   it("refuses a manifest that carries the credential instead of naming it", () => {
     // A long unbroken token in a reviewed, committed, hashed file is a key.
     expect(() => parseAgentProviderManifest(raw({ purpose: `sk-${"a".repeat(70)}` })))

@@ -40,7 +40,23 @@ const MANIFEST_KEYS = [
   "purpose", "maxOutputTokens", "credentialEnvVar", "remoteCopyMode",
 ] as const;
 const TEXT_KEYS = ["displayName", "modelId", "region", "purpose", "credentialEnvVar"] as const;
+// The copy lifecycles the contracts are allowed to *describe*. An external
+// authorization record may name either, and a contract is permitted to
+// describe more than any single build implements.
 const REMOTE_COPY_MODES = ["no_persistent_copy_attested", "delete_and_probe"];
+// The copy lifecycles this build can actually *deliver*, which is the smaller
+// set a manifest is held to. This mirrors IMPLEMENTED_REMOTE_COPY_MODES in
+// services/worker/src/learning_orbit_worker/providers/manifest.py, and it must:
+// a mode one side accepts and the other refuses puts a digest in a health
+// sample the other can never match, which is the drift the comment above this
+// file's key list warns about.
+//
+// `delete_and_probe` is refused for one reason only: no delete-and-probe
+// lifecycle exists in this repository. There is no remote delete call, no
+// unreadability probe and no provider-copy closure record, so a manifest
+// declaring it would assert that remote copies are deleted and the deletion
+// proven while nothing performs either step.
+const IMPLEMENTED_REMOTE_COPY_MODES = ["no_persistent_copy_attested"];
 const PROVIDER_ID = /^[a-z0-9._-]{1,64}$/;
 const MANIFEST_SHA256 = /^[a-f0-9]{64}$/;
 const CREDENTIAL_ENV_VAR = /^[A-Z][A-Z0-9_]{2,63}$/;
@@ -158,6 +174,12 @@ export function parseAgentProviderManifest(raw: Buffer): AgentProviderScope {
   }
   if (typeof document.remoteCopyMode !== "string" || !REMOTE_COPY_MODES.includes(document.remoteCopyMode)) {
     throw new AgentProviderManifestError("AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE");
+  }
+  // A described mode is not an implemented one. The two codes stay distinct so
+  // a reader can tell "nobody has ever heard of this mode" from "this mode is
+  // real and this build does not implement its lifecycle yet".
+  if (!IMPLEMENTED_REMOTE_COPY_MODES.includes(document.remoteCopyMode)) {
+    throw new AgentProviderManifestError("AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED");
   }
   // A secret in the manifest would be reviewed, committed, and hashed into the
   // digest the server stores. The credential is named by `credentialEnvVar`
