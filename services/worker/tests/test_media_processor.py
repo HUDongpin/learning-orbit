@@ -1,7 +1,9 @@
 """The media processor: read, scan, sanitize, report — in that order."""
 import struct
+import threading
 import unittest
 import zlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from hashlib import sha256
 from uuid import uuid4
 
@@ -295,6 +297,96 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ObjectStoreError) as raised:
             instance.get("rooms/a/original")
         self.assertEqual(raised.exception.code, "MEDIA_STORE_UNREACHABLE")
+
+
+class StoreRedirectTest(unittest.TestCase):
+    """The SigV4 header must not follow a redirect out of the bucket.
+
+    The default transport used ``urlopen``, which follows a 30x and re-sends the
+    request headers with it, so a redirecting endpoint collected the worker's
+    ``Authorization`` header - and worse, ``get`` hashed whatever that host
+    returned and handed it back as the stored object, so the substitution left
+    no trace at this layer. Two real loopback servers stand in for the store
+    because the behaviour under test belongs to the standard library: the proof
+    is that the second server is never spoken to at all.
+    """
+
+    def setUp(self) -> None:
+        self.reached: list[dict[str, str]] = []
+        recorder = self.reached
+
+        class _Target(BaseHTTPRequestHandler):
+            def _answer(self) -> None:  # pragma: no cover - never reached
+                length = int(self.headers.get("content-length") or 0)
+                if length:
+                    self.rfile.read(length)
+                recorder.append({key.lower(): value for key, value in self.headers.items()})
+                self.send_response(200)
+                self.send_header("content-length", "8")
+                self.end_headers()
+                self.wfile.write(b"attacker")
+
+            do_GET = _answer
+            do_PUT = _answer
+
+            def log_message(self, *_args) -> None:
+                return None
+
+        self.target = HTTPServer(("127.0.0.1", 0), _Target)
+        target_url = f"http://127.0.0.1:{self.target.server_port}/private/rooms/a/original"
+
+        class _Redirect(BaseHTTPRequestHandler):
+            def _answer(self) -> None:
+                length = int(self.headers.get("content-length") or 0)
+                if length:
+                    self.rfile.read(length)
+                self.send_response(307)
+                self.send_header("location", target_url)
+                self.send_header("content-length", "0")
+                self.end_headers()
+
+            do_GET = _answer
+            do_PUT = _answer
+
+            def log_message(self, *_args) -> None:
+                return None
+
+        self.redirect = HTTPServer(("127.0.0.1", 0), _Redirect)
+        self.endpoint = f"http://127.0.0.1:{self.redirect.server_port}"
+        self.threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in (self.target, self.redirect)
+        ]
+        for thread in self.threads:
+            thread.start()
+
+    def tearDown(self) -> None:
+        for server in (self.target, self.redirect):
+            server.shutdown()
+            server.server_close()
+        for thread in self.threads:
+            thread.join(timeout=5.0)
+            self.assertFalse(thread.is_alive())
+
+    def store(self) -> PrivateObjectStore:
+        # No transport override: this exercises the shipped default.
+        return PrivateObjectStore(
+            self.endpoint, "private", S3Credentials("key", "secret", "us-east-1"),
+        )
+
+    def test_a_redirected_read_is_refused_and_never_returns_the_other_hosts_bytes(self) -> None:
+        with self.assertRaises(ObjectStoreError) as raised:
+            self.store().get("rooms/a/original")
+
+        self.assertEqual(raised.exception.code, "MEDIA_STORE_READ_REFUSED")
+        self.assertEqual(self.reached, [])
+
+    def test_a_redirected_write_is_refused_before_the_signature_travels(self) -> None:
+        with self.assertRaises(ObjectStoreError) as raised:
+            self.store().put("rooms/a/copy", b"data", content_type="image/png")
+
+        self.assertEqual(raised.exception.code, "MEDIA_STORE_WRITE_REFUSED")
+        self.assertEqual(self.reached, [])
 
 
 if __name__ == "__main__":

@@ -39,10 +39,26 @@ class StoredObject:
 Transport = Callable[[str, str, Mapping[str, str], bytes | None, float], tuple[int, bytes]]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep the SigV4 signature on the one host it was signed for.
+
+    ``urlopen`` follows a redirect and carries the request headers with it, so a
+    30x from the object store would hand the worker's ``Authorization`` header
+    to whatever host the response named - and the body that came back would be
+    hashed here as if the bucket had returned it. Returning None turns the
+    redirect into an ``HTTPError``, which the caller below reports as its
+    status: a bounded refusal rather than a followed one.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
 def _urllib_transport(url: str, method: str, headers: Mapping[str, str], body: bytes | None, timeout: float) -> tuple[int, bytes]:
     request = urllib.request.Request(url, data=body, method=method, headers=dict(headers))
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        with opener.open(request, timeout=timeout) as response:  # noqa: S310
             return int(response.status), response.read(MAX_OBJECT_BYTES + 1)
     except urllib.error.HTTPError as error:
         return int(error.code), error.read(4096)
