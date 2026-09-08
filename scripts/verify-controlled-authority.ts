@@ -26,7 +26,7 @@ import { argv, env, exit, stderr, stdout } from "node:process";
 import {
   externalAuthorizationRecordContract,
   studentVisiblePromotionRecordContract,
-} from "@learning-orbit/contracts";
+} from "./contracts-entrypoint.js";
 
 import {
   authoritySigningInput,

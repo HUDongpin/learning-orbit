@@ -16,7 +16,7 @@
 import { readFile } from "node:fs/promises";
 import { argv, exit, stderr, stdout } from "node:process";
 
-import { humanShadowRecordContract } from "@learning-orbit/contracts";
+import { humanShadowRecordContract } from "./contracts-entrypoint.js";
 
 import {
   ControlledAuthorityError,

@@ -20,8 +20,8 @@ import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { argv, env, exit, stderr, stdout } from "node:process";
 
-import { pilotRetentionPolicyContract } from "@learning-orbit/contracts";
-import type { PilotRetentionPolicyRecord } from "@learning-orbit/contracts";
+import { pilotRetentionPolicyContract } from "./contracts-entrypoint.js";
+import type { PilotRetentionPolicyRecord } from "./contracts-entrypoint.js";
 
 import {
   authoritySigningInput,
