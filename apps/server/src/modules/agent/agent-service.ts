@@ -4,6 +4,7 @@ import { agentContract, type AuthSession } from "@learning-orbit/contracts";
 import type { Clock } from "../../clock.js";
 import { AgentRepository, type AgentRunOwner } from "./agent-repository.js";
 import { ProviderHealthRepository } from "./provider-health-repository.js";
+import { UNCONFIGURED_PROVIDER_SCOPE, type AgentProviderScope } from "./provider-manifest.js";
 
 export class AgentError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -21,11 +22,14 @@ export class AgentService {
     private readonly pool: Pool,
     private readonly clock: Clock,
     private readonly healthRepository: ProviderHealthRepository = new ProviderHealthRepository(pool, clock),
-    options: Readonly<{ providerId?: string; manifestSha256?: string }> = {},
+    options: Partial<AgentProviderScope> = {},
   ) {
     this.repository = new AgentRepository(pool, clock);
-    this.providerId = options.providerId ?? "fixture";
-    this.manifestSha256 = options.manifestSha256 ?? "0".repeat(64);
+    // An unsupplied scope is the refusing one, never a permissive default: a
+    // caller that forgets to pass the reviewed manifest gets a service that
+    // admits nothing rather than one bound to a provider nobody approved.
+    this.providerId = options.providerId ?? UNCONFIGURED_PROVIDER_SCOPE.providerId;
+    this.manifestSha256 = options.manifestSha256 ?? UNCONFIGURED_PROVIDER_SCOPE.manifestSha256;
   }
 
   /** Pre-parse room/session authorization; command methods recheck it. */

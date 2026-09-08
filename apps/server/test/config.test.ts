@@ -4,7 +4,13 @@ import { loadServerConfig } from "../src/config.js";
 
 const pepperV1 = Buffer.alloc(32, 0x51).toString("base64url");
 const pepperV2 = Buffer.alloc(32, 0x52).toString("base64url");
+// A salt is required of every deployment, so a fixture without one describes
+// an environment that cannot boot; each case below varies exactly one setting
+// and leaves the rest valid.  What the salt itself refuses is pinned in
+// `audit-salt-boot.test.ts`.
+const auditSalt = Buffer.alloc(32, 0x53).toString("base64url");
 const base = {
+  LO_AUDIT_SALT: auditSalt,
   DATABASE_URL: "postgres://user:password@localhost/db",
   LO_PUBLIC_BASE_ORIGIN: "https://app.learning-orbit.test",
   LO_ALLOWED_ORIGINS: "https://app.learning-orbit.test",
@@ -70,6 +76,7 @@ describe("server configuration", () => {
 
 describe("object store configuration", () => {
   const base = {
+    LO_AUDIT_SALT: auditSalt,
     LO_PUBLIC_BASE_ORIGIN: "https://app.learning-orbit.test",
     LO_ALLOWED_ORIGINS: "https://app.learning-orbit.test",
     DATABASE_URL: "postgres://user:pass@127.0.0.1:55432/db",

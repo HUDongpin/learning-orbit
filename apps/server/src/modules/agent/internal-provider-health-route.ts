@@ -3,11 +3,10 @@ import { agentContract } from "@learning-orbit/contracts";
 import type { Clock } from "../../clock.js";
 import { authorizeProviderHealthAssertion, type ServiceAssertionTrust } from "../security/service-assertion.js";
 import { ProviderHealthRepository } from "./provider-health-repository.js";
+import type { AgentProviderScope } from "./provider-manifest.js";
 
-export type ProviderHealthRouteOptions = Readonly<{
-  providerId: string;
-  manifestSha256: string;
-}>;
+/** The reviewed provider scope this route admits samples for, and nothing else. */
+export type ProviderHealthRouteOptions = AgentProviderScope;
 
 export class InternalProviderHealthRoute {
   constructor(

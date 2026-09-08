@@ -89,7 +89,7 @@ export interface BuildAppOptions {
   mediaInternalOutcome?: MediaInternalOutcomeRoute;
   lifecycleMediaSurface?: InternalMediaSurfaceRoute;
   mediaSurfaceEraser?: MediaSurfaceEraser;
-  /** Explicitly injected in tests/pilot; production requires LO_AUDIT_SALT. */
+  /** Explicitly injected in tests/pilot; production requires config.auditSalt. */
   governance?: GovernanceService;
   analytics?: {
     policy: Pick<AnalyticsPolicy, "requireRoomAccess" | "assertProjection">;
@@ -107,6 +107,13 @@ function resolvedConfig(options: BuildAppOptions): ServerConfig {
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const config = resolvedConfig(options);
+  // The reviewed provider, resolved once by `loadServerConfig` from the one
+  // manifest the worker also reads: a malformed or unreadable manifest fails
+  // there, before any resource exists, rather than leaving a running server
+  // scoped to a provider nobody approved.  An injected config that names no
+  // scope keeps the refusing one, so this never reaches past what it was
+  // handed into the ambient environment.
+  const agentProviderScope = config.agentProviderScope;
   // Telemetry starts before Fastify and every plugin so startup work is inside
   // the trace, and is shut down with the server.  With no approved collector
   // configured this is an inert facade, which is a supported deployment.
@@ -158,8 +165,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     ? loadServiceAssertionTrust({ trustFile: config.serviceAssertionTrustFile }) : undefined);
   const jobClaims = options.jobClaims ?? new JobClaimAuthority();
   // One audit writer for every authorization decision the process makes.
-  const securityAudit = pool && process.env.LO_AUDIT_SALT
-    ? new SecurityAuditLog(pool, process.env.LO_AUDIT_SALT)
+  const securityAudit = pool && config.auditSalt
+    ? new SecurityAuditLog(pool, config.auditSalt)
     : undefined;
   const analytics = options.analytics ?? (pool ? {
     policy: new AnalyticsPolicy(pool, securityAudit),
@@ -226,8 +233,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // Retention is the half of the privacy promise nobody presses a button for.
   // An hour is far finer than a window measured in days, and coarse enough
   // that an idle deployment costs one indexed query an hour.
-  const retention = pool && process.env.LO_AUDIT_SALT
-    ? new RetentionScheduler(pool, clock, process.env.LO_AUDIT_SALT)
+  const retention = pool && config.auditSalt
+    ? new RetentionScheduler(pool, clock, config.auditSalt)
     : undefined;
   const retentionTimer = retention
     ? setInterval(() => { void retention.sweep().catch(() => undefined); }, 3_600_000)
@@ -271,10 +278,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     : undefined;
   const analyticsTeacher = options.analyticsTeacher ?? (pool && lifecycle && analytics?.policy instanceof AnalyticsPolicy
     ? new AnalyticsTeacherService(pool, lifecycle.events, analytics.policy) : undefined);
-  const agent = options.agent ?? (pool ? new AgentService(pool, clock) : undefined);
+  // Both agent consumers are handed the same scope object, so the health the
+  // worker reports and the health a run is admitted against cannot name
+  // different providers.
+  const agent = options.agent ?? (pool ? new AgentService(pool, clock, undefined, agentProviderScope) : undefined);
   const agentProviderHealth = pool && assertionTrust ? new InternalProviderHealthRoute(
-    new ProviderHealthRepository(pool, clock), assertionTrust, clock,
-    { providerId: "fixture", manifestSha256: "0".repeat(64) },
+    new ProviderHealthRepository(pool, clock), assertionTrust, clock, agentProviderScope,
   ) : undefined;
 
   // The three worker return paths. Each needs the same two authorities the
@@ -292,9 +301,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const lifecycleMediaSurface = options.lifecycleMediaSurface ?? (pool && assertionTrust
     ? new InternalMediaSurfaceRoute(pool, clock, assertionTrust, jobClaims, options.mediaSurfaceEraser)
     : undefined);
-  const governance = options.governance ?? (pool && process.env.LO_AUDIT_SALT
+  const governance = options.governance ?? (pool && config.auditSalt
     ? new DefaultGovernanceService(pool, {
-      auditSalt: process.env.LO_AUDIT_SALT,
+      auditSalt: config.auditSalt,
       clock: () => clock.now(),
       ...(realtime
         ? { evictRoom: (roomId: string, code?: number) => { realtime.hub.evictRoom(roomId, code); } }
