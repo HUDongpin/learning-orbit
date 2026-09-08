@@ -15,13 +15,20 @@
  * there by a Linux runner could be mistaken for something it is not.
  *
  *   node .github/ci/required-gate.mjs <gate-id>
- *   node .github/ci/required-gate.mjs <gate-id> --subset <extra argv...>
+ *   node .github/ci/required-gate.mjs <gate-id> --subset <count> <extra argv...>
  *
  * `--subset` is for the one gate a Linux runner cannot run whole. It keeps
- * every rule the harness applies except the manifest's test count, which it
- * replaces with the count actually observed - and it fails if that count is not
- * strictly smaller than the manifest's, because a subset that stopped being a
- * subset means the exclusion below it is stale and is now hiding tests.
+ * every rule the harness applies, and swaps the manifest's count for a second
+ * pinned count that the caller must state.
+ *
+ * Stating it is the point. An earlier version substituted whatever count it
+ * observed and only checked that the run was strictly smaller than the
+ * manifest's, which bounds a stale exclusion from above and nothing from
+ * below: an exclusion glob matching most of a gate's files ran a fraction of
+ * it and still reported PASS. A subset that can shrink silently has switched off the
+ * count check for the one gate that needed it most - so the count is pinned on
+ * both sides, and either an exclusion that stopped excluding or one that
+ * started excluding more is a failure that names itself.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -38,7 +45,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const [gateId, ...rest] = process.argv.slice(2);
 if (!gateId) {
-  process.stderr.write("usage: required-gate.mjs <gate-id> [--subset <extra argv...>]\n");
+  process.stderr.write("usage: required-gate.mjs <gate-id> [--subset <count> <extra argv...>]\n");
   process.exit(2);
 }
 const subset = rest[0] === "--subset";
@@ -46,7 +53,12 @@ if (rest.length > 0 && !subset) {
   process.stderr.write("extra argv is only accepted after --subset\n");
   process.exit(2);
 }
-const extraArgv = subset ? rest.slice(1) : [];
+const subsetExpected = subset ? Number(rest[1]) : undefined;
+if (subset && !Number.isSafeInteger(subsetExpected)) {
+  process.stderr.write("--subset requires the exact number of tests the subset must run\n");
+  process.exit(2);
+}
+const extraArgv = subset ? rest.slice(2) : [];
 
 const manifest = JSON.parse(
   readFileSync(resolve(root, "tests/pilot/required-test-manifest.v1.json"), "utf8"),
@@ -104,11 +116,15 @@ process.stdout.write(
 // one that wrote a report while failing is caught by the policy below.
 let failure = run.status === 0 ? undefined : `runner exit ${run.status}`;
 
-const judged = subset ? { ...gate, expectedTests: summary.expected } : gate;
-if (subset && summary.expected >= gate.expectedTests) {
-  failure ??= `subset ran ${summary.expected} of ${gate.expectedTests} tests:`
+const judged = subset ? { ...gate, expectedTests: subsetExpected } : gate;
+if (subset && subsetExpected >= gate.expectedTests) {
+  failure ??= `subset pins ${subsetExpected} of ${gate.expectedTests} tests:`
     + " the exclusion is stale, remove it or re-scope it";
 }
+// Bounded from below as well: the pinned subset is a count to meet, not a
+// ceiling to fall under. `assertRequiredTestReports` compares against
+// `judged.expectedTests`, so a run that lost tests fails here rather than
+// reporting PASS over a fraction of the gate.
 try {
   assertRequiredTestReports(
     { schemaVersion: 1, gates: [judged] },

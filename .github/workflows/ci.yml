@@ -492,7 +492,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/services/worker/src
         run: |
           bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs \
-            pilot-harness-vitest --subset --exclude '**/tests/pilot/local-pilot-tls.test.ts'
+            pilot-harness-vitest --subset 135 --exclude '**/tests/pilot/local-pilot-tls.test.ts'
 
       - name: Gate - chaos-vitest
         env:
