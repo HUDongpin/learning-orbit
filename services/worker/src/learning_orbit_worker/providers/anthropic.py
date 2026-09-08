@@ -29,7 +29,11 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from .fixture import ProviderCancelled, ProviderError
-from .manifest import ProviderManifest
+from .manifest import (
+    IMPLEMENTED_REMOTE_COPY_MODES,
+    REMOTE_COPY_MODES,
+    ProviderManifest,
+)
 from .model import DEGRADED, HEALTHY, UNAVAILABLE, ModelRequest, PreparedModelCall
 
 API_VERSION = "2023-06-01"
@@ -81,8 +85,19 @@ class AnthropicMessagesProvider:
         probe_transport: Callable[[str, dict[str, str]], int] | None = None,
         timeout_seconds: float = CONNECT_TIMEOUT_SECONDS,
     ) -> None:
-        if manifest.remote_copy_mode not in {"no_persistent_copy_attested", "delete_and_probe"}:
+        if manifest.remote_copy_mode not in REMOTE_COPY_MODES:
             raise ProviderError("PROVIDER_COPY_MODE_UNREVIEWED")
+        if manifest.remote_copy_mode not in IMPLEMENTED_REMOTE_COPY_MODES:
+            # `delete_and_probe` reaches here as a mode the contracts describe
+            # and this build cannot deliver: nothing in this repository deletes
+            # a remote copy or probes that the deletion took. Running under it
+            # would make the manifest assert a deletion guarantee no code
+            # performs, so the adapter refuses to be constructed at all. The
+            # mode is not wrong in principle - see IMPLEMENTED_REMOTE_COPY_MODES
+            # in `manifest.py` for exactly what to implement to re-enable it.
+            # A manifest parsed from disk is already refused by the loader; this
+            # is the second door, for a ProviderManifest built in memory.
+            raise ProviderError("PROVIDER_COPY_MODE_UNIMPLEMENTED")
         if not endpoint.startswith("https://"):
             # A provider call carries classroom text off this machine; plaintext
             # is not a configuration this adapter offers, not even locally.

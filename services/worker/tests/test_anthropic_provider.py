@@ -119,6 +119,20 @@ class PreparationTest(unittest.TestCase):
             AnthropicMessagesProvider(unreviewed, env=ENV)
         self.assertEqual(raised.exception.code, "PROVIDER_COPY_MODE_UNREVIEWED")
 
+    def test_refuses_a_copy_mode_this_build_cannot_perform(self) -> None:
+        # `delete_and_probe` is a reviewed mode the contracts may describe, and
+        # this refusal is not an objection to it. It is refused because no
+        # delete-and-probe lifecycle exists in this repository - no remote
+        # delete, no unreadability probe, no closure record - so an adapter
+        # built under it would carry classroom text to a provider while the
+        # manifest claimed a deletion nothing performs. Distinct code from the
+        # unreviewed one above; see IMPLEMENTED_REMOTE_COPY_MODES in
+        # `providers/manifest.py` for what re-enabling it requires.
+        described = replace(manifest(), remote_copy_mode="delete_and_probe")
+        with self.assertRaises(ProviderError) as raised:
+            AnthropicMessagesProvider(described, env=ENV)
+        self.assertEqual(raised.exception.code, "PROVIDER_COPY_MODE_UNIMPLEMENTED")
+
 
 class SelectionTest(unittest.TestCase):
     def test_the_manifest_chooses_the_adapter(self) -> None:

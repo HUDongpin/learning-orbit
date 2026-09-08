@@ -31,6 +31,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
@@ -47,6 +48,8 @@ from learning_orbit_worker.providers.anthropic import (
 )
 from learning_orbit_worker.providers.fixture import ProviderCancelled, ProviderError
 from learning_orbit_worker.providers.manifest import (
+    IMPLEMENTED_REMOTE_COPY_MODES,
+    REMOTE_COPY_MODES,
     ProviderManifestError,
     load_provider_manifest,
     parse_provider_manifest,
@@ -618,30 +621,35 @@ class NegativeManifestTest(unittest.TestCase):
         spaced = variant(purpose="key " + "A" * 80)
         self.assertTrue(spaced.purpose.startswith("key "))
 
-    def test_delete_and_probe_is_accepted_by_the_worker_manifest_today(self):
-        # DOCUMENTED, NOT ENDORSED - a governance contradiction, reported for a
-        # human decision rather than resolved in a test. Three layers disagree:
-        #   * ACCEPTS BOTH: providers/manifest.py REMOTE_COPY_MODES,
-        #     anthropic.py's constructor, apps/server provider-manifest.ts
-        #     REMOTE_COPY_MODES, and the external-authorization record's
-        #     providerScope.remoteCopyMode union.
-        #   * ACCEPTS ONE: provider-copy-authority-record.v1.json pins
-        #     lifecycleMode to the const "no_persistent_copy_attested",
-        #     migration 005 CHECKs the same single value, and
-        #     governance-contract.test.ts asserts "delete_and_probe" throws.
-        #   * IMPLEMENTS NEITHER SIDE OF delete_and_probe: no delete port, no
-        #     probe, no provider-copy closure - the whole lifecycle Plan 04
-        #     describes is absent from this repository.
-        # This test states what the worker does today, so that whichever side is
-        # corrected, the change is visible here.
-        manifest = variant(remoteCopyMode="delete_and_probe")
-        self.assertEqual(manifest.remote_copy_mode, "delete_and_probe")
-        model = build_model_provider(manifest, env=env())
-        self.assertIsInstance(model, AnthropicMessagesProvider)
-        # A mode neither side reviewed is still refused by both.
+    def test_delete_and_probe_is_refused_because_nothing_here_performs_it(self):
+        # The worker refuses this mode, and the reason is absence, not
+        # disapproval. `delete_and_probe` is a lifecycle the contracts may
+        # legitimately describe - external-authorization-record.v1.json names
+        # it in providerScope.remoteCopyMode - but no delete port, no
+        # unreadability probe and no provider-copy closure exists anywhere in
+        # this repository. A manifest declaring it would assert that remote
+        # copies of classroom text are deleted and the deletion proven, while
+        # nothing performs either step. That claim is refused here rather than
+        # made. To re-enable the mode, implement the lifecycle and add it back
+        # to IMPLEMENTED_REMOTE_COPY_MODES in providers/manifest.py.
+        with self.assertRaises(ProviderManifestError) as unimplemented:
+            variant(remoteCopyMode="delete_and_probe")
+        self.assertEqual(
+            unimplemented.exception.code, "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED",
+        )
+        self.assertIn("delete_and_probe", REMOTE_COPY_MODES)
+        self.assertNotIn("delete_and_probe", IMPLEMENTED_REMOTE_COPY_MODES)
+        # The adapter is the second door: a ProviderManifest built in memory
+        # never passed the loader, and is refused with the adapter's own code.
+        described = replace(example_manifest(), remote_copy_mode="delete_and_probe")
+        with self.assertRaises(ProviderError) as adapter:
+            build_model_provider(described, env=env())
+        self.assertEqual(adapter.exception.code, "PROVIDER_COPY_MODE_UNIMPLEMENTED")
+        # A mode nobody described keeps its own, different code.
         with self.assertRaises(ProviderManifestError) as raised:
             variant(remoteCopyMode="keeps_a_copy_forever")
         self.assertEqual(raised.exception.code, "AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE")
+        self.assertNotEqual(raised.exception.code, unimplemented.exception.code)
 
 
 # -- the whole path ----------------------------------------------------------
@@ -810,23 +818,30 @@ class EndToEndDryRunTest(unittest.TestCase):
         self.assertEqual(transport.calls, [])
         self.assertEqual(http.posts, [])
 
-    def test_a_delete_and_probe_manifest_completes_a_run_and_nothing_probes(self):
-        # DOCUMENTED, NOT ENDORSED - the visible end of the contradiction above.
-        # A manifest declaring the mode with no implementation behind it does
-        # not fail closed: the run completes, classroom text reaches the
-        # provider, and nothing in this repository ever deletes or probes the
-        # remote copy. Recorded here so the day it is decided, the decision has
-        # a test to change.
+    def test_a_delete_and_probe_manifest_never_gets_as_far_as_a_run(self):
+        # The visible end of the refusal, on the whole path rather than at the
+        # parser. The mode is rejected while the manifest is still being read,
+        # so the run has nothing to execute against: no classroom text leaves
+        # the process and no completion is posted. Before the refusal this
+        # exact case completed a run and posted an answer while the manifest
+        # claimed a deletion lifecycle nothing implements.
         connection, http = FakeConnection(), FakeInternalHttp()
         transport = ReplayTransport(full_message(ANSWER))
         with patch.dict(os.environ, {}, clear=True), no_network():
-            outcome = self.executor(
-                transport, connection, http,
-                manifest_loader=lambda: variant(remoteCopyMode="delete_and_probe"),
-            )(job=Job(), claim=Claim())
-        self.assertIs(outcome, HandlerOutcome.SUCCESS)
-        self.assertEqual(http.posts[0]["body"]["text"], ANSWER)
-        self.assertEqual(len(transport.calls), 1)
+            with captured_output() as (logs, out, err):
+                with self.assertRaises(ProviderManifestError) as raised:
+                    self.executor(
+                        transport, connection, http,
+                        manifest_loader=lambda: variant(remoteCopyMode="delete_and_probe"),
+                    )(job=Job(), claim=Claim())
+        self.assertEqual(
+            raised.exception.code, "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED",
+        )
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(http.posts, [])
+        written = " ".join(logs) + out.getvalue() + err.getvalue()
+        for secret in ("分解者", ANSWER, PLACEHOLDER):
+            self.assertNotIn(secret, written)
 
     def test_the_prompt_artifact_names_the_manifest_that_was_in_force(self):
         connection, http = FakeConnection(), FakeInternalHttp()

@@ -174,7 +174,14 @@ def load_reviewed_manifest(env: Mapping[str, str] | None = None) -> ProviderMani
     try:
         return load_provider_manifest(path)
     except ProviderManifestError as error:
-        raise TerminalJobError("AGENT_PROVIDER_MANIFEST_" + error.code) from None
+        # ``error.code`` is already fully qualified - every manifest code
+        # begins with ``AGENT_PROVIDER_MANIFEST_``. Prefixing it again doubled
+        # the prefix in ``worker_job.last_error``, and the longest code
+        # (``..._COPY_MODE_UNIMPLEMENTED``, 47 chars) then exceeded the job
+        # layer's ``[A-Z0-9_]{1,64}`` bound and was coerced to the anonymous
+        # ``JOB_HANDLER_FAILED``: the one manifest fault a person most needs
+        # named was the one the row could not say. Raise the code as given.
+        raise TerminalJobError(error.code) from None
 
 
 class DurableAgentExecutor:

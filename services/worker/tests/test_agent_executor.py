@@ -1,7 +1,10 @@
 """The durable Agent executor: context, prompt artifact, safety, reporting."""
 import json
+import re
+import tempfile
 import unittest
 from hashlib import sha256
+from pathlib import Path
 from uuid import uuid4
 
 from learning_orbit_worker.agent.executor import (
@@ -14,6 +17,7 @@ from learning_orbit_worker.agent.context import build_context
 from learning_orbit_worker.core_handlers import RetryableJobError, TerminalJobError
 from learning_orbit_worker.handler_registry import HandlerOutcome
 from learning_orbit_worker.internal_http import InternalResponse
+from learning_orbit_worker.jobs import JobStore, WorkerJob
 from learning_orbit_worker.providers.fixture import ProviderError
 from learning_orbit_worker.providers.manifest import parse_provider_manifest
 
@@ -24,7 +28,7 @@ TRIGGER = str(uuid4())
 CORRELATION = str(uuid4())
 CLAIM_TOKEN = str(uuid4())
 
-MANIFEST = parse_provider_manifest(json.dumps({
+MANIFEST_DOCUMENT = {
     "schemaVersion": 1,
     "providerId": "anthropic-messages-v1",
     "displayName": "Anthropic Messages",
@@ -34,7 +38,8 @@ MANIFEST = parse_provider_manifest(json.dumps({
     "maxOutputTokens": 512,
     "credentialEnvVar": "LO_AGENT_PROVIDER_KEY",
     "remoteCopyMode": "no_persistent_copy_attested",
-}).encode("utf-8"))
+}
+MANIFEST = parse_provider_manifest(json.dumps(MANIFEST_DOCUMENT).encode("utf-8"))
 
 
 def message(seq: int, text: str, event_id=None) -> dict:
@@ -291,6 +296,140 @@ class ExecutionTest(unittest.TestCase):
         with self.assertRaises(TerminalJobError):
             executor(connection)(job=Bare(), claim=Claim())
         self.assertEqual(connection.queries, [])
+
+
+class RecordingJobDb:
+    """The narrowest connection double ``JobStore.fail`` will accept.
+
+    It answers the claim predicate, reports no business receipt so the failure
+    path is the one taken, and keeps the ``last_error`` parameter of the real
+    UPDATE - the exact string the row would hold.
+    """
+
+    def __init__(self) -> None:
+        self.last_error = None
+
+    def execute(self, sql, params=()):
+        text = " ".join(sql.split())
+        if text.startswith("SELECT 1 FROM worker_job"):
+            return FakeCursor([{"one": 1}], rowcount=1)
+        if text.startswith("SELECT claim_token_hash"):
+            return FakeCursor([], rowcount=0)
+        if text.startswith("UPDATE worker_job SET status ="):
+            self.last_error = params[0]
+            return FakeCursor([{"status": "dead"}], rowcount=1)
+        return FakeCursor([], rowcount=0)
+
+
+def failing_job() -> WorkerJob:
+    return WorkerJob(
+        job_id=JOB, job_type="agent.execute.v1", room_id=ROOM,
+        source_event_id=TRIGGER, dedupe_key="agent.execute.v1:" + RUN,
+        payload={"agentRunId": RUN}, attempts=1, correlation_id=CORRELATION,
+        locked_by="worker-1", claim_generation="1", claim_token=CLAIM_TOKEN,
+    )
+
+
+def manifest_bytes(**overrides) -> bytes:
+    return json.dumps({**MANIFEST_DOCUMENT, **overrides}).encode("utf-8")
+
+
+class ProviderManifestErrorCodeTest(unittest.TestCase):
+    """A manifest fault must reach the job row under its own name.
+
+    ``load_reviewed_manifest`` used to raise
+    ``"AGENT_PROVIDER_MANIFEST_" + error.code`` over a ``ProviderManifestError``
+    code that already began with that prefix. Six of the seven codes reached
+    ``worker_job.last_error`` doubled, and the longest -
+    ``AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED`` at 47 characters - grew
+    to 71, failed the job layer's ``[A-Z0-9_]{1,64}`` bound and was coerced to
+    the anonymous ``JOB_HANDLER_FAILED``. The manifest fault a person most needs
+    named was the one the row could not say.
+
+    Every case here writes a real manifest file and reads it back through the
+    real ``load_reviewed_manifest``, then carries the raised error into the real
+    ``JobStore.fail``: the assertion is on the string that genuinely lands in
+    the row, not on one an injected ``manifest_loader`` was handed.
+    """
+
+    #: The job layer's bound, restated so a regression in either place is loud.
+    JOB_CODE = re.compile(r"[A-Z0-9_]{1,64}")
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+
+    def write_manifest(self, name: str, raw: bytes) -> str:
+        """One file per case: every case is loaded from its own bytes."""
+        path = self.directory / (name + ".json")
+        path.write_bytes(raw)
+        return str(path)
+
+    def last_error_for(self, path: str) -> str:
+        """Load through the real path and report what the row would hold."""
+        with self.assertRaises(TerminalJobError) as raised:
+            load_reviewed_manifest({"LO_AGENT_PROVIDER_MANIFEST": path})
+        db = RecordingJobDb()
+        JobStore(db, "worker-1").fail(failing_job(), raised.exception)
+        return db.last_error
+
+    def cases(self) -> dict:
+        absent = self.directory / "never-written.json"
+        return {
+            "AGENT_PROVIDER_MANIFEST_INVALID":
+                self.write_manifest("malformed", b"{ not json"),
+            "AGENT_PROVIDER_MANIFEST_VERSION":
+                self.write_manifest("version", manifest_bytes(schemaVersion=2)),
+            "AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE":
+                self.write_manifest("unknown-mode", manifest_bytes(remoteCopyMode="teleported")),
+            "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED":
+                self.write_manifest("unimplemented-mode", manifest_bytes(remoteCopyMode="delete_and_probe")),
+            "AGENT_PROVIDER_MANIFEST_SECRET_SUSPECTED":
+                self.write_manifest("secret-shaped", manifest_bytes(purpose="s" * 61)),
+            "AGENT_PROVIDER_MANIFEST_PATH_INVALID": "relative/provider-manifest.json",
+            "AGENT_PROVIDER_MANIFEST_UNREADABLE": str(absent),
+        }
+
+    def test_every_manifest_code_reaches_the_job_row_intact(self) -> None:
+        for expected, path in self.cases().items():
+            with self.subTest(code=expected):
+                self.assertEqual(self.last_error_for(path), expected)
+
+    def test_no_manifest_code_is_coerced_away_by_the_job_bound(self) -> None:
+        # The failure this guards is silent: an over-long code is not rejected,
+        # it is replaced, and the row then blames the handler for a fault that
+        # was the deployment's manifest.
+        for expected, path in self.cases().items():
+            with self.subTest(code=expected):
+                landed = self.last_error_for(path)
+                self.assertNotEqual(landed, "JOB_HANDLER_FAILED")
+                self.assertLessEqual(len(landed), 64)
+                self.assertIsNotNone(self.JOB_CODE.fullmatch(landed))
+
+    def test_the_manifest_prefix_is_never_doubled(self) -> None:
+        for expected, path in self.cases().items():
+            with self.subTest(code=expected):
+                landed = self.last_error_for(path)
+                self.assertEqual(landed.count("AGENT_PROVIDER_MANIFEST_"), 1)
+
+    def test_the_executors_own_loader_carries_the_code_unqualified(self) -> None:
+        # No injected ``manifest_loader``: this is the path a deployed worker
+        # takes, so the executor's default loader is the one under test.
+        path = self.write_manifest(
+            "executor-default-loader", manifest_bytes(remoteCopyMode="delete_and_probe"),
+        )
+        run = DurableAgentExecutor(
+            FakeConnection(), FakeInternalHttp(),
+            env={"LO_AGENT_PROVIDER_MANIFEST": path},
+            provider_factory=lambda _manifest: FakeProvider(),
+            safety=lambda _text: Allowed(),
+        )
+        with self.assertRaises(TerminalJobError) as raised:
+            run(job=Job(), claim=Claim())
+        self.assertEqual(
+            raised.exception.code, "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED",
+        )
 
 
 class HandlerWiringTest(unittest.TestCase):

@@ -10,6 +10,8 @@ from learning_orbit_worker.providers.health import (
     sample_provider_health,
 )
 from learning_orbit_worker.providers.manifest import (
+    IMPLEMENTED_REMOTE_COPY_MODES,
+    REMOTE_COPY_MODES,
     ProviderManifestError,
     load_provider_manifest,
     parse_provider_manifest,
@@ -77,6 +79,31 @@ class ProviderManifestTests(unittest.TestCase):
                 with self.assertRaises(ProviderManifestError) as raised:
                     parse_provider_manifest(document)
                 self.assertEqual(raised.exception.code, code)
+
+    def test_refuses_delete_and_probe_because_no_such_lifecycle_exists_here(self):
+        # Not a judgement on the mode. `delete_and_probe` is a lifecycle the
+        # contracts may describe, and an external authorization record is
+        # allowed to name it. What this build cannot do is perform it: there is
+        # no remote delete call, no unreadability probe and no provider-copy
+        # closure anywhere in this repository. Accepting the mode would let a
+        # manifest assert that copies are deleted and the deletion proven while
+        # nothing does either - an unfalsifiable claim about children's data.
+        # So the loader refuses it, and refuses it under its own code.
+        with self.assertRaises(ProviderManifestError) as raised:
+            parse_provider_manifest(raw(remoteCopyMode="delete_and_probe"))
+        self.assertEqual(
+            raised.exception.code, "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED",
+        )
+        # Described but not delivered - the two sets say which is which, and
+        # the day the lifecycle is implemented this is the line that moves.
+        self.assertIn("delete_and_probe", REMOTE_COPY_MODES)
+        self.assertNotIn("delete_and_probe", IMPLEMENTED_REMOTE_COPY_MODES)
+        # A mode nobody described keeps the older, different code, so the two
+        # failures are never confused for one another.
+        with self.assertRaises(ProviderManifestError) as unknown:
+            parse_provider_manifest(raw(remoteCopyMode="keep_forever"))
+        self.assertEqual(unknown.exception.code, "AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE")
+        self.assertNotEqual(raised.exception.code, unknown.exception.code)
 
     def test_the_json_literal_true_is_not_schema_version_one(self):
         # The server's reader is `document.schemaVersion !== 1`, and in

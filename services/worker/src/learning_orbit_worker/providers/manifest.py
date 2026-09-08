@@ -22,7 +22,25 @@ MANIFEST_KEYS = frozenset({
     "schemaVersion", "providerId", "displayName", "modelId", "region",
     "purpose", "maxOutputTokens", "credentialEnvVar", "remoteCopyMode",
 })
+#: The copy lifecycles the contracts are allowed to *describe*. An external
+#: authorization record may name either one, and a contract is permitted to
+#: describe more than any single build implements.
 REMOTE_COPY_MODES = frozenset({"no_persistent_copy_attested", "delete_and_probe"})
+#: The copy lifecycles this build can actually *deliver*, which is the smaller
+#: set a manifest is held to.
+#:
+#: `delete_and_probe` is refused here for one reason only: no delete-and-probe
+#: lifecycle exists in this repository. There is no remote delete call, no
+#: unreadability probe, and no provider-copy closure record - so a manifest
+#: declaring the mode would assert that remote copies are deleted and the
+#: deletion proven, while nothing performs either step. The mode is not wrong
+#: in principle and the contracts are right to keep describing it.
+#:
+#: To re-enable it: implement the bounded remote DELETE, the probe that must
+#: report the artifact unreadable for a stable invocation id, and the closure
+#: record that makes the result durable; then add "delete_and_probe" back to
+#: this set. `anthropic.py` reads this same set, so there is one place to edit.
+IMPLEMENTED_REMOTE_COPY_MODES = frozenset({"no_persistent_copy_attested"})
 PROVIDER_ID = r"^[a-z0-9._-]{1,64}$"
 
 
@@ -89,6 +107,11 @@ def parse_provider_manifest(raw: bytes) -> ProviderManifest:
              "AGENT_PROVIDER_MANIFEST_INVALID")
     _require(document["remoteCopyMode"] in REMOTE_COPY_MODES,
              "AGENT_PROVIDER_MANIFEST_REMOTE_COPY_MODE")
+    # A described mode is not an implemented one. The two codes stay distinct so
+    # a reader can tell "nobody has ever heard of this mode" from "this mode is
+    # real and this build does not implement its lifecycle yet".
+    _require(document["remoteCopyMode"] in IMPLEMENTED_REMOTE_COPY_MODES,
+             "AGENT_PROVIDER_MANIFEST_COPY_MODE_UNIMPLEMENTED")
     # A secret in the manifest would be committed, logged and hashed into the
     # digest the server stores. The credential is named, never carried.
     for value in document.values():
