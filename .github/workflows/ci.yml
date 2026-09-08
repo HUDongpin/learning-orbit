@@ -476,7 +476,7 @@ jobs:
         # cannot do anything but fail. (The third asserts a rejected run ID and
         # would pass; vitest excludes files, not tests, so it goes with them.)
         # The pin is deliberate and is not being relaxed, so the file is
-        # excluded and the gate is declared a subset: 135 of the manifest's 138.
+        # excluded and the gate is declared a subset: 137 of the manifest's 140.
         #
         # `--subset` keeps every other rule the harness applies - zero failures,
         # zero skips, zero pending, zero focused, executed equals collected -
@@ -492,7 +492,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/services/worker/src
         run: |
           bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs \
-            pilot-harness-vitest --subset 135 --exclude '**/tests/pilot/local-pilot-tls.test.ts'
+            pilot-harness-vitest --subset 137 --exclude '**/tests/pilot/local-pilot-tls.test.ts'
 
       - name: Gate - chaos-vitest
         env:

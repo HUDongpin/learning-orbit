@@ -583,6 +583,39 @@ test("the commit under evaluation picks its own receipt, not the highest run id"
   );
 });
 
+test("two receipts for one commit are refused, not silently resolved", async () => {
+  // The ordinary sequence produces this: the gate fails, it is run again, and
+  // the second run passes at the same commit. Ordering picked one of them, and
+  // it was the failed run the first time this happened for real.
+  const readers = receiptDirectory({
+    "run-ffffffffffffffff.receipt.json": SHA_A,
+    "run-0000000000000001.receipt.json": SHA_A,
+  });
+  await assert.rejects(
+    () => selectReceiptForCommit(repository, SHA_A, readers),
+    (error: { code?: string; receipts?: string[] }) => {
+      assert.equal(error.code, "RELEASE_RECEIPT_AMBIGUOUS_FOR_COMMIT");
+      // Both are named, because naming them is the whole remedy.
+      assert.deepEqual(
+        (error.receipts ?? []).map((path) => path.split("/").pop()).sort(),
+        ["run-0000000000000001.receipt.json", "run-ffffffffffffffff.receipt.json"],
+      );
+      return true;
+    },
+  );
+});
+
+test("a second receipt for a different commit is not a tie", async () => {
+  const readers = receiptDirectory({
+    "run-ffffffffffffffff.receipt.json": SHA_B,
+    "run-0000000000000001.receipt.json": SHA_A,
+  });
+  assert.equal(
+    (await selectReceiptForCommit(repository, SHA_A, readers))?.split("/").pop(),
+    "run-0000000000000001.receipt.json",
+  );
+});
+
 test("a commit with no receipt of its own selects nothing at all", async () => {
   const readers = receiptDirectory({ "run-ffffffffffffffff.receipt.json": SHA_B });
   assert.equal(await selectReceiptForCommit(repository, SHA_A, readers), undefined);

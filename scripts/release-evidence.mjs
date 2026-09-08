@@ -74,11 +74,23 @@ export async function selectReceiptForCommit(repository, sourceSha, readers = {}
     try { return JSON.parse(await readFile(path, "utf8")); }
     catch { return undefined; }
   });
+  const matching = [];
   for (const path of paths) {
     const receipt = await read(path);
-    if (receipt?.sourceSha === sourceSha) return path;
+    if (receipt?.sourceSha === sourceSha) matching.push(path);
   }
-  return undefined;
+  // More than one receipt for the same commit is refused, not resolved. The
+  // ordinary sequence produces it: the gate fails, it is run again, and the
+  // second run passes at the same commit. Whichever of the two an ordering
+  // picked would be arbitrary, and half the time it would be the failed one -
+  // or worse, the passing one while a failure sat beside it unmentioned. An
+  // operator can say which run is the evidence; this function cannot.
+  if (matching.length > 1) {
+    const error = new ReleaseEvidenceError("RELEASE_RECEIPT_AMBIGUOUS_FOR_COMMIT");
+    error.receipts = matching;
+    throw error;
+  }
+  return matching[0];
 }
 
 /**

@@ -68,7 +68,19 @@ async function main() {
   // superseded failing run could be read as the evidence for a commit that had
   // since passed.
   const headSha = await currentHead();
-  const receiptPath = option("receipt") ?? await selectReceiptForCommit(repository, headSha);
+  let receiptPath;
+  try {
+    receiptPath = option("receipt") ?? await selectReceiptForCommit(repository, headSha);
+  } catch (error) {
+    if (error?.code !== "RELEASE_RECEIPT_AMBIGUOUS_FOR_COMMIT") throw error;
+    // Naming them is the whole remedy: the operator deletes the superseded run
+    // or passes --receipt. Choosing here would put an arbitrary run behind a
+    // release, and the arbitrary run is a failed one half the time.
+    stderr.write(`RELEASE_RECEIPT_AMBIGUOUS_FOR_COMMIT ${headSha}\n`);
+    for (const path of error.receipts ?? []) stderr.write(`  ${path}\n`);
+    stderr.write("  remove the superseded run, or name one with --receipt\n");
+    return 1;
+  }
   if (!receiptPath) {
     stderr.write(headSha
       ? `RELEASE_RECEIPT_ABSENT_FOR_COMMIT ${headSha}: run \`pnpm verify:local-pilot\` at this commit\n`
