@@ -19,3 +19,9 @@ mode `0600` 的 Ed25519 私鑰；issuer 與 key ID 必須對應 Fastify trust fi
 公開 key record。`LO_INTERNAL_BASE_ORIGIN` 必須是經審查的 HTTPS Origin，或僅在
 同機受控環境使用 loopback HTTP Origin；它不能包含 user info、path、query 或
 fragment。Fastify 只接收公開 trust file，不能取得 Worker 私鑰路徑。
+
+## 延伸文件
+
+- [`docs/runbooks/authority-signing.md`](../runbooks/authority-signing.md) —— release custodian 如何在 repository 之外產生 Ed25519 金鑰、公開金鑰如何進入 trust file、`notBefore`／`notAfter`／`revokedAt` 的意義、輪換如何避免 validity gap，以及 canonical-JSON-then-sign 的確切步驟。
+- [`docs/runbooks/authority-verification.md`](../runbooks/authority-verification.md) —— 檢查一份已完成記錄、以及把三份記錄送進 release chain 的確切指令與失敗碼對照。
+- [`docs/pilot/authority/`](authority/README.md) —— Gate 6 三份記錄的填寫範本與四份決策清單。這些是範本，不是記錄。

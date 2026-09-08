@@ -91,3 +91,15 @@ design: "the agent behaved acceptably in a room with one adult in it" and
 "students may see the analytics built from their own conversation" are
 different questions, and one person answering both at once tends to answer the
 second one by momentum.
+
+## Paperwork
+
+- [`docs/pilot/authority/human-shadow-record.template.md`](../pilot/authority/human-shadow-record.template.md)
+  — the record field by field: what each one means, who is entitled to state it,
+  and which refusal code fires when it is wrong.
+- [`docs/pilot/authority/checklist-shadow-teacher.md`](../pilot/authority/checklist-shadow-teacher.md)
+  — a one-page checklist for the teacher running the session.
+- [`docs/runbooks/authority-signing.md`](authority-signing.md) — how the record
+  is signed, and by whom.
+- [`docs/runbooks/authority-verification.md`](authority-verification.md) — the
+  exact commands, and what each refusal code means.
