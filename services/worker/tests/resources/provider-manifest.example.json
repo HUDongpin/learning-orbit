@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "providerId": "anthropic-messages-v1",
+  "displayName": "Anthropic Messages",
+  "modelId": "claude-sonnet-5",
+  "region": "us",
+  "purpose": "socratic facilitation for a controlled classroom pilot",
+  "maxOutputTokens": 512,
+  "credentialEnvVar": "LO_AGENT_PROVIDER_KEY",
+  "remoteCopyMode": "no_persistent_copy_attested"
+}
