@@ -7,7 +7,21 @@
  * Keeping the two apart is the point: a verifier that could also generate the
  * thing it verifies would always pass.
  *
+ * The three Gate 6 human records are read the same way.  They are supplied,
+ * never produced here: `--authority` names records an operator was handed and
+ * `--trust` the deployment trust set they must verify against, and each record
+ * is checked by the verifier that already owns its kind — signature, key, and
+ * the payload contract that kind must satisfy.  Without both options this
+ * reports all three as NOT HELD, which is what a release that holds none of
+ * them should say.
+ *
+ * The chain this writes carries what the run was actually shown: the records
+ * held, the trust set that admitted them, and every record refused.  An exit
+ * code is not carried anywhere, so it is never the only place a refusal is
+ * recorded.
+ *
  *   pnpm verify:pilot [--receipt <path>] [--out <path>]
+ *                     [--trust <file> --authority <dir|file>]
  */
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +30,7 @@ import { argv, exitCode, stderr, stdout } from "node:process";
 
 import {
   buildReleaseEvidenceChain,
+  collectVerifiedAuthority,
   listReceipts,
   readManifest,
   ReleaseEvidenceError,
@@ -48,8 +63,27 @@ async function main() {
   const { manifest, manifestBytes } = await readManifest(repository);
   const programContracts = await readJson(join(repository, "test-results", "program-contracts.json"));
 
+  // Both or neither.  A trust set with nothing to check, or records with nothing
+  // to check them against, is an operator who meant to verify authority and
+  // will otherwise read the resulting NOT HELD lines as a finished answer.
+  const trustPath = option("trust");
+  const authorityPath = option("authority");
+  if ((trustPath === undefined) !== (authorityPath === undefined)) {
+    stderr.write("RELEASE_AUTHORITY_OPTIONS_INCOMPLETE: pass --trust <file> and --authority <dir|file> together\n");
+    return 2;
+  }
+  const authority = trustPath !== undefined && authorityPath !== undefined
+    ? await collectVerifiedAuthority({ repository, trustPath, authorityPath })
+    : { verified: [], refusals: [], trust: null };
+
+  // The refusals and the trust anchor go into the chain, not just onto this
+  // process's stdout: the written file is what a reader is handed months later,
+  // and an exit code is not carried in it.
   const chain = await buildReleaseEvidenceChain({
     repository, receipt, manifest, manifestBytes, programContracts,
+    verifiedRecords: authority.verified,
+    refusals: authority.refusals,
+    authorityTrust: authority.trust ?? null,
   });
 
   const out = option("out") ?? join(repository, "test-results", "release-evidence", `${chain.sourceSha}.chain.json`);
@@ -58,6 +92,9 @@ async function main() {
   await chmod(out, 0o600);
 
   for (const gate of chain.gates) stdout.write(`  gate ${gate.gate}: ${gate.tests} tests\n`);
+  for (const refusal of authority.refusals) {
+    stdout.write(`  refused ${refusal.file}: ${refusal.code}\n`);
+  }
   for (const record of chain.humanAuthority) {
     stdout.write(`  ${record.held ? "held" : "NOT HELD"}: ${record.what} (blocks: ${record.blocks})\n`);
   }
@@ -66,6 +103,12 @@ async function main() {
       stderr.write(`  problem ${problem.code}${problem.gate ? ` (${problem.gate})` : ""}\n`);
     }
     stderr.write(`verify:pilot: FAIL sha=${chain.sourceSha}\n`);
+    return 1;
+  }
+  // A record that was offered and refused is a different situation from a
+  // record nobody has yet signed, and it does not get the softer ending.
+  if (authority.refusals.length > 0) {
+    stderr.write(`verify:pilot: AUTHORITY REFUSED sha=${chain.sourceSha}\n`);
     return 1;
   }
   stdout.write(`verify:pilot: ${chain.admissible ? "PASS" : "PASS (engineering evidence only)"} sha=${chain.sourceSha} chain=${chain.chainSha256}\n`);

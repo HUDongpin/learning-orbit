@@ -4,8 +4,17 @@
  *
  * Reads nothing but the record and the trust set, writes nothing, and touches
  * no database: an operator can run it on a record before deciding whether to
- * import it, and its answer is about the signature and the key, never about
- * what the record would then authorise.
+ * import it.
+ *
+ * The signature and the key are the first question and never the whole one.
+ * A signature proves who wrote the bytes; it says nothing about what the bytes
+ * say, and the two Gate 6 records that admit real students carry their own
+ * refusal conditions in their payloads — a rehearsal, an approval the operating
+ * party issued to itself, a promotion inferred from the shadow it is supposed
+ * to be independent of. Those live in the shared contract, so for those kinds
+ * the payload is re-parsed through it here rather than trusted because it was
+ * signed. The kind's contract is named in the output so a caller can refuse a
+ * record whose payload nothing checked.
  *
  *   pnpm tsx scripts/verify-controlled-authority.ts --record <file> --trust <file>
  *   pnpm tsx scripts/verify-controlled-authority.ts --fixture
@@ -15,13 +24,54 @@ import { readFile } from "node:fs/promises";
 import { argv, env, exit, stderr, stdout } from "node:process";
 
 import {
+  externalAuthorizationRecordContract,
+  studentVisiblePromotionRecordContract,
+} from "@learning-orbit/contracts";
+
+import {
   authoritySigningInput,
   ControlledAuthorityError,
   parseAuthorityTrustSet,
   parseSignedAuthorityRecord,
   trustSetHasNoRotationGap,
   verifyControlledAuthority,
+  type AuthorityRecordKind,
 } from "../apps/server/src/modules/authorization/controlled-authority-verifier.js";
+
+/**
+ * The payload contract each kind must satisfy before this tool reports it.
+ *
+ * Only the two records that open a classroom are listed. The others are the
+ * business of the importer that owns them — `pilot_retention_policy` is parsed
+ * by `import-approved-pilot-policy.ts` against the same shared contract, and
+ * adding it here would only give one payload two opinions. A kind absent from
+ * this table reports `payloadContract: null`, which is the honest answer and
+ * not an endorsement: a caller that needs the payload checked must refuse it.
+ */
+const PAYLOAD_CONTRACTS: Partial<Record<AuthorityRecordKind, {
+  readonly id: string;
+  readonly parse: (value: unknown) => unknown;
+}>> = Object.freeze({
+  external_authorization: Object.freeze({
+    id: "external-authorization-record.v1",
+    parse: (value: unknown) => externalAuthorizationRecordContract.parse(value),
+  }),
+  student_visible_promotion: Object.freeze({
+    id: "student-visible-promotion-record.v1",
+    parse: (value: unknown) => studentVisiblePromotionRecordContract.parse(value),
+  }),
+});
+
+/** A refusal is one bounded code; a governance payload is never echoed. */
+const REFUSAL_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+
+function refusalCode(error: unknown, fallback: string): string {
+  if (error instanceof ControlledAuthorityError) return error.code;
+  // The contracts refuse with a bounded code as the message. Anything else may
+  // be quoting the record it refused, so it is replaced rather than printed.
+  const message = error instanceof Error ? error.message : "";
+  return REFUSAL_CODE.test(message) ? message : fallback;
+}
 
 function option(name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
@@ -97,6 +147,12 @@ async function main(): Promise<void> {
 
   try {
     const verified = verifyControlledAuthority(record, trust, { allowFixtureKeys: useFixture });
+    // Re-parsed through the shared contract rather than trusted because it was
+    // signed: a correctly signed record can still declare itself a rehearsal,
+    // or authorise more than it accounts for, and the operator should learn
+    // that here rather than from the room it opened.
+    const contract = PAYLOAD_CONTRACTS[verified.kind];
+    if (contract) contract.parse(verified.payload);
     stdout.write(`${JSON.stringify({
       ok: true,
       kind: verified.kind,
@@ -105,11 +161,12 @@ async function main(): Promise<void> {
       keyId: verified.keyId,
       signedAt: verified.signedAt,
       expiresAt: verified.expiresAt,
+      payloadContract: contract?.id ?? null,
       fixture: useFixture,
       rotation,
     })}\n`);
   } catch (error) {
-    stderr.write(`${error instanceof ControlledAuthorityError ? error.code : "AUTHORITY_VERIFICATION_FAILED"}\n`);
+    stderr.write(`${refusalCode(error, "AUTHORITY_VERIFICATION_FAILED")}\n`);
     exit(1);
   }
 }
