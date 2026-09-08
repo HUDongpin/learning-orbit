@@ -1,0 +1,566 @@
+# =============================================================================
+# THIS IS NOT THE PILOT GATE.
+#
+# Admission of a commit to the controlled classroom pilot requires
+# `pnpm verify:local-pilot` followed by `pnpm verify:pilot`, run on macOS
+# arm64, on that exact commit. A green run of this workflow is NOT evidence for
+# a release and must never be cited as one. It proves that the suites and the
+# repository assertions hold on a machine nobody has ever touched; it proves
+# nothing about the approved toolchain, the browser gate, the load gate, or the
+# signed human records.
+#
+# The pilot gate cannot run here, and the pins that stop it are load-bearing:
+#
+#   scripts/local-pilot/preflight.mjs:279  refuses any platform but darwin+arm64
+#   scripts/local-pilot/tls.mjs:7          hardcodes /opt/homebrew/bin/openssl
+#   scripts/local-pilot/preflight.mjs:27   resolves Chromium under a mac-arm64 path
+#
+# and preflight further demands a Docker daemon, 25 GiB free on two
+# filesystems, and ports 3000/3001/55432/8025/1025. None of that is loosened to
+# make this workflow possible. Loosening it would trade a real guarantee for a
+# green badge, which is the opposite of the point.
+#
+# WHY THIS WORKFLOW EXISTS
+#
+# Seven defects were fixed in this repository in one week. Four shared a single
+# shape: a required gate that passed only because of state on one developer's
+# machine - a `.env` exported into their shell, an editable `pip install -e`,
+# one git version's output, one receipt in a directory. A fifth was a package
+# that publishes types from `src` and runtime from a gitignored `dist`, so a
+# fresh clone failed until someone built. Every one of them was invisible
+# locally and fatal where the result counts.
+#
+# A machine with none of that state is the only thing that finds them. That is
+# what this workflow is: not a second opinion on the pilot gate, but the clean
+# machine the pilot gate never runs on. Each job below says, in its own
+# comments, which of those five it would catch and which it would not.
+#
+# RUNTIMES
+#
+# Node, pnpm and CPython are pinned to the versions this repository requires,
+# read from `.nvmrc` and `package.json` where those files carry the value.
+# `infra/local-pilot/approved-runtimes.v1.json` additionally pins the sha256 of
+# each approved *binary*, and those hashes are of darwin-arm64 executables: a
+# Linux runner's Node, pnpm and CPython cannot match them and are not checked
+# against them. So this workflow proves the suites, not the approved toolchain.
+# Only `verify:local-pilot` on the owner's macOS workstation does the latter.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only. Nothing here publishes, comments, or writes to the repository, and
+# no job takes a secret: everything it needs is either in the tree or a literal
+# test value written in this file.
+permissions:
+  contents: read
+
+# One run per ref. A superseded push has nothing to say about the commit that
+# replaced it, and its runner is better spent on the new one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # `.python-version` carries only the minor (3.12), which is all
+  # `scripts/verify-python-lock.mjs` asserts about the lock. The patch comes
+  # from the `owner-workstation-darwin-arm64` toolchain in
+  # infra/local-pilot/approved-runtimes.v1.json, which names "uv CPython
+  # 3.12.13". Pinning the patch here keeps CI on the interpreter the approved
+  # runtime names, even though the binary itself cannot match its hash.
+  PYTHON_VERSION: "3.12.13"
+
+jobs:
+  # ===========================================================================
+  # Everything that needs no database: the repository's own assertions, the
+  # generated-code check, the typecheck and the production build.
+  #
+  # Every step before the build runs on a tree that has never been built. That
+  # ordering is the whole value of this job for defect five - see the
+  # `unbuilt-tree` steps below.
+  # ===========================================================================
+  foundations:
+    name: Repository assertions, typecheck, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the commit
+        # persist-credentials:false keeps the job's GITHUB_TOKEN out of
+        # .git/config. Two suites shell out to git inside the checkout
+        # (tests/pilot/next-generated-boundary.test.ts, and the worktree suite
+        # which builds real repositories), and no step here needs to push.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        # Version comes from `packageManager` in package.json (pnpm@11.19.0);
+        # restating it here would be a second place to forget.
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node
+        # From .nvmrc (24.19.0), which `package.json` engines and
+        # `scripts/verify-layout.mjs` both hold to 24.19.x.
+        #
+        # No dependency cache, on purpose. A cache is state carried between
+        # runs, and state carried between runs is the exact thing four of the
+        # five defects below were made of. Every run installs from the lockfile
+        # onto an empty machine.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Assert the runtimes are the ones this repository pins
+        # `verify-layout.mjs` checks Node on its own, but it runs several steps
+        # later and says nothing about pnpm or Python. Failing here, with all
+        # three named, beats failing deep inside a suite.
+        run: |
+          set -euo pipefail
+          expected_node="v$(cat .nvmrc)"
+          expected_pnpm="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+          actual_node="$(bash .github/ci/closed-env.sh node --version)"
+          actual_pnpm="$(bash .github/ci/closed-env.sh pnpm --version)"
+          echo "node: $actual_node (expected $expected_node)"
+          echo "pnpm: $actual_pnpm (expected $expected_pnpm)"
+          [ "$actual_node" = "$expected_node" ]
+          [ "$actual_pnpm" = "$expected_pnpm" ]
+
+      - name: Install dependencies from the lockfile
+        # --frozen-lockfile: a lockfile that does not satisfy package.json is a
+        # failure, not something to resolve on the fly.
+        run: bash .github/ci/closed-env.sh pnpm install --frozen-lockfile
+
+      - name: Assert the tree has not been built
+        # DEFECT FIVE, the precondition. `packages/contracts` publishes types
+        # from `src` and runtime from `dist`, and `dist` is gitignored. Every
+        # gate in this repository runs on a tree something has already built, so
+        # the bare package specifier resolves everywhere the suites look and
+        # fails only in an operator's hands. The steps that follow are the only
+        # place that condition is reproduced, so it is asserted rather than
+        # assumed: if a future step starts building before them, this fails
+        # loudly instead of quietly removing the check.
+        run: |
+          set -euo pipefail
+          for built in packages/contracts/dist apps/server/dist apps/web/.next; do
+            if [ -e "$built" ]; then
+              echo "$built exists before the unbuilt-tree checks; they are now meaningless" >&2
+              exit 1
+            fi
+          done
+          echo "no build output present"
+
+      - name: Repository assertions
+        # Same four checks, same order, as the harness's `repository-foundations`
+        # stage (scripts/verify-local-pilot.mjs:513-516). `verify-layout.mjs`
+        # independently re-checks the Node version from inside the process that
+        # will run everything else.
+        run: |
+          set -euo pipefail
+          bash .github/ci/closed-env.sh node scripts/verify-layout.mjs
+          bash .github/ci/closed-env.sh node scripts/assert-root-scripts.mjs
+          bash .github/ci/closed-env.sh node scripts/verify-python-lock.mjs
+          bash .github/ci/closed-env.sh node scripts/assert-baseline.mjs
+
+      - name: Programme contract gate, on the unbuilt tree
+        # DEFECT FIVE. `assert-program-contracts.ts` is tsx run straight from
+        # the working tree and reads the contracts by relative path. On a tree
+        # with no `dist` it must still pass; if it ever regresses to the package
+        # specifier, this is where that shows up.
+        run: bash .github/ci/closed-env.sh pnpm assert:program-contracts
+
+      - name: Operator tools refuse, on the unbuilt tree
+        # DEFECT FIVE, the part a text scan cannot reach.
+        # tests/pilot/contracts-source-boundary.test.ts pins the source
+        # specifier as *text*, because nothing else in the repository could
+        # notice. This runs the tools instead.
+        #
+        # Each is invoked with no usable input, so each must refuse - and a
+        # refusal is a bounded code or a usage line, never a module that could
+        # not be loaded. Under tsx these scripts load as CommonJS, where a
+        # missing export arrives as `undefined` rather than a link error, so the
+        # symptom of a regression here is a TypeError the tool reports as a
+        # governance refusal: "your record is bad" when the truth is "this
+        # checkout was never built". Both shapes are rejected below.
+        #
+        # No record, key or fixture is created. `verify:authority` and
+        # `verify:shadow` are given nothing and print their usage;
+        # `governance:import-policy` is pointed at a path that does not exist
+        # and stops at APPROVED_POLICY_TRUST_REQUIRED, before it would sign or
+        # read anything.
+        run: |
+          set -euo pipefail
+          # `code`, not `status`: `status` is read-only in zsh, and a snippet an
+          # engineer cannot paste into their own shell to reproduce a CI failure
+          # is a snippet they will stop trusting.
+          refuses() {
+            local label="$1" expected="$2"; shift 2
+            local err code
+            err="$(mktemp)"
+            set +e
+            bash .github/ci/closed-env.sh "$@" >/dev/null 2>"$err"
+            code=$?
+            set -e
+            echo "--- $label (exit $code) ---"
+            cat "$err"
+            if [ "$code" -eq 0 ]; then
+              echo "$label did something instead of refusing" >&2; exit 1
+            fi
+            if ! grep -qF "$expected" "$err"; then
+              echo "$label did not refuse with: $expected" >&2; exit 1
+            fi
+            if grep -qE "Cannot find module|ERR_MODULE_NOT_FOUND|ERR_REQUIRE_ESM|TypeError|CONTRACTS_ENTRYPOINT_INCOMPLETE" "$err"; then
+              echo "$label failed on a module it could not load: the contracts are being read through dist" >&2
+              exit 1
+            fi
+            rm -f "$err"
+          }
+          refuses "verify:authority" "usage: verify-controlled-authority" pnpm verify:authority
+          refuses "verify:shadow" "usage: verify-shadow-record" pnpm verify:shadow
+          refuses "governance:import-policy" "APPROVED_POLICY_TRUST_REQUIRED" \
+            pnpm governance:import-policy --record /nonexistent/not-a-record.json
+
+      - name: Generated contracts are current
+        # The harness's `generated-drift` check, verbatim in intent
+        # (scripts/verify-local-pilot.mjs:527-539): regenerate, then require the
+        # working tree to be byte-identical. `--untracked-files=all` is what
+        # makes a newly generated, never-committed file a failure rather than a
+        # silent addition.
+        run: |
+          set -euo pipefail
+          bash .github/ci/closed-env.sh pnpm contracts:generate
+          drift="$(bash .github/ci/closed-env.sh git status --porcelain=v1 --untracked-files=all)"
+          if [ -n "$drift" ]; then
+            echo "generated output differs from the committed tree:" >&2
+            echo "$drift" >&2
+            exit 1
+          fi
+          echo "no drift"
+
+      - name: Typecheck
+        run: bash .github/ci/closed-env.sh pnpm -r typecheck
+
+      - name: Production build
+        # Last, because everything above it is a statement about the tree as
+        # committed, and a build changes the tree.
+        run: bash .github/ci/closed-env.sh pnpm -r build
+
+  # ===========================================================================
+  # The suites a Linux runner can genuinely run, executed the way the harness
+  # executes them: the manifest's own argv, judged by the manifest's own rules,
+  # under the harness's closed environment, against a real PostgreSQL 18.
+  #
+  # OF THE NINE REQUIRED GATES, THIS JOB RUNS SEVEN:
+  #   contracts-vitest       in full
+  #   server-vitest          in full  (needs the database and the virtualenv)
+  #   web-vitest             in full
+  #   pilot-harness-vitest   AS A SUBSET - see the step for why and by how much
+  #   chaos-vitest           in full  (needs the database)
+  #   security-vitest        in full
+  #   worker-python          in full  (needs the database)
+  #
+  # AND CANNOT RUN TWO:
+  #   browser-playwright     needs the built application listening over TLS on
+  #                          127.0.0.1:3000 with the harness's own certificate,
+  #                          a Mailpit instance, and the mac-arm64 Chromium the
+  #                          preflight pins. That is the pilot harness, not a
+  #                          step, and it is macOS-only by construction.
+  #   pilot-load             is the controlled 10x5 load run against the same
+  #                          live stack, and is the measurement the pilot
+  #                          receipt is made of. Running it anywhere else would
+  #                          produce a number that means nothing.
+  #
+  # TWO THINGS THIS JOB TAKES FROM THE RUNNER IMAGE, unverified from a
+  # workstation: a `docker` CLI with the Compose v2 plugin, which
+  # apps/server/test/config-and-build.test.ts and
+  # tests/pilot/local-pilot-compose.test.ts both render compose files with; and
+  # a `git` new enough to emit the `locked` and `prunable` worktree attributes
+  # tests/pilot/local-pilot-worktree.test.ts builds and reads back. Both ship on
+  # GitHub's ubuntu-24.04 image today. If either ever stops shipping, the
+  # affected gate fails loudly here rather than passing hollow.
+  #
+  # The suites run on an UNBUILT tree. Every project that imports the contracts
+  # by package name aliases the specifier to `packages/contracts/src` - the root
+  # vitest.config.ts for `cross-node` and `cross-security`, and
+  # apps/server/vitest.config.ts and apps/web/vitest.config.ts for their own,
+  # because a project loaded from its own file does not inherit the root's
+  # resolution. The contracts project alone carries no alias and needs none: its
+  # tests import `../src/index.js` and its siblings by relative path. So the
+  # build is not a prerequisite - and running unbuilt turns a dropped alias into
+  # a red CI run, where the harness (which always builds first) would stay
+  # green. The one test that needs compiled output,
+  # packages/contracts/test/build-resources.test.ts, compiles it itself; from
+  # that point in the run `dist` exists, which is why the guard below is checked
+  # before the first gate rather than between them.
+  # ===========================================================================
+  suites:
+    name: Vitest and Python suites (PostgreSQL 18)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # Digest-pinned to the same image infra/docker-compose.pilot.yml runs,
+        # so the suites meet the server version the harness measures rather than
+        # whatever `postgres:18` points at this week.
+        image: postgres:18@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
+        env:
+          POSTGRES_USER: learning_orbit
+          # A literal test value, in the open on purpose. It authenticates one
+          # container that is created and destroyed inside one ephemeral runner.
+          # It is not a secret, and hiding it in a repository secret would only
+          # make it look like one - and would give this workflow a secret to
+          # leak, which it currently has none of.
+          POSTGRES_PASSWORD: learning-orbit-ci-not-a-secret
+          # Deliberately NOT `learning_orbit`, and deliberately not
+          # `learning_orbit_test` either. Those are names that exist on
+          # developers' machines; nothing here may ever be pointed at one.
+          POSTGRES_DB: learning_orbit_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U learning_orbit -d learning_orbit_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # The gate environment the harness assembles for its `required-tests`
+      # stage (scripts/verify-local-pilot.mjs:587-592). `closed-env.sh` forwards
+      # exactly these on top of the closed base; nothing else reaches a gate.
+      #
+      # The database is created by the service container above and dies with the
+      # job. Nothing outside this runner is reachable at this URL.
+      TEST_DATABASE_URL: postgres://learning_orbit:learning-orbit-ci-not-a-secret@127.0.0.1:5432/learning_orbit_ci
+      DATABASE_URL: postgres://learning_orbit:learning-orbit-ci-not-a-secret@127.0.0.1:5432/learning_orbit_ci
+      LO_MIGRATION_ENV: test
+
+    steps:
+      - name: Check out the commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install CPython
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Assert the runtimes are the ones this repository pins
+        # Checked THROUGH closed-env.sh, not beside it. A toolchain that only
+        # runs with the runner's full environment is not one the gates can use,
+        # and finding that out here - with a version mismatch to read - beats
+        # finding it out as an interpreter that will not start halfway through a
+        # suite.
+        run: |
+          set -euo pipefail
+          expected_node="v$(cat .nvmrc)"
+          expected_pnpm="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+          actual_node="$(bash .github/ci/closed-env.sh node --version)"
+          actual_pnpm="$(bash .github/ci/closed-env.sh pnpm --version)"
+          actual_python="$(bash .github/ci/closed-env.sh python --version)"
+          echo "node: $actual_node (expected $expected_node)"
+          echo "pnpm: $actual_pnpm (expected $expected_pnpm)"
+          echo "python: $actual_python (expected Python ${PYTHON_VERSION})"
+          [ "$actual_node" = "$expected_node" ]
+          [ "$actual_pnpm" = "$expected_pnpm" ]
+          [ "$actual_python" = "Python ${PYTHON_VERSION}" ]
+
+      - name: Install dependencies from the lockfile
+        run: bash .github/ci/closed-env.sh pnpm install --frozen-lockfile
+
+      - name: Create the worker virtualenv WITHOUT installing the worker
+        # DEFECT TWO, and the reason this step is written out rather than
+        # delegated to `pnpm bootstrap`.
+        #
+        # `scripts/bootstrap-local-dev.mjs:269` finishes with
+        # `pip install --no-deps -e services/worker`. That editable install puts
+        # `learning_orbit_worker` on the default import path, and it is why
+        # `apps/server/test/rooms/auto-close-restart.test.ts` could spawn the
+        # worker with no PYTHONPATH and still pass at a workstation while
+        # failing inside the harness, which installs no such thing.
+        #
+        # This job installs the locked dependencies and stops. The worker is
+        # importable here only through the PYTHONPATH the harness passes, so a
+        # test that forgets it fails on this runner. The next step proves that
+        # property holds rather than trusting that it does.
+        run: |
+          set -euo pipefail
+          bash .github/ci/closed-env.sh python -m venv .venv
+          bash .github/ci/closed-env.sh ./.venv/bin/python -m pip install \
+            --require-hashes -r services/worker/requirements.lock
+
+      - name: Prove the worker is importable only via PYTHONPATH
+        # The negative half is the half that matters: if this import ever starts
+        # succeeding, something has installed the worker package and the check
+        # above has quietly stopped checking anything.
+        run: |
+          set -euo pipefail
+          if bash .github/ci/closed-env.sh ./.venv/bin/python -c "import learning_orbit_worker" 2>/dev/null; then
+            echo "learning_orbit_worker imports without PYTHONPATH: the virtualenv is no longer clean" >&2
+            exit 1
+          fi
+          echo "without PYTHONPATH: not importable, as intended"
+          PYTHONPATH="$PWD/services/worker/src" \
+            bash .github/ci/closed-env.sh ./.venv/bin/python -c "import learning_orbit_worker.main"
+          echo "with PYTHONPATH: importable"
+
+      - name: Assert the tree has not been built
+        run: |
+          set -euo pipefail
+          for built in packages/contracts/dist apps/server/dist apps/web/.next; do
+            if [ -e "$built" ]; then
+              echo "$built exists before the suites run; the unbuilt-tree property is gone" >&2
+              exit 1
+            fi
+          done
+          echo "no build output present"
+
+      - name: Apply the migration
+        # The harness applies exactly this before any database suite
+        # (scripts/verify-local-pilot.mjs:597). `db:migrate:test` reads
+        # TEST_DATABASE_URL, which is the throwaway database above.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh pnpm db:migrate:test
+
+      - name: Gate - contracts-vitest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs contracts-vitest
+
+      - name: Gate - server-vitest
+        # DEFECT ONE and DEFECT TWO both land in this gate.
+        #
+        # apps/server/test/config-and-build.test.ts renders the compose file
+        # with a hand-built environment because inheriting `process.env` let a
+        # developer's own `.env` supply the variables the file declares
+        # required. This runner has no `.env` at all - `.gitignore` keeps every
+        # `.env*` but the example out of the tree - and `closed-env.sh` hands
+        # the suite the harness's variables and nothing else, so the ambient
+        # supply the defect depended on does not exist here in either form.
+        #
+        # apps/server/test/rooms/auto-close-restart.test.ts spawns the real
+        # worker; the virtualenv above makes its PYTHONPATH load-bearing.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs server-vitest
+
+      - name: Gate - web-vitest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs web-vitest
+
+      - name: Gate - pilot-harness-vitest (subset)
+        # THE ONE GATE THIS RUNNER CANNOT RUN WHOLE.
+        #
+        # tests/pilot/local-pilot-tls.test.ts mints real TLS material through
+        # OPENSSL_PATH from scripts/local-pilot/tls.mjs:7, which is the literal
+        # string "/opt/homebrew/bin/openssl" - and createLocalTlsMaterial
+        # lstat()s that exact path before it runs anything. On Linux the path
+        # does not exist, so the two tests in that file that mint material
+        # cannot do anything but fail. (The third asserts a rejected run ID and
+        # would pass; vitest excludes files, not tests, so it goes with them.)
+        # The pin is deliberate and is not being relaxed, so the file is
+        # excluded and the gate is declared a subset: 135 of the manifest's 138.
+        #
+        # `--subset` keeps every other rule the harness applies - zero failures,
+        # zero skips, zero pending, zero focused, executed equals collected -
+        # and additionally fails if the run stops being smaller than the
+        # manifest's count, which is what a stale exclusion looks like.
+        #
+        # DEFECT THREE lives in this gate and is genuinely re-tested here:
+        # tests/pilot/local-pilot-worktree.test.ts builds real locked, prunable
+        # and bare worktrees and parses the output of the runner's own `git`.
+        # The `locked` attribute that only one machine's git emitted is
+        # therefore checked against a second, different git on every run.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: |
+          bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs \
+            pilot-harness-vitest --subset --exclude '**/tests/pilot/local-pilot-tls.test.ts'
+
+      - name: Gate - chaos-vitest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs chaos-vitest
+
+      - name: Gate - security-vitest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs security-vitest
+
+      - name: Gate - worker-python
+        # Three of this gate's test classes are `skipUnless`-gated on
+        # TEST_DATABASE_URL, and one of those additionally needs an analytics
+        # key. Without them the suite still reports 338 tests, six of them
+        # skipped - and the manifest's rule is zero skips, so a database-less
+        # runner fails this gate rather than passing it hollow. The key is
+        # generated per run and is a test value: it pseudonymises rows in a
+        # database that is destroyed with the job.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/worker/src
+        run: |
+          set -euo pipefail
+          export LO_ANALYTICS_PSEUDONYM_KEY="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")"
+          bash .github/ci/closed-env.sh node .github/ci/required-gate.mjs worker-python
+
+  # ===========================================================================
+  # WHAT THIS WORKFLOW WOULD AND WOULD NOT HAVE CAUGHT
+  #
+  # 1. config-and-build.test.ts inheriting process.env       CAUGHT
+  #    The runner has no `.env` to inherit and `closed-env.sh` supplies only the
+  #    harness's variables, so a gate that leans on an ambient value has nothing
+  #    to lean on. This is the same closure the harness uses, applied on a
+  #    machine that never had the state in the first place.
+  #
+  # 2. auto-close-restart.test.ts spawning the worker with no PYTHONPATH  CAUGHT
+  #    The virtualenv here has no editable install, and the step above proves
+  #    the import fails without PYTHONPATH before any suite runs. Demonstrated,
+  #    not assumed.
+  #
+  # 3. the worktree parser rejecting `locked`                 CAUGHT, partly
+  #    Only because tests/pilot/local-pilot-worktree.test.ts parses real `git`
+  #    output from real locked and prunable worktrees, and this runner's git is
+  #    a different build from the workstation's. What CI adds is a second real
+  #    git, every run. What it cannot add is a third: an attribute no git in
+  #    either place emits stays undiscovered, and no amount of CI changes that.
+  #
+  # 4. receipt selection ordered by filename                  NOT CAUGHT, guarded
+  #    CI never produces a receipt and must not: receipts are pilot evidence.
+  #    What runs here is tests/pilot/release-evidence.test.ts, whose fixtures
+  #    include the two-receipt case the defect turned on. So this workflow
+  #    cannot discover a selection bug - it can only stop the fixed one from
+  #    coming back, on every push instead of whenever someone remembered.
+  #    Discovery still belongs to `verify:pilot` against real receipts.
+  #
+  # 5. contracts publishing runtime from a gitignored dist    CAUGHT
+  #    The `unbuilt tree` guard plus the two steps behind it are the only place
+  #    in this repository where the operator tools are executed with no `dist`
+  #    present. Every existing gate runs on a built tree, which is precisely why
+  #    the defect reached an operator's hands.
+  #
+  # AND WHAT A GREEN RUN HERE STILL DOES NOT MEAN
+  #
+  #   - not that the approved toolchain was used (Linux binaries, unpinnable)
+  #   - not that the browser gate passes (macOS-only, not run)
+  #   - not that the load gate passes (macOS-only, not run)
+  #   - not that TLS material can be minted (the openssl pin, not run)
+  #   - not that compose ownership, cleanup and residue checks hold
+  #   - not that any human authority record exists or verifies
+  #   - and therefore never that a commit may be shown to a student.
+  # ===========================================================================
