@@ -24,12 +24,17 @@ from uuid import uuid4
 
 from ..core_handlers import RetryableJobError, TerminalJobError
 from ..handler_registry import HandlerOutcome
+from .derivative import DerivativeError, write_derivative
 from .sanitize import SanitizeError, sanitize_image
 from .scan import ClamAvScanner, ScanUnavailable
 
-#: What a sanitized copy is called, derived from the staged key so the pair is
-#: obvious to a human reading the bucket.
-DERIVATIVE_SUFFIX = ".sanitized"
+#: The mime a sanitized copy is served as, keyed by the format the sanitizer
+#: actually produced. It is taken from the bytes rather than from the row's
+#: declared mime for the same reason the sanitizer picks its parser that way,
+#: and it is what the object is written with: the server compares the
+#: derivative's mime against the stored object's content type and refuses the
+#: download if they disagree.
+SANITIZED_IMAGE_MIME = {"jpeg": "image/jpeg", "png": "image/png"}
 
 IMAGE_KINDS = {"image"}
 
@@ -122,33 +127,32 @@ class MediaProcessor:
                 sanitized = sanitize_image(stored.data)
             except SanitizeError as error:
                 return self._report(claim, job, row, "failed", error.code, [])
-            derivative_key = f"{row.object_key}{DERIVATIVE_SUFFIX}"
+            mime = SANITIZED_IMAGE_MIME.get(sanitized.format)
+            if mime is None:
+                # The sanitizer only ever returns a format this map names; an
+                # unnamed one is a code change that has not been reviewed here,
+                # and guessing a mime would publish a file the server refuses.
+                return self._report(claim, job, row, "failed", "MEDIA_SANITIZE_FORMAT_UNSUPPORTED", [])
             try:
-                digest = self._store.put(
-                    derivative_key, sanitized.data,
-                    content_type=row.detected_mime or "application/octet-stream",
+                derivative = write_derivative(
+                    self._store, room_id=row.room_id, media_id=row.media_id,
+                    kind="sanitized_image", data=sanitized.data, mime=mime,
                 )
-            except Exception as error:  # noqa: BLE001 - a store body may echo a key
-                code = getattr(error, "code", None)
-                if code == "MEDIA_STORE_ALREADY_WRITTEN":
-                    # A retry after a lost response. The destination is
-                    # write-once, so the first write stands.
-                    digest = None
-                else:
-                    raise RetryableJobError(str(code or "MEDIA_STORE_WRITE_FAILED")) from None
-            return self._report(claim, job, row, "ready", None, [{
-                "kind": "sanitized_image",
-                "objectKey": derivative_key,
-                "sha256": digest or "",
-                "bytes": len(sanitized.data),
-            }])
+            except DerivativeError as error:
+                raise RetryableJobError(error.code) from None
+            return self._report(claim, job, row, "ready", None, [derivative])
 
         if self._transcoder is None:
             # Stated, not silent. A media kind with no reviewed processor is a
             # gap in the deployment, and publishing it unconverted would be a
             # worse answer than saying so.
             return self._report(claim, job, row, "failed", "MEDIA_TRANSCODER_UNAVAILABLE", [])
-        derivatives = self._transcoder(row=row, data=stored.data, store=self._store)
+        try:
+            derivatives = self._transcoder(row=row, data=stored.data, store=self._store)
+        except DerivativeError as error:
+            # A store that would not take the copy is a wait, not a verdict on
+            # the upload.
+            raise RetryableJobError(error.code) from None
         return self._report(claim, job, row, "ready", None, list(derivatives))
 
     def _report(self, claim: Any, job: Any, row: MediaRow, state: str, failure_code: str | None, derivatives: list) -> HandlerOutcome:

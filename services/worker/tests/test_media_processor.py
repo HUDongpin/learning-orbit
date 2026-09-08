@@ -5,21 +5,33 @@ import unittest
 import zlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from hashlib import sha256
+from pathlib import Path
 from uuid import uuid4
 
 from learning_orbit_worker.core_handlers import RetryableJobError, TerminalJobError
+from learning_orbit_worker.generated.media_internal_outcome_v1 import (
+    Request as MediaOutcomeRequest,
+)
 from learning_orbit_worker.handler_registry import HandlerOutcome
 from learning_orbit_worker.internal_http import InternalResponse
 from learning_orbit_worker.media.processor import MediaProcessor
+from learning_orbit_worker.media.sanitize import sanitize_image
 from learning_orbit_worker.media.scan import ScanResult, ScanUnavailable
 from learning_orbit_worker.media.sigv4 import S3Credentials, authorization_headers, presign_url
 from learning_orbit_worker.media.store import ObjectStoreError, PrivateObjectStore
 
 from datetime import datetime, timezone
 
+REPOSITORY = Path(__file__).resolve().parents[3]
+
 ROOM = str(uuid4())
 MEDIA = str(uuid4())
-KEY = "rooms/abc/media/original"
+KEY = f"rooms/{ROOM}/media/{MEDIA}/original"
+
+
+def derivative_key(kind: str) -> str:
+    """The key `safeDerivativeObjectKey` in the server recomputes on download."""
+    return f"rooms/{ROOM}/derivative/{MEDIA}/{kind}"
 
 
 def chunk(name: bytes, payload: bytes) -> bytes:
@@ -32,6 +44,13 @@ PNG = (b"\x89PNG\r\n\x1a\n"
        + chunk(b"tEXt", b"Author\x00Student Name")
        + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
        + chunk(b"IEND", b""))
+
+#: What the sanitizer produces from it, so a test can name the digest the
+#: outcome has to carry rather than read it back out of the outcome.
+SANITIZED_PNG = sanitize_image(PNG).data
+
+#: What the fake ffmpeg runner below emits.
+OPUS = b"OggS-opus-bytes"
 
 
 class FakeCursor:
@@ -55,23 +74,41 @@ class FakeConnection:
         return FakeCursor([self.row])
 
 
+class Stored:
+    def __init__(self, data):
+        self.data = data
+        self.sha256 = sha256(data).hexdigest()
+
+
 class FakeStore:
-    def __init__(self, data=PNG, put_error=None):
+    """A write-once bucket, keyed like the real one.
+
+    Keys matter now: the retry path reads back the object it could not write,
+    so a store that answered every key with the same bytes would hide exactly
+    the mistake these tests exist to catch.
+    """
+
+    def __init__(self, data=PNG, put_error=None, get_error=None, existing=None):
         self.data = data
         self.put_error = put_error
+        self.get_error = get_error
         self.written = []
+        self.objects = {KEY: data}
+        self.objects.update(existing or {})
 
     def get(self, key):
-        class Stored:
-            pass
-        stored = Stored()
-        stored.data = self.data
-        stored.sha256 = sha256(self.data).hexdigest()
-        return stored
+        if self.get_error:
+            raise self.get_error
+        if key not in self.objects:
+            raise ObjectStoreError("MEDIA_STORE_OBJECT_ABSENT")
+        return Stored(self.objects[key])
 
     def put(self, key, data, *, content_type, write_once=True):
         if self.put_error:
             raise self.put_error
+        if write_once and key in self.objects:
+            raise ObjectStoreError("MEDIA_STORE_ALREADY_WRITTEN")
+        self.objects[key] = data
         self.written.append({"key": key, "bytes": len(data), "contentType": content_type, "writeOnce": write_once})
         return sha256(data).hexdigest()
 
@@ -129,7 +166,7 @@ class ProcessorTest(unittest.TestCase):
         self.assertEqual(len(store.written), 1)
         written = store.written[0]
         self.assertTrue(written["writeOnce"])
-        self.assertEqual(written["key"], KEY + ".sanitized")
+        self.assertEqual(written["key"], derivative_key("sanitized_image"))
         body = http.posts[0]["body"]
         self.assertEqual(http.posts[0]["path"], "/internal/media/outcome")
         self.assertEqual(body["state"], "ready")
@@ -170,11 +207,12 @@ class ProcessorTest(unittest.TestCase):
         self.assertLess(store.written[0]["bytes"], len(PNG))
 
     def test_a_retry_after_a_lost_response_keeps_the_first_copy(self) -> None:
-        store = FakeStore(put_error=ObjectStoreError("MEDIA_STORE_ALREADY_WRITTEN"))
+        store = FakeStore(existing={derivative_key("sanitized_image"): SANITIZED_PNG})
         http = FakeHttp()
         outcome = processor(store=store, http=http)(media_id=MEDIA, room_id=ROOM, claim=Claim(), job=Job())
         # Write-once means the first copy stands; the job still settles.
         self.assertIs(outcome, HandlerOutcome.SUCCESS)
+        self.assertEqual(store.written, [])
         self.assertEqual(http.posts[0]["body"]["state"], "ready")
 
     def test_audio_without_a_transcoder_is_stated_not_published(self) -> None:
@@ -208,6 +246,140 @@ class ProcessorTest(unittest.TestCase):
         # write `ready` itself could publish an unscanned file with one wrong
         # line.
         self.assertEqual([post["audience"] for post in http.posts], ["internal.media.outcome"])
+
+
+class OutcomeContractTest(unittest.TestCase):
+    """What the worker POSTs, read back through the contract itself.
+
+    `generated.media_internal_outcome_v1` is the executable copy of
+    packages/contracts/schemas/media-internal-outcome.v1.json, pinned to that
+    file's digest by the manifest parity test in
+    test_internal_route_contracts.py. Parsing the emitted body with it is the
+    schema speaking, not a restatement of it, and its object check is closed:
+    one field too many fails exactly like one field too few.
+
+    Every assertion below used to fail. The derivative carried `bytes` instead
+    of `sizeBytes`, no `derivativeId` and no `mime` at all, an object key
+    derived from the staging key rather than the server's layout, a kind
+    (`normalised_audio`) outside the enum, and on the write-once retry an
+    empty digest. The route answered MEDIA_OUTCOME_INVALID every time, so the
+    row stayed at `uploaded` until the job dead-lettered.
+    """
+
+    CONTRACT_FIELDS = {"derivativeId", "kind", "objectKey", "mime", "sizeBytes", "sha256"}
+
+    def image(self, store=None):
+        http = FakeHttp()
+        store = store if store is not None else FakeStore()
+        outcome = processor(store=store, http=http)(media_id=MEDIA, room_id=ROOM, claim=Claim(), job=Job())
+        return outcome, store, http
+
+    def audio(self, store=None):
+        from learning_orbit_worker.media.transcode import FfmpegTranscoder
+
+        def run(_argv, _data, _timeout):
+            return 0, OPUS, b"stderr from a container that quoted the upload"
+
+        http = FakeHttp()
+        store = store if store is not None else FakeStore()
+        outcome = MediaProcessor(
+            FakeConnection(kind="audio"), store, http,
+            scanner=FakeScanner(), transcoder=FfmpegTranscoder(runner=run),
+        )(media_id=MEDIA, room_id=ROOM, claim=Claim(), job=Job())
+        return outcome, store, http
+
+    def only_derivative(self, http):
+        body = http.posts[0]["body"]
+        parsed = MediaOutcomeRequest.from_dict(body)
+        self.assertEqual(len(parsed.derivatives), 1)
+        self.assertEqual(set(body["derivatives"][0]), self.CONTRACT_FIELDS)
+        return parsed, parsed.derivatives[0]
+
+    def test_the_image_outcome_is_the_shape_the_route_admits(self) -> None:
+        _outcome, store, http = self.image()
+        parsed, derivative = self.only_derivative(http)
+
+        self.assertEqual(parsed.state, "ready")
+        self.assertIsNone(parsed.failure_code)
+        self.assertEqual(derivative.kind, "sanitized_image")
+        self.assertEqual(derivative.object_key, derivative_key("sanitized_image"))
+        self.assertEqual(derivative.mime, "image/png")
+        self.assertEqual(derivative.size_bytes, len(SANITIZED_PNG))
+        self.assertEqual(derivative.sha256, sha256(SANITIZED_PNG).hexdigest())
+        # The server compares the reported mime against the stored object's
+        # own content type, so the copy has to be written under it.
+        self.assertEqual(store.written[0]["contentType"], derivative.mime)
+
+    def test_the_audio_outcome_is_the_shape_the_route_admits(self) -> None:
+        _outcome, store, http = self.audio()
+        parsed, derivative = self.only_derivative(http)
+
+        self.assertEqual(parsed.state, "ready")
+        self.assertIsNone(parsed.failure_code)
+        # `playback_audio` is the kind the download path looks for on a
+        # non-image asset; `normalised_audio` is not in the contract's enum.
+        self.assertEqual(derivative.kind, "playback_audio")
+        self.assertEqual(derivative.object_key, derivative_key("playback_audio"))
+        self.assertEqual(derivative.mime, "audio/ogg")
+        self.assertEqual(derivative.size_bytes, len(OPUS))
+        self.assertEqual(derivative.sha256, sha256(OPUS).hexdigest())
+        self.assertEqual(store.written[0]["contentType"], derivative.mime)
+
+    def test_the_object_key_is_the_layout_the_server_recomputes(self) -> None:
+        # The server rebuilds this key on every download and refuses the row if
+        # it does not match, so the layout is pinned to the file that owns it.
+        layout = (REPOSITORY / "apps/server/src/modules/media/media-object-keys.ts").read_text()
+        self.assertIn("rooms/${roomId}/derivative/${mediaId}/${kind}", layout)
+
+        for kind, run in (("sanitized_image", self.image), ("playback_audio", self.audio)):
+            with self.subTest(kind=kind):
+                _outcome, _store, http = run()
+                self.assertEqual(
+                    http.posts[0]["body"]["derivatives"][0]["objectKey"],
+                    f"rooms/{ROOM}/derivative/{MEDIA}/{kind}",
+                )
+
+    def test_the_write_once_retry_reports_the_digest_of_the_copy_that_stands(self) -> None:
+        for kind, run, expected in (
+            ("sanitized_image", self.image, SANITIZED_PNG),
+            ("playback_audio", self.audio, OPUS),
+        ):
+            with self.subTest(kind=kind):
+                store = FakeStore(existing={derivative_key(kind): expected})
+                outcome, store, http = run(store)
+                _parsed, derivative = self.only_derivative(http)
+                self.assertIs(outcome, HandlerOutcome.SUCCESS)
+                # Nothing was written; the digest is the stored copy's, read
+                # back rather than left empty.
+                self.assertEqual(store.written, [])
+                self.assertEqual(derivative.sha256, sha256(expected).hexdigest())
+
+    def test_a_stored_copy_that_is_not_this_copy_is_never_published(self) -> None:
+        for kind, run in (("sanitized_image", self.image), ("playback_audio", self.audio)):
+            with self.subTest(kind=kind):
+                store = FakeStore(existing={derivative_key(kind): b"someone else's bytes"})
+                with self.assertRaises(RetryableJobError) as raised:
+                    run(store)
+                self.assertIn("MEDIA_DERIVATIVE_CONFLICT", str(raised.exception))
+
+    def test_a_copy_that_cannot_be_read_back_waits_instead_of_being_described(self) -> None:
+        # The store says the key is taken but will not hand the object over.
+        # There is no digest to report and no honest way to invent one.
+        for kind, run in (("sanitized_image", self.image), ("playback_audio", self.audio)):
+            with self.subTest(kind=kind):
+                store = FakeStore(put_error=ObjectStoreError("MEDIA_STORE_ALREADY_WRITTEN"))
+                with self.assertRaises(RetryableJobError) as raised:
+                    run(store)
+                self.assertIn("MEDIA_STORE_OBJECT_ABSENT", str(raised.exception))
+
+    def test_a_terminal_failure_parses_and_carries_no_derivative(self) -> None:
+        http = FakeHttp()
+        scanner = FakeScanner(ScanResult(False, "MEDIA_SCAN_INFECTED", "Eicar-Test"))
+        processor(http=http, scanner=scanner)(media_id=MEDIA, room_id=ROOM, claim=Claim(), job=Job())
+        parsed = MediaOutcomeRequest.from_dict(http.posts[0]["body"])
+        self.assertEqual(parsed.state, "quarantined")
+        self.assertEqual(parsed.failure_code, "MEDIA_SCAN_INFECTED")
+        self.assertEqual(parsed.derivatives, ())
 
 
 class SignatureTest(unittest.TestCase):
@@ -461,13 +633,14 @@ class TranscodeTest(unittest.TestCase):
     def test_the_processor_publishes_the_normalised_copy(self) -> None:
         from learning_orbit_worker.media.transcode import FfmpegTranscoder
 
-        run, _seen = self.runner()
+        run, _seen = self.runner(out=OPUS)
         store = FakeStore()
         http = FakeHttp()
         MediaProcessor(
             FakeConnection(kind="audio"), store, http,
             scanner=FakeScanner(), transcoder=FfmpegTranscoder(runner=run),
         )(media_id=MEDIA, room_id=ROOM, claim=Claim(), job=Job())
-        self.assertEqual(store.written[0]["key"], KEY + ".opus.ogg")
+        self.assertEqual(store.written[0]["key"], derivative_key("playback_audio"))
+        self.assertTrue(store.written[0]["writeOnce"])
         self.assertEqual(http.posts[0]["body"]["state"], "ready")
-        self.assertEqual(http.posts[0]["body"]["derivatives"][0]["kind"], "normalised_audio")
+        self.assertEqual(http.posts[0]["body"]["derivatives"][0]["kind"], "playback_audio")

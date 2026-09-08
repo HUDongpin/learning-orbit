@@ -26,6 +26,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
+from .derivative import write_derivative
+
 #: Input formats this pipeline accepts, mapped to the demuxer name asserted on
 #: the command line. Anything else is refused before ffmpeg starts.
 INPUT_FORMATS: Mapping[str, str] = {
@@ -38,8 +40,10 @@ INPUT_FORMATS: Mapping[str, str] = {
     "audio/x-wav": "wav",
 }
 
+#: One output mime, and it is in the server's audio allowlist. The derivative
+#: is written under it and described by it; the download path refuses the pair
+#: if they ever come apart.
 OUTPUT_CONTENT_TYPE = "audio/ogg"
-OUTPUT_SUFFIX = ".opus.ogg"
 
 #: A classroom clip. Longer than a lesson is not an upload, it is a mistake or
 #: an attack.
@@ -136,11 +140,11 @@ class FfmpegTranscoder:
 
     def __call__(self, *, row, data: bytes, store) -> list[dict[str, object]]:
         result = transcode_audio(data, row.detected_mime, runner=self._runner)
-        key = f"{row.object_key}{OUTPUT_SUFFIX}"
-        digest = store.put(key, result.data, content_type=result.content_type)
-        return [{
-            "kind": "normalised_audio",
-            "objectKey": key,
-            "sha256": digest,
-            "bytes": len(result.data),
-        }]
+        # `playback_audio` is the kind the server's download path looks for on
+        # a non-image asset, and the key is the server's own layout. The
+        # previous `normalised_audio` under a suffixed staging key was neither,
+        # so every transcoded upload was refused as MEDIA_OUTCOME_INVALID.
+        return [write_derivative(
+            store, room_id=row.room_id, media_id=row.media_id,
+            kind="playback_audio", data=result.data, mime=result.content_type,
+        )]
