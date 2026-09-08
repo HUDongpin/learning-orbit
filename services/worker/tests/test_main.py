@@ -153,7 +153,7 @@ class _StopAfter:
         self.remaining -= 1
 
 
-def _supervisor(jobs, telemetry=None):
+def _supervisor(jobs, telemetry=None, provider_health=None):
     supervisor = WorkerSupervisor.__new__(WorkerSupervisor)
     supervisor.jobs = jobs
     supervisor.registry = None
@@ -161,6 +161,8 @@ def _supervisor(jobs, telemetry=None):
     supervisor.poll_seconds = 0.0
     supervisor.telemetry = telemetry or create_telemetry()
     supervisor.consecutive_failures = 0
+    supervisor.provider_health = provider_health
+    supervisor.provider_health_interval = 0.0
     return supervisor
 
 

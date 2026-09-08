@@ -66,7 +66,12 @@ def parse_provider_manifest(raw: bytes) -> ProviderManifest:
         raise ProviderManifestError("AGENT_PROVIDER_MANIFEST_INVALID") from error
     _require(isinstance(document, dict), "AGENT_PROVIDER_MANIFEST_INVALID")
     _require(set(document) == MANIFEST_KEYS, "AGENT_PROVIDER_MANIFEST_INVALID")
-    _require(document["schemaVersion"] == 1, "AGENT_PROVIDER_MANIFEST_VERSION")
+    # `True == 1` in Python but `true !== 1` in JavaScript, so the JSON literal
+    # `true` passed here and was refused by the server's own reader - the one
+    # place the two manifest readers disagreed about what a manifest is, and
+    # the worker was the permissive side. Guarded the way `maxOutputTokens` is.
+    version = document["schemaVersion"]
+    _require(not isinstance(version, bool) and version == 1, "AGENT_PROVIDER_MANIFEST_VERSION")
 
     import re
 

@@ -1,13 +1,16 @@
 """The reviewed Anthropic Messages adapter behind the provider manifest."""
 import json
+import threading
 import unittest
 import urllib.error
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from learning_orbit_worker.providers.anthropic import (
     AnthropicMessagesProvider,
     build_model_provider,
 )
+from learning_orbit_worker.providers.health import sample_provider_health
 from learning_orbit_worker.providers.fixture import ProviderCancelled, ProviderError
 from learning_orbit_worker.providers.manifest import parse_provider_manifest
 from learning_orbit_worker.providers.model import ModelRequest
@@ -205,7 +208,8 @@ class FailureTest(unittest.TestCase):
 
     def test_http_failures_map_to_codes_without_a_response_body(self) -> None:
         for status, code in [(401, "PROVIDER_CREDENTIAL_REJECTED"), (429, "PROVIDER_RATE_LIMITED"),
-                             (503, "PROVIDER_UNAVAILABLE"), (400, "PROVIDER_REQUEST_REJECTED")]:
+                             (503, "PROVIDER_UNAVAILABLE"), (400, "PROVIDER_REQUEST_REJECTED"),
+                             (302, "PROVIDER_REDIRECT_REFUSED"), (307, "PROVIDER_REDIRECT_REFUSED")]:
             def refuse(_url, _body, _headers, status=status):
                 raise urllib.error.HTTPError("https://api.anthropic.com", status, "no", {}, None)
 
@@ -234,6 +238,120 @@ class FailureTest(unittest.TestCase):
         with self.assertRaises(ProviderError) as raised:
             list(model.open_stream(model.prepare(request(), "invocation-1")))
         self.assertEqual(raised.exception.code, "PROVIDER_STREAM_TOO_LARGE")
+
+
+class RedirectTest(unittest.TestCase):
+    """A 30x must never replay the credential somewhere the manifest never named.
+
+    ``urlopen`` follows redirects and re-sends the request headers with them,
+    so before the no-redirect opener a `Location` pointing anywhere - including
+    plaintext `http` - collected the `x-api-key` the manifest names, and a 200
+    from that host was reported as a healthy reviewed model. Two real loopback
+    servers stand in for the provider here, because the behaviour under test
+    belongs to the standard library rather than to this module: the only proof
+    that the redirect is not followed is that the second server is never
+    spoken to at all.
+    """
+
+    def setUp(self) -> None:
+        self.reached: list[dict[str, str]] = []
+        recorder = self.reached
+
+        class _Target(BaseHTTPRequestHandler):
+            def _answer(self) -> None:  # pragma: no cover - never reached
+                length = int(self.headers.get("content-length") or 0)
+                if length:
+                    self.rfile.read(length)
+                recorder.append({key.lower(): value for key, value in self.headers.items()})
+                self.send_response(200)
+                self.send_header("content-length", "0")
+                self.end_headers()
+
+            do_GET = _answer
+            do_POST = _answer
+
+            def log_message(self, *_args) -> None:
+                return None
+
+        self.target = HTTPServer(("127.0.0.1", 0), _Target)
+        self.target_url = f"http://127.0.0.1:{self.target.server_port}/v1/models/claude-sonnet-5"
+        target_url = self.target_url
+
+        class _Redirect(BaseHTTPRequestHandler):
+            def _answer(self) -> None:
+                length = int(self.headers.get("content-length") or 0)
+                if length:
+                    self.rfile.read(length)
+                self.send_response(302)
+                self.send_header("location", target_url)
+                self.send_header("content-length", "0")
+                self.end_headers()
+
+            do_GET = _answer
+            do_POST = _answer
+
+            def log_message(self, *_args) -> None:
+                return None
+
+        self.redirect = HTTPServer(("127.0.0.1", 0), _Redirect)
+        self.redirect_url = f"http://127.0.0.1:{self.redirect.server_port}/v1/models/claude-sonnet-5"
+        self.threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in (self.target, self.redirect)
+        ]
+        for thread in self.threads:
+            thread.start()
+
+    def tearDown(self) -> None:
+        for server in (self.target, self.redirect):
+            server.shutdown()
+            server.server_close()
+        for thread in self.threads:
+            thread.join(timeout=5.0)
+            self.assertFalse(thread.is_alive())
+
+    def headers(self) -> dict[str, str]:
+        return {"accept": "application/json", "anthropic-version": "2023-06-01", "x-api-key": KEY}
+
+    def test_the_probe_refuses_a_redirect_instead_of_carrying_the_credential_to_it(self) -> None:
+        model = AnthropicMessagesProvider(manifest(), env=ENV)
+
+        with self.assertRaises(ProviderError) as raised:
+            model._https_status(self.redirect_url, self.headers())
+
+        self.assertEqual(raised.exception.code, "PROVIDER_REDIRECT_REFUSED")
+        # The host the redirect named was never spoken to, so the credential
+        # the manifest names never left for it.
+        self.assertEqual(self.reached, [])
+
+    def test_a_redirected_probe_is_reported_unavailable_and_never_healthy(self) -> None:
+        model = AnthropicMessagesProvider(manifest(), env=ENV)
+        # The whole public path - `probe()` reads the credential, calls the
+        # real transport, and reduces what comes back to a health - with only
+        # the destination replaced by the redirecting server.
+        redirected = AnthropicMessagesProvider(
+            manifest(), env=ENV,
+            probe_transport=lambda _url, headers: model._https_status(self.redirect_url, headers),
+        )
+
+        sample = sample_provider_health(manifest(), ENV, probe=redirected.probe)
+
+        # A 200 from whatever host the redirect named used to end up here as
+        # `healthy`, with the credential having been handed to that host.
+        self.assertEqual((sample.health, sample.reason_code), ("unavailable", "PROBE_FAILED"))
+        self.assertEqual(self.reached, [])
+        self.assertNotIn(KEY, json.dumps(sample.as_body()))
+
+    def test_the_streaming_path_stops_at_the_redirect_too(self) -> None:
+        model = AnthropicMessagesProvider(manifest(), env=ENV)
+
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            model._https_stream(self.redirect_url, b"{}", self.headers())
+
+        # Raised rather than followed: `open_stream` reduces exactly this to
+        # PROVIDER_REDIRECT_REFUSED, which the mapping test above pins.
+        self.assertEqual(raised.exception.code, 302)
+        self.assertEqual(self.reached, [])
 
 
 if __name__ == "__main__":

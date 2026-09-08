@@ -78,6 +78,17 @@ class ProviderManifestTests(unittest.TestCase):
                     parse_provider_manifest(document)
                 self.assertEqual(raised.exception.code, code)
 
+    def test_the_json_literal_true_is_not_schema_version_one(self):
+        # The server's reader is `document.schemaVersion !== 1`, and in
+        # JavaScript `true !== 1`; in Python `True == 1`. So a manifest saying
+        # `"schemaVersion": true` was accepted here and refused there - the one
+        # place the two readers disagreed about what a manifest is, with the
+        # worker on the permissive side. Guarded the way `maxOutputTokens` is.
+        self.assertIn(b'"schemaVersion": true', raw(schemaVersion=True))
+        with self.assertRaises(ProviderManifestError) as raised:
+            parse_provider_manifest(raw(schemaVersion=True))
+        self.assertEqual(raised.exception.code, "AGENT_PROVIDER_MANIFEST_VERSION")
+
     def test_loads_only_from_an_absolute_path(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "provider.json"

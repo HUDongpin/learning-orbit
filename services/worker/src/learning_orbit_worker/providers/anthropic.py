@@ -23,13 +23,14 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from .fixture import ProviderCancelled, ProviderError
 from .manifest import ProviderManifest
-from .model import ModelRequest, PreparedModelCall
+from .model import DEGRADED, HEALTHY, UNAVAILABLE, ModelRequest, PreparedModelCall
 
 API_VERSION = "2023-06-01"
 DEFAULT_ENDPOINT = "https://api.anthropic.com"
@@ -37,6 +38,34 @@ DEFAULT_ENDPOINT = "https://api.anthropic.com"
 #: before a cancelled run notices it was cancelled.
 MAX_STREAM_BYTES = 4 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 30.0
+#: A probe waits far less than a completion. The server treats a sample older
+#: than thirty seconds as no sample at all, so a probe that hung for the
+#: completion timeout would not report late - it would not report.
+PROBE_TIMEOUT_SECONDS = 5.0
+#: A 30x is refused rather than followed, on both the probe and the streaming
+#: path, and never reduced to anything a caller could read as reachable.
+PROVIDER_REDIRECT_REFUSED = "PROVIDER_REDIRECT_REFUSED"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every 30x rather than replaying the request somewhere else.
+
+    ``urlopen`` follows redirects and carries the request headers with it, so a
+    30x from the provider endpoint would hand the manifest-named credential to
+    whatever host ``Location`` names - in plaintext, if it names ``http`` - and
+    a 200 from that host would then be reported as a healthy reviewed model.
+    Returning None turns the redirect into an ``HTTPError`` the callers below
+    reduce to a bounded code that is never `healthy`. This mirrors the same
+    handler the internal HTTP client already installs.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+def _no_redirect_opener() -> urllib.request.OpenerDirector:
+    """An opener that follows nothing: the credential leaves for one host only."""
+    return urllib.request.build_opener(_NoRedirect())
 
 
 class AnthropicMessagesProvider:
@@ -49,6 +78,7 @@ class AnthropicMessagesProvider:
         env: Mapping[str, str] | None = None,
         endpoint: str = DEFAULT_ENDPOINT,
         transport: Callable[[str, bytes, dict[str, str]], Iterator[bytes]] | None = None,
+        probe_transport: Callable[[str, dict[str, str]], int] | None = None,
         timeout_seconds: float = CONNECT_TIMEOUT_SECONDS,
     ) -> None:
         if manifest.remote_copy_mode not in {"no_persistent_copy_attested", "delete_and_probe"}:
@@ -65,6 +95,7 @@ class AnthropicMessagesProvider:
         self._env = env if env is not None else os.environ
         self._endpoint = endpoint.rstrip("/")
         self._transport = transport or self._https_stream
+        self._probe_transport = probe_transport or self._https_status
         self._timeout_seconds = timeout_seconds
 
     # -- preparation -------------------------------------------------------
@@ -184,9 +215,59 @@ class AnthropicMessagesProvider:
         text = delta.get("text")
         return text if isinstance(text, str) and text else None
 
+    # -- health ------------------------------------------------------------
+
+    def probe(self) -> str:
+        """Report whether the reviewed model is reachable with this credential.
+
+        A probe is not a completion. It sends no prompt, spends no tokens and
+        reads no response body: it asks the models endpoint for the one model
+        the manifest names, which is the smallest question that still proves
+        the network path, the credential and the reviewed model at once.
+
+        Only the status code is read. A provider's error body can quote what it
+        was sent, so nothing but the status ever leaves this method - and the
+        credential is read here, at the moment of the call, exactly as a
+        completion reads it.
+        """
+        credential = self._env.get(self._manifest.credential_env_var) or ""
+        if not credential:
+            raise ProviderError("CREDENTIAL_ABSENT")
+        model = urllib.parse.quote(self._manifest.model_id, safe="")
+        status = self._probe_transport(
+            f"{self._endpoint}/v1/models/{model}",
+            {
+                "accept": "application/json",
+                "anthropic-version": API_VERSION,
+                "x-api-key": credential,
+            },
+        )
+        return _probe_health(status)
+
+    def _https_status(self, url: str, headers: dict[str, str]) -> int:
+        request = urllib.request.Request(url, method="GET", headers=headers)
+        try:
+            with _no_redirect_opener().open(request, timeout=PROBE_TIMEOUT_SECONDS) as response:  # noqa: S310
+                status = int(response.status)
+        except urllib.error.HTTPError as error:
+            # The body is closed rather than drained: a refusal can quote the
+            # request that caused it, and only the status is wanted here. A
+            # 30x arrives this way precisely because it was not followed.
+            error.close()
+            status = int(error.code)
+        if 300 <= status < 400:
+            # The credential went to one host only, and a redirect is not an
+            # answer about the reviewed model. Refused rather than returned:
+            # `_probe_health` would read it as unavailable today, and no edit
+            # there should ever be able to read it as anything else.
+            raise ProviderError(PROVIDER_REDIRECT_REFUSED)
+        return status
+
     def _https_stream(self, url: str, body: bytes, headers: dict[str, str]) -> Iterator[bytes]:
         request = urllib.request.Request(url, data=body, method="POST", headers=headers)
-        response = urllib.request.urlopen(request, timeout=self._timeout_seconds)  # noqa: S310
+        # The same credential goes out on this path, and the same 30x would
+        # carry it somewhere the manifest never named.
+        response = _no_redirect_opener().open(request, timeout=self._timeout_seconds)  # noqa: S310
         def lines() -> Iterator[bytes]:
             try:
                 for line in response:
@@ -194,6 +275,23 @@ class AnthropicMessagesProvider:
             finally:
                 response.close()
         return lines()
+
+
+def _probe_health(status: int) -> str:
+    """Turn one HTTP status into the health the server stores.
+
+    Throttling and overload are `degraded`: the provider is there, and calling
+    it unavailable would refuse Nova for a whole freshness window over a
+    condition that usually clears in seconds. Anything else that is not a 200 -
+    a rejected credential, a model the manifest names and the provider does
+    not, an outage - is `unavailable`. There is no status that is treated as
+    healthy by default.
+    """
+    if status == 200:
+        return HEALTHY
+    if status in {429, 529}:
+        return DEGRADED
+    return UNAVAILABLE
 
 
 def _error_code(kind: Any) -> str:
@@ -210,6 +308,10 @@ def _error_code(kind: Any) -> str:
 def _transport_code(error: BaseException) -> str:
     if isinstance(error, urllib.error.HTTPError):
         status = error.code
+        if 300 <= status < 400:
+            # Never followed, so nothing was sent on; the run fails rather
+            # than being answered by a host the manifest does not name.
+            return PROVIDER_REDIRECT_REFUSED
         if status in {401, 403}:
             return "PROVIDER_CREDENTIAL_REJECTED"
         if status == 429:

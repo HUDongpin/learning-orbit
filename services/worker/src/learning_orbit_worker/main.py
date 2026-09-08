@@ -8,7 +8,7 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
@@ -16,7 +16,7 @@ from .observability import OtlpHttpSpanSink, Telemetry, create_telemetry, teleme
 from .core_handlers import register_core_handlers
 from .analytics_handlers import register_analytics_handlers
 from .handler_registry import HandlerOutcome, HandlerRegistry, WorkerDeps, run_with_lease
-from .internal_http import InternalServiceClient
+from .internal_http import PROVIDER_HEALTH_IGNORED_STALE, InternalServiceClient
 from .jobs import JobStore
 from .projection_store import ProjectionStore
 from .pipeline_handlers import register_pipeline_handlers
@@ -29,6 +29,11 @@ from .media.scan import ClamAvScanner
 from .media.sigv4 import S3Credentials
 from .media.store import PrivateObjectStore
 from .media.transcode import FfmpegTranscoder
+from .providers.health import (
+    PROVIDER_HEALTH_INTERVAL_SECONDS,
+    PROVIDER_HEALTH_JOIN_SECONDS,
+    build_provider_health_probe,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +114,21 @@ PERMANENT_ERROR_NAMES = frozenset({
 BASE_BACKOFF_SECONDS = 0.5
 MAX_BACKOFF_SECONDS = 30.0
 MAX_CONSECUTIVE_FAILURES = 5
+#: A probe that cannot sample or cannot report leaves the health row where it
+#: was, which the server already reads as `unavailable` once it goes stale.
+#: There is nothing for that loop to escalate to, so every failure it sees is
+#: retryable and it retries with the same backoff the job loop uses.
+PROVIDER_HEALTH_FAILURE = "PROVIDER_HEALTH_PROBE_RETRYABLE"
+#: The server took the sample and kept the row it already had, because that row
+#: is not older than this one. A clock that went backwards, or another worker
+#: reporting later, makes that the answer every cycle - and the probe would
+#: otherwise look exactly like one that is landing while the row it believes it
+#: is refreshing quietly goes stale.
+PROVIDER_HEALTH_IGNORED = "PROVIDER_HEALTH_SAMPLE_IGNORED_STALE"
+#: The probe thread outlived the bounded join. main() flushes the span sink and
+#: closes the database connection once run_forever returns, so a probe still
+#: running past that point is writing into things that are being torn down.
+PROVIDER_HEALTH_LEAK = "WORKER_PROVIDER_HEALTH_THREAD_LEAK"
 
 
 class WorkerSupervisorUnavailable(RuntimeError):
@@ -142,7 +162,7 @@ def supervisor_backoff_seconds(consecutive_failures: int) -> float:
 
 
 class WorkerSupervisor:
-    def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0, telemetry: Telemetry | None = None) -> None:
+    def __init__(self, connection: Any, worker_id: str, *, registry: HandlerRegistry | None = None, deps: WorkerDeps | None = None, poll_seconds: float = 1.0, telemetry: Telemetry | None = None, provider_health: Any | None = None, provider_health_interval: float = PROVIDER_HEALTH_INTERVAL_SECONDS) -> None:
         self.registry = registry or register_multimodal_handlers(register_lifecycle_handlers(register_pipeline_handlers(register_analytics_handlers(register_core_handlers(HandlerRegistry())))))
         self.jobs = JobStore(connection, worker_id)
         self.deps = deps or WorkerDeps(connection, self.jobs, projection_store=ProjectionStore(connection))
@@ -150,6 +170,12 @@ class WorkerSupervisor:
         self.telemetry = telemetry or create_telemetry()
         self.span_sink: OtlpHttpSpanSink | None = None
         self.consecutive_failures = 0
+        # None when no provider manifest was reviewed. Nothing is scheduled in
+        # that case, so the server keeps reading `unavailable` and keeps
+        # refusing Nova - which is the correct state for a provider nobody has
+        # configured, and the only one this worker can produce for it.
+        self.provider_health = provider_health
+        self.provider_health_interval = provider_health_interval
 
     def run_once(self) -> HandlerOutcome | None:
         jobs = self.jobs.claim(1)
@@ -187,30 +213,114 @@ class WorkerSupervisor:
         """
         stop = stop or Event()
         self.consecutive_failures = 0
+        probe = self._start_provider_health(stop)
+        try:
+            while not stop.is_set():
+                try:
+                    outcome = self.run_once()
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as error:  # noqa: BLE001 - the loop must survive
+                    self.consecutive_failures += 1
+                    classification = classify_worker_error(error)
+                    self.telemetry.record("worker.supervisor.iteration_failed", {
+                        "failureCode": f"SUPERVISOR_{classification.upper()}_FAILURE",
+                    })
+                    if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        # Repeated failure with no successful iteration between
+                        # is not something this loop can recover from. Surface
+                        # it so a process manager restarts the whole worker
+                        # rather than leaving it retrying an unrecoverable
+                        # state forever.
+                        raise WorkerSupervisorUnavailable(
+                            f"SUPERVISOR_{classification.upper()}_FAILURE",
+                        ) from error
+                    stop.wait(supervisor_backoff_seconds(self.consecutive_failures))
+                    continue
+                self.consecutive_failures = 0
+                if outcome is None:
+                    stop.wait(self.poll_seconds)
+        finally:
+            self._stop_provider_health(probe, stop)
+
+    def _start_provider_health(self, stop: Event) -> Thread | None:
+        """Start the provider probe beside the job loop, or start nothing.
+
+        It runs on a thread rather than as a step of the loop above because a
+        single agent run can hold that loop for longer than the server's
+        thirty-second freshness window: a probe queued behind that run would
+        make Nova unavailable in the middle of the run it is serving.
+        """
+        if self.provider_health is None:
+            return None
+        thread = Thread(
+            target=self._provider_health_loop, args=(stop,),
+            name="lo-provider-health", daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def _provider_health_loop(self, stop: Event) -> None:
+        """Sample and report the provider until stopped.
+
+        Every failure here is retryable. A probe that cannot reach the server
+        must not escalate the way the job loop does: the row simply goes stale,
+        the server reads `unavailable`, and Nova is refused with a reason.
+        Taking the worker down instead would stop deletion, media and analytics
+        for a fault that only reaches one report - and a failed probe can never
+        leave a provider looking healthy, because nothing but a probe that
+        returned `healthy` ever writes that word.
+        """
+        failures = 0
         while not stop.is_set():
             try:
-                outcome = self.run_once()
+                decision = self.provider_health.run_once()
             except (KeyboardInterrupt, SystemExit):
                 raise
-            except BaseException as error:  # noqa: BLE001 - the loop must survive
-                self.consecutive_failures += 1
-                classification = classify_worker_error(error)
-                self.telemetry.record("worker.supervisor.iteration_failed", {
-                    "failureCode": f"SUPERVISOR_{classification.upper()}_FAILURE",
+            except BaseException:  # noqa: BLE001 - the probe must survive
+                failures += 1
+                self.telemetry.record("worker.provider_health.failed", {
+                    "failureCode": PROVIDER_HEALTH_FAILURE,
                 })
-                if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    # Repeated failure with no successful iteration between is
-                    # not something this loop can recover from. Surface it so a
-                    # process manager restarts the whole worker rather than
-                    # leaving it retrying an unrecoverable state forever.
-                    raise WorkerSupervisorUnavailable(
-                        f"SUPERVISOR_{classification.upper()}_FAILURE",
-                    ) from error
-                stop.wait(supervisor_backoff_seconds(self.consecutive_failures))
+                stop.wait(supervisor_backoff_seconds(failures))
                 continue
-            self.consecutive_failures = 0
-            if outcome is None:
-                stop.wait(self.poll_seconds)
+            failures = 0
+            if decision == PROVIDER_HEALTH_IGNORED_STALE:
+                # Delivered, and then discarded. Nothing this loop can do about
+                # it - the row belongs to the server - but a sample the server
+                # keeps ignoring must not be indistinguishable from one it is
+                # recording, or the provider goes stale with the probe still
+                # reporting success on every cycle.
+                self.telemetry.record("worker.provider_health.ignored", {
+                    "failureCode": PROVIDER_HEALTH_IGNORED,
+                })
+            stop.wait(self.provider_health_interval)
+
+    def _stop_provider_health(self, thread: Thread | None, stop: Event) -> None:
+        """Stop the probe with the loop it belongs to.
+
+        The job loop is leaving, so the worker is leaving; setting the caller's
+        event is how the heartbeat supervisor ends its own thread too. The join
+        is bounded because the probe may be inside a request, and a shutdown
+        must not wait on a provider - but the bound has to be larger than one
+        sample's real worst case, which is a provider probe hanging to its own
+        timeout followed by a report hanging to the internal client's. A join
+        of one interval expired while the thread was still working, and the
+        thread was never asked whether it had actually stopped.
+        """
+        if thread is None:
+            return
+        stop.set()
+        thread.join(timeout=max(PROVIDER_HEALTH_JOIN_SECONDS, self.provider_health_interval))
+        if thread.is_alive():
+            # Never leave the probe running after the loop it belongs to has
+            # returned: main() flushes the span sink and closes the connection
+            # next. The daemon flag only protects interpreter shutdown, not
+            # correctness.
+            self.telemetry.record("worker.provider_health.thread_leak", {
+                "failureCode": PROVIDER_HEALTH_LEAK,
+            })
+            raise RuntimeError(PROVIDER_HEALTH_LEAK)
 
 
 def build_supervisor(
@@ -255,12 +365,18 @@ def build_supervisor(
             **({"media_processor": media_processor} if media_processor else {}),
         )
         telemetry, span_sink = telemetry_from_env()
+        # Nothing sampled the provider, so `agent_provider_health` stayed empty
+        # and every Agent request was refused 503 - correctly, but permanently
+        # and for the wrong reason. The probe is composed here for the same
+        # reason the executor is, and is absent for the same reason too: with
+        # no reviewed manifest there is no provider to report on.
         supervisor = WorkerSupervisor(
             connection,
             config.worker_id,
             deps=deps,
             poll_seconds=config.poll_seconds,
             telemetry=telemetry,
+            provider_health=build_provider_health_probe(internal_http),
         )
         supervisor.span_sink = span_sink
         return supervisor

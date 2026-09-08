@@ -4,6 +4,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterator, Protocol
 
+#: The health vocabulary the server stores. It lives here rather than beside
+#: the sampler because both sides need it - the adapter that answers a probe
+#: and the sampler that reports on the adapter's behalf - and a second copy of
+#: three strings that cross a service boundary is a defect waiting to happen.
+HEALTHY = "healthy"
+DEGRADED = "degraded"
+UNAVAILABLE = "unavailable"
+
 
 @dataclass(frozen=True, slots=True)
 class ModelRequest:
