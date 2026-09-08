@@ -13,3 +13,4 @@ test-results/
 playwright-report/
 infra/data/
 secrets/
+.DS_Store
